@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="%sveltekit.assets%/favicon.svg" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<script>
+			// Apply persisted theme before first paint so users with the light
+			// theme don't flash dark on every load. Mirrors logic in
+			// ui/src/lib/stores/themeStore.ts — keep STORAGE_KEY in sync.
+			(function () {
+				try {
+					var stored = localStorage.getItem('roon-controller-theme');
+					var theme =
+						stored === 'dark' || stored === 'light'
+							? stored
+							: window.matchMedia &&
+							  window.matchMedia('(prefers-color-scheme: light)').matches
+							? 'light'
+							: 'dark';
+					document.documentElement.setAttribute('data-theme', theme);
+				} catch (_) {
+					document.documentElement.setAttribute('data-theme', 'dark');
+				}
+			})();
+		</script>
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>

@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  roon-controller:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Stamp the UI with the real revision (the build stage has no
+        # .git). Compose reads this from the shell environment:
+        #   SOURCE_COMMIT=$(git rev-parse --short HEAD) docker compose build
+        # Unset, the build falls back to a unique per-build stamp.
+        SOURCE_COMMIT: ${SOURCE_COMMIT:-}
+    image: roon-controller:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    # Roon Core discovery uses mDNS/multicast, which does not cross
+    # Docker's default bridge network on Linux — the container starts
+    # fine but never finds/pairs with the Core (see
+    # docs/TROUBLESHOOTING.md). Host networking is required there; the
+    # app listens on PORT (default 3333) directly on the host.
+    # NOTE: network_mode: host is a no-op on Docker Desktop for
+    # macOS/Windows without its "host networking" feature enabled —
+    # run natively there, or enable that feature.
+    network_mode: host
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Songr — social preview source</title>
+<!--
+  Source of truth for the GitHub social preview card (1280x640).
+
+  Rendered to PNG through the repository's pinned Chromium so the output is
+  reproducible rather than hand-exported. The runic mark is the same stroke
+  geometry as ui/static/brand/songr-wordmark.svg and the inline copy in the
+  app header: original drawn paths, so the mark needs no runic font and
+  carries no font licensing.
+
+  Gold is --accent (#e6c674), the wordmark's resting colour in the app.
+-->
+<style>
+  @page { margin: 0; }
+  html, body { margin: 0; padding: 0; background: #0a0a0a; }
+  .card {
+    position: relative;
+    width: 1280px;
+    height: 640px;
+    background: #0a0a0a;
+    overflow: hidden;
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  /* Very soft warm lift behind the mark, so the card is not a flat rectangle. */
+  .glow {
+    position: absolute;
+    left: 50%;
+    top: 42%;
+    width: 1100px;
+    height: 700px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(ellipse at center,
+      rgba(230, 198, 116, 0.10) 0%,
+      rgba(230, 198, 116, 0.04) 38%,
+      rgba(230, 198, 116, 0) 68%);
+  }
+  .stack { position: relative; display: flex; flex-direction: column; align-items: center; }
+  .mark { width: 560px; height: auto; display: block; }
+  .latin {
+    margin-top: 54px;
+    color: #e6c674;
+    font-size: 62px;
+    font-weight: 300;
+    letter-spacing: 0.30em;
+    /* Letterspacing adds trailing space on the right; pull it back so the
+       word stays optically centred. */
+    text-indent: 0.30em;
+  }
+  .rule {
+    margin-top: 40px;
+    width: 132px;
+    height: 1px;
+    background: rgba(230, 198, 116, 0.42);
+  }
+  .tagline {
+    margin-top: 38px;
+    color: #9a9a9a;
+    font-size: 27px;
+    font-weight: 400;
+    letter-spacing: 0.045em;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="glow"></div>
+  <div class="stack">
+    <svg class="mark" viewBox="0 0 320 104" role="img" aria-label="Sǫngr">
+      <title>Sǫngr</title>
+      <!-- Younger Futhark, long-branch: ᛋᚬᚾᚴᚱ = s o n k r -->
+      <g fill="none" stroke="#e6c674" stroke-width="5" stroke-linecap="butt" stroke-linejoin="miter">
+        <!-- s: sol, rising zigzag -->
+        <path d="M12 2 L12 56 L36 34 L36 100" />
+        <!-- o: oss, stave with two descending branches -->
+        <path d="M88 2 L88 100" />
+        <path d="M70 22 L124 56" />
+        <path d="M70 46 L124 80" />
+        <!-- n: naud, stave with one crossing branch -->
+        <path d="M154 2 L154 100" />
+        <path d="M135 35 L186 72" />
+        <!-- k: kaun, stave with one ascending branch -->
+        <path d="M212 2 L212 100" />
+        <path d="M212 48 L242 10" />
+        <!-- r: reid, stave, bow, and leg -->
+        <path d="M278 2 L278 100" />
+        <path d="M278 2 L308 22 L278 44" />
+        <path d="M280 42 L310 100" />
+      </g>
+    </svg>
+    <div class="latin">S&#x01EB;ngr</div>
+    <div class="rule"></div>
+    <div class="tagline">A browser controller for your Roon Core</div>
+  </div>
+</div>
+</body>
+</html>

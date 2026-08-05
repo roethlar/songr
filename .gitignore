@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+ui/build/
+ui/playwright-report/
+ui/test-results/
+
+# Runtime data
+data/
+*.log
+config.json
+config/roon-token.json
+
+# Environment
+.env
+
+# OS / IDE
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/

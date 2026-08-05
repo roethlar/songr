@@ -1,0 +1,134 @@
+{
+  "capturedAt": "2026-05-05T22:36:50.835Z",
+  "base": "<configured-base>",
+  "mode": "structural-only",
+  "level0": {
+    "title": "Explore",
+    "items": [
+      {
+        "level": 0,
+        "path": [
+          "Library"
+        ],
+        "title": "Library",
+        "itemKey": "<key:1>",
+        "hint": "list",
+        "itemType": null
+      },
+      {
+        "level": 0,
+        "path": [
+          "Playlists"
+        ],
+        "title": "Playlists",
+        "itemKey": "<key:2>",
+        "hint": "list",
+        "itemType": null
+      },
+      {
+        "level": 0,
+        "path": [
+          "My Live Radio"
+        ],
+        "title": "My Live Radio",
+        "itemKey": "<key:3>",
+        "hint": "list",
+        "itemType": null
+      },
+      {
+        "level": 0,
+        "path": [
+          "Genres"
+        ],
+        "title": "Genres",
+        "itemKey": "<key:4>",
+        "hint": "list",
+        "itemType": null
+      },
+      {
+        "level": 0,
+        "path": [
+          "Settings"
+        ],
+        "title": "Settings",
+        "itemKey": "<key:5>",
+        "hint": "list",
+        "itemType": null
+      }
+    ]
+  },
+  "level1": {
+    "Library": {
+      "title": "Library",
+      "items": [
+        {
+          "level": 1,
+          "path": [
+            "Library",
+            "Search"
+          ],
+          "title": "Search",
+          "itemKey": "<key:6>",
+          "hint": "list",
+          "itemType": null
+        },
+        {
+          "level": 1,
+          "path": [
+            "Library",
+            "Artists"
+          ],
+          "title": "Artists",
+          "itemKey": "<key:7>",
+          "hint": "list",
+          "itemType": null
+        },
+        {
+          "level": 1,
+          "path": [
+            "Library",
+            "Albums"
+          ],
+          "title": "Albums",
+          "itemKey": "<key:8>",
+          "hint": "list",
+          "itemType": null
+        },
+        {
+          "level": 1,
+          "path": [
+            "Library",
+            "Tracks"
+          ],
+          "title": "Tracks",
+          "itemKey": "<key:9>",
+          "hint": "list",
+          "itemType": null
+        },
+        {
+          "level": 1,
+          "path": [
+            "Library",
+            "Composers"
+          ],
+          "title": "Composers",
+          "itemKey": "<key:10>",
+          "hint": "list",
+          "itemType": null
+        },
+        {
+          "level": 1,
+          "path": [
+            "Library",
+            "Tags"
+          ],
+          "title": "Tags",
+          "itemKey": "<key:11>",
+          "hint": "list",
+          "itemType": null
+        }
+      ]
+    }
+  },
+  "level2": {}
+}

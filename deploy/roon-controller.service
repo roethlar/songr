@@ -1,0 +1,18 @@
+[Unit]
+Description=Roon Controller
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/roon-controller
+ExecStart=/usr/bin/node dist/index.js
+EnvironmentFile=/opt/roon-controller/.env
+Restart=on-failure
+RestartSec=5
+User=roon
+Group=roon
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

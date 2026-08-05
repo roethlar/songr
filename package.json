@@ -1,0 +1,55 @@
+{
+  "name": "songr",
+  "version": "1.0.2",
+  "description": "Web-based controller for Roon music playback with a real-time UI",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "eslint \"src/**/*.{ts,tsx}\"",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:browser": "playwright test --config ui/playwright.config.ts",
+    "test:browser:headed": "playwright test --config ui/playwright.config.ts --headed",
+    "test:browser:install": "playwright install chromium"
+  },
+  "keywords": [
+    "roon",
+    "music",
+    "controller",
+    "audio"
+  ],
+  "author": "roethlar",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.4.1",
+    "helmet": "^8.1.0",
+    "node-roon-api": "file:vendor/node-roon-api",
+    "node-roon-api-browse": "file:vendor/node-roon-api-browse",
+    "node-roon-api-image": "file:vendor/node-roon-api-image",
+    "node-roon-api-transport": "file:vendor/node-roon-api-transport",
+    "pino": "^10.0.0",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@types/express": "^5.0.3",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.7.2",
+    "@typescript-eslint/eslint-plugin": "^8.46.1",
+    "@typescript-eslint/parser": "^8.46.1",
+    "eslint": "^9.37.0",
+    "jest": "^30.2.0",
+    "pino-pretty": "^13.1.2",
+    "socket.io-client": "^4.8.1",
+    "ts-jest": "^29.4.5",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1"
+  }
+}

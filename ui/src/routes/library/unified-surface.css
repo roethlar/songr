@@ -1,0 +1,1086 @@
+/* Ported verbatim from the owner-approved prototype (build-v5
+   library-surface.html); selectors re-rooted under .unified-surface.
+   Visual rules must not drift from the prototype without owner approval. */
+
+.unified-surface,
+.unified-surface * {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* Adaptation (structure only, no visual drift): interactive elements the
+   prototype drew as <div>/<b> are semantic <button>s in Svelte. Strip UA
+   button chrome at zero specificity so the ported rules above/below win. */
+.unified-surface :where(button) {
+  appearance: none;
+  -webkit-appearance: none;
+  background: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+.unified-surface :where(button:disabled) {
+  cursor: default;
+}
+/* Adaptation: .sortc is a <button>; the .smenu popup is its sibling inside
+   this positioned wrapper (buttons cannot contain interactive content). */
+.unified-surface .sortc-wrap {
+  margin-left: auto;
+  position: relative;
+}
+.unified-surface .sortc-wrap .sortc {
+  margin-left: 0;
+}
+/* The prototype anchors .smenu to the padding box of the bordered .sortc
+   span. The semantic sibling wrapper anchors from its borderless edge, so
+   compensate by the sort control's 1px border in both axes. */
+.unified-surface .sortc-wrap .smenu {
+  top: calc(100% + 5px);
+  right: 1px;
+}
+.unified-surface .smenu button {
+  display: block;
+  width: 100%;
+}
+.unified-surface button.prow {
+  width: 100%;
+}
+.unified-surface .smenu .why {
+  display: block;
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.unified-surface {
+  --bg: #000;
+  --panel: #0b0b0b;
+  --raise: #141414;
+  --line: rgba(255, 255, 255, 0.09);
+  --text: #fff;
+  --soft: #9a9a9a;
+  --dim: #5e5e5e;
+  --accent: #c8a24a;
+  --accent2: #e6c674;
+}
+.unified-surface {
+  height: 100%;
+}
+.unified-surface {
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  font:
+    15px/1.45 -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Helvetica,
+    Arial,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.unified-surface .mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.unified-surface .u-app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.unified-surface .bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 22px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+}
+.unified-surface .brand {
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  /* The mark is the product's identity, not a vestigial label: gold at rest
+     (owner ruling 2026-08-03), brighter on hover. */
+  color: var(--accent);
+  font-weight: 600;
+  /* Structure-only: the mark became a button so the runes can flip to the
+     Latin spelling. Reset UA button chrome to keep the bar's presentation. */
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+}
+.unified-surface .brand:hover,
+.unified-surface .brand:focus-visible {
+  color: var(--accent2);
+}
+.unified-surface .brand-runes {
+  height: 15px;
+  width: auto;
+  display: block;
+}
+.unified-surface .brand-latin {
+  font-size: 13px;
+  letter-spacing: 0.18em;
+}
+.unified-surface .aboutbtn {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 12px;
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  cursor: pointer;
+  margin-right: 10px;
+}
+.unified-surface .aboutbtn:hover,
+.unified-surface .aboutbtn:focus-visible {
+  color: var(--accent2);
+  border-color: var(--accent);
+}
+.unified-surface .aboutpanel {
+  /* Fixed rather than absolute so no positioning context has to be added to
+     the shared `.unified-surface` container. The bar is viewport-top in this
+     full-bleed surface, so the anchor is equivalent. */
+  position: fixed;
+  top: 58px;
+  right: 18px;
+  z-index: 40;
+  width: 288px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.6);
+}
+.unified-surface .aboutpanel .ab-name {
+  color: var(--accent2);
+  font-size: 17px;
+  letter-spacing: 0.14em;
+  margin: 0;
+}
+.unified-surface .aboutpanel .ab-desc {
+  color: var(--soft);
+  font-size: 12px;
+  margin: 4px 0 12px;
+}
+.unified-surface .aboutpanel .ab-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0 0 12px;
+  font-size: 11px;
+}
+.unified-surface .aboutpanel .ab-rows dt {
+  color: var(--dim);
+}
+.unified-surface .aboutpanel .ab-rows dd {
+  color: var(--text);
+  margin: 0;
+  word-break: break-word;
+}
+.unified-surface .aboutpanel .ab-legal {
+  color: var(--dim);
+  font-size: 10px;
+  line-height: 1.45;
+  margin: 0 0 12px;
+}
+.unified-surface .aboutpanel .ab-close {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 12px;
+  color: var(--soft);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+}
+.unified-surface .aboutpanel .ab-close:hover,
+.unified-surface .aboutpanel .ab-close:focus-visible {
+  color: var(--accent2);
+  border-color: var(--accent);
+}
+.unified-surface .findbtn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: #101010;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 14px;
+  color: var(--dim);
+  font-size: 13.5px;
+  cursor: pointer;
+  min-width: 280px;
+}
+.unified-surface .findbtn:hover {
+  border-color: var(--accent);
+  color: var(--soft);
+}
+.unified-surface .findbtn .kbd {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #3c3c3c;
+  border: 1px solid #222;
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.unified-surface .spacer {
+  flex: 1;
+}
+.unified-surface .seg {
+  display: flex;
+  background: #101010;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.unified-surface .seg div,
+.unified-surface .seg button {
+  padding: 8px 12px;
+  font-size: 11.5px;
+  color: var(--soft);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.unified-surface .seg div:hover,
+.unified-surface .seg button:hover {
+  background: #1a1a1a;
+  color: #fff;
+}
+.unified-surface .seg div.on,
+.unified-surface .seg button.on {
+  background: var(--accent);
+  color: #000;
+  font-weight: 600;
+}
+
+.unified-surface .body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* The index. It indexes the list on screen — it never sets a different scope. */
+.unified-surface .rail {
+  flex-shrink: 0;
+  width: var(--rw);
+  border-right: 1px solid var(--line);
+  padding: 10px 5px;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  justify-content: center;
+  gap: var(--rg);
+  overflow-y: auto;
+  transition: width 0.13s;
+}
+.unified-surface .rail::-webkit-scrollbar {
+  width: 5px;
+}
+.unified-surface .rail::-webkit-scrollbar-thumb {
+  background: #222;
+  border-radius: 3px;
+}
+.unified-surface .rail b,
+.unified-surface .rail button {
+  font-size: var(--rf);
+  font-weight: 600;
+  color: var(--soft);
+  min-width: var(--rs);
+  height: var(--rs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.unified-surface .rail b:hover,
+.unified-surface .rail button:hover {
+  background: #1c1c1c;
+  color: #fff;
+}
+.unified-surface .rail b.on,
+.unified-surface .rail button.on {
+  background: var(--accent);
+  color: #000;
+}
+.unified-surface .rail b.off,
+.unified-surface .rail button.off {
+  color: #2b2b2b;
+  pointer-events: none;
+}
+.unified-surface.norail .rail {
+  width: 0;
+  padding: 0;
+  border-right: 0;
+  overflow: hidden;
+}
+
+.unified-surface[data-d="compact"] {
+  --rw: 52px;
+  --rs: 26px;
+  --rf: 12px;
+  --rg: 2px;
+  --gap: 16px;
+  --tile: 132px;
+  --col: 5;
+  --chip: 32px;
+}
+.unified-surface[data-d="normal"] {
+  --rw: 62px;
+  --rs: 32px;
+  --rf: 14px;
+  --rg: 3px;
+  --gap: 20px;
+  --tile: 152px;
+  --col: 4;
+  --chip: 36px;
+}
+.unified-surface[data-d="pi"] {
+  --rw: 104px;
+  --rs: 44px;
+  --rf: 19px;
+  --rg: 6px;
+  --gap: 16px;
+  --tile: 128px;
+  --col: 2;
+  --chip: 46px;
+}
+
+.unified-surface .u-main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 26px 40px;
+  scroll-behavior: smooth;
+}
+.unified-surface .u-main::-webkit-scrollbar {
+  width: 10px;
+}
+.unified-surface .u-main::-webkit-scrollbar-thumb {
+  background: #222;
+  border-radius: 6px;
+}
+
+/* scope chips: one height, one baseline, no wrapped reasons inside */
+.unified-surface .scopes {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.unified-surface .sc {
+  display: inline-flex;
+  align-items: center;
+  height: var(--chip);
+  padding: 0 17px;
+  border-radius: calc(var(--chip) / 2);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  color: #c9c9c9;
+  background: #121212;
+  border: 1px solid var(--line);
+  white-space: nowrap;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
+}
+.unified-surface .sc:hover {
+  background: #1d1d1d;
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.unified-surface .sc.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #000;
+  font-weight: 600;
+}
+.unified-surface[data-d="pi"] .sc {
+  font-size: 15px;
+  padding: 0 20px;
+}
+
+.unified-surface .ctx {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.unified-surface .ctx h2 {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.unified-surface .ctx .n {
+  font-size: 11.5px;
+  color: var(--dim);
+  letter-spacing: 0.1em;
+}
+.unified-surface .ctx .back {
+  font-size: 13px;
+  color: var(--accent2);
+  cursor: pointer;
+}
+.unified-surface .ctx button.back {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.unified-surface .sortc {
+  margin-left: auto;
+  position: relative;
+  font-size: 12px;
+  color: #c4c4c4;
+  cursor: pointer;
+  padding: 7px 12px;
+  border-radius: 7px;
+  background: #121212;
+  border: 1px solid var(--line);
+  white-space: nowrap;
+  user-select: none;
+}
+.unified-surface .sortc:hover {
+  background: #1c1c1c;
+}
+.unified-surface .sortc b {
+  color: #fff;
+  font-weight: 600;
+}
+.unified-surface .smenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 230px;
+  background: #101010;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 9px;
+  padding: 6px;
+  z-index: 20;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.75);
+  display: none;
+}
+.unified-surface .smenu.open {
+  display: block;
+}
+.unified-surface .so {
+  padding: 9px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #d8d8d8;
+  cursor: pointer;
+}
+.unified-surface .so:hover {
+  background: #1b1b1b;
+}
+.unified-surface .so.on {
+  color: var(--accent2);
+  font-weight: 600;
+}
+.unified-surface .so.dis {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.unified-surface .so .why {
+  display: block;
+  font-size: 10px;
+  color: var(--dim);
+}
+.unified-surface[data-d="pi"] .sortc {
+  font-size: 14px;
+  padding: 10px 14px;
+}
+.unified-surface[data-d="pi"] .so {
+  padding: 12px 14px;
+  font-size: 14.5px;
+}
+
+.unified-surface .grp {
+  scroll-margin-top: 8px;
+}
+.unified-surface .gl {
+  font-size: 11px;
+  letter-spacing: 0.26em;
+  color: var(--dim);
+  font-weight: 600;
+  padding: 14px 0 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  margin-bottom: 10px;
+}
+
+.unified-surface .alist {
+  column-count: var(--col);
+  column-gap: 24px;
+}
+.unified-surface .arow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 0;
+  break-inside: avoid;
+  cursor: pointer;
+}
+.unified-surface .arow:hover .an {
+  color: var(--accent2);
+}
+.unified-surface .an {
+  font-size: 13.5px;
+  color: #e2e2e2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.unified-surface .ad {
+  flex: 1;
+  border-bottom: 1px dotted rgba(255, 255, 255, 0.13);
+  transform: translateY(-3px);
+  min-width: 6px;
+}
+.unified-surface .ac {
+  font-size: 11px;
+  color: var(--dim);
+}
+.unified-surface[data-d="pi"] .an {
+  font-size: 16px;
+}
+.unified-surface[data-d="pi"] .arow {
+  padding: 9px 0;
+}
+
+.unified-surface .tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--tile), 1fr));
+  gap: var(--gap);
+}
+.unified-surface .tile {
+  cursor: pointer;
+}
+.unified-surface .tile .art {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #111;
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.unified-surface .tile:hover .art {
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, 0.7),
+    0 0 0 1.5px var(--accent);
+}
+.unified-surface .tile .art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.unified-surface .mono-tile {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.42);
+}
+.unified-surface .tt {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-top: 8px;
+  line-height: 1.28;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.unified-surface .ta {
+  font-size: 11.5px;
+  color: var(--soft);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Slice 6 addition (Most played surface): `.mph` section heading mirrors
+   the prototype's `.gl` letter heading; `.tm` is the tile listening-minutes
+   line, dimmer than `.ta`. No prototype rules are altered. */
+.unified-surface .mph {
+  font-size: 11px;
+  letter-spacing: 0.26em;
+  color: var(--dim);
+  font-weight: 600;
+  padding: 14px 0 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+}
+.unified-surface .tm {
+  font-size: 10.5px;
+  color: var(--dim);
+  margin-top: 2px;
+}
+.unified-surface .arow:disabled,
+.unified-surface .tile:disabled {
+  cursor: default;
+}
+.unified-surface .arow:disabled .an {
+  color: var(--soft);
+}
+
+.unified-surface .glist {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 9px;
+}
+.unified-surface .gcard {
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: #101010;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+.unified-surface .gcard:hover {
+  background: #191919;
+  border-color: var(--accent);
+}
+.unified-surface .gn {
+  font-size: 14px;
+  font-weight: 600;
+}
+.unified-surface .gc {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 3px;
+  letter-spacing: 0.08em;
+}
+.unified-surface .hint {
+  color: var(--soft);
+  font-size: 13px;
+  padding: 10px 0;
+}
+
+/* transport bar: the controller's spine. All stubbed, visibly so. */
+.unified-surface .player {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 22px;
+  border-top: 1px solid var(--line);
+  background: #050505;
+}
+.unified-surface .np {
+  min-width: 190px;
+}
+.unified-surface .npt {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.unified-surface .nps {
+  font-size: 11px;
+  color: var(--dim);
+}
+.unified-surface .tp {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: #c4c4c4;
+  font-size: 15px;
+  margin: 0 auto;
+}
+.unified-surface .tp span {
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.unified-surface .tp span:hover {
+  background: #161616;
+}
+.unified-surface .tp .big {
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.unified-surface .vol {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 9.5px;
+  color: var(--dim);
+  letter-spacing: 0.14em;
+}
+.unified-surface .vbar {
+  width: 90px;
+  height: 3px;
+  background: #1c1c1c;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.unified-surface .vbar i {
+  display: block;
+  width: 62%;
+  height: 100%;
+  background: var(--accent);
+}
+.unified-surface .pz {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--soft);
+  white-space: nowrap;
+}
+.unified-surface .dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3fcf8e;
+  margin-right: 6px;
+  box-shadow: 0 0 8px #3fcf8e;
+}
+.unified-surface .qbtn {
+  padding: 7px 14px;
+  border-radius: 7px;
+  background: #121212;
+  border: 1px solid var(--line);
+  color: #d8d8d8;
+  cursor: pointer;
+  font-size: 12px;
+}
+.unified-surface .qbtn:hover {
+  background: #1c1c1c;
+}
+.unified-surface[data-d="pi"] .player {
+  padding: 14px 22px;
+}
+.unified-surface[data-d="pi"] .tp {
+  font-size: 18px;
+  gap: 18px;
+}
+.unified-surface[data-d="pi"] .tp .big {
+  width: 48px;
+  height: 48px;
+}
+
+.unified-surface .sheet {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+}
+.unified-surface .sheet.open {
+  display: flex;
+}
+.unified-surface .panel {
+  width: 720px;
+  max-width: 94vw;
+  max-height: 88vh;
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 26px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  gap: 22px;
+  position: relative;
+}
+.unified-surface .pleft {
+  flex-shrink: 0;
+  width: 196px;
+}
+.unified-surface .pright {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.unified-surface .panel .art {
+  width: 196px;
+  height: 196px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #111;
+}
+.unified-surface .panel .art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.unified-surface .pt {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.unified-surface .pa {
+  font-size: 14px;
+  color: var(--soft);
+  margin-top: 5px;
+  cursor: pointer;
+}
+.unified-surface .pa:hover {
+  color: var(--accent2);
+}
+.unified-surface .pb {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 14px;
+}
+.unified-surface .pb div,
+.unified-surface .pb button {
+  width: 100%;
+  padding: 10px;
+  border-radius: 7px;
+  background: #161616;
+  border: 1px solid var(--line);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: center;
+  cursor: pointer;
+  color: #d8d8d8;
+}
+.unified-surface .pb div:hover,
+.unified-surface .pb button:hover:not(:disabled) {
+  background: #202020;
+  border-color: var(--accent);
+}
+.unified-surface .pb button:disabled {
+  cursor: default;
+  opacity: 1;
+}
+.unified-surface .tl {
+  margin-top: 14px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding-right: 4px;
+}
+.unified-surface .tl::-webkit-scrollbar {
+  width: 7px;
+}
+.unified-surface .tl::-webkit-scrollbar-thumb {
+  background: #242424;
+  border-radius: 4px;
+}
+.unified-surface .tr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.unified-surface .tr:hover {
+  background: #181818;
+}
+.unified-surface .tn {
+  font-size: 11px;
+  color: var(--dim);
+  width: 19px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.unified-surface .tnm {
+  flex: 1;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.unified-surface .tgo,
+.tq {
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 11px;
+  color: var(--accent2);
+  opacity: 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.unified-surface .tq {
+  color: var(--soft);
+}
+.unified-surface .tr:hover .tgo,
+.tr:hover .tq {
+  opacity: 1;
+}
+.unified-surface .tgo:hover,
+.tq:hover {
+  background: #242424;
+}
+.unified-surface[data-d="pi"] .tgo,
+.unified-surface[data-d="pi"] .tq {
+  opacity: 1;
+  font-size: 13px;
+  padding: 6px 10px;
+}
+.unified-surface[data-d="pi"] .tr {
+  padding: 10px 8px;
+}
+.unified-surface .stub {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--dim);
+  line-height: 1.5;
+}
+.unified-surface .x {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  font-size: 20px;
+  line-height: 29px;
+  color: var(--dim);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* spotlight palette: type anywhere, it appears */
+.unified-surface .pal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.74);
+  display: none;
+  z-index: 50;
+}
+.unified-surface .pal.open {
+  display: block;
+}
+.unified-surface .palbox {
+  width: 660px;
+  max-width: 92vw;
+  margin: 13vh auto 0;
+  background: #0d0d0d;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 13px;
+  overflow: hidden;
+  box-shadow: 0 40px 100px rgba(0, 0, 0, 0.85);
+  display: flex;
+  flex-direction: column;
+  max-height: 66vh;
+}
+.unified-surface .palbox input {
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: #fff;
+  font: inherit;
+  font-size: 17.5px;
+  padding: 17px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.unified-surface .palbox input::placeholder {
+  color: var(--dim);
+}
+.unified-surface .pres {
+  overflow-y: auto;
+  padding: 8px;
+}
+.unified-surface .pres::-webkit-scrollbar {
+  width: 8px;
+}
+.unified-surface .pres::-webkit-scrollbar-thumb {
+  background: #242424;
+  border-radius: 5px;
+}
+.unified-surface .pgl {
+  font-size: 9.5px;
+  letter-spacing: 0.26em;
+  color: var(--dim);
+  font-weight: 600;
+  padding: 10px 12px 5px;
+}
+.unified-surface .prow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.unified-surface .prow.sel,
+.prow:hover {
+  background: #1c1c1c;
+}
+.unified-surface .prow .ic {
+  width: 20px;
+  text-align: center;
+  color: var(--dim);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.unified-surface .prow .p1 {
+  font-size: 14px;
+  color: #eee;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.unified-surface .prow .p2 {
+  font-size: 11.5px;
+  color: var(--dim);
+  margin-left: auto;
+  flex-shrink: 0;
+  padding-left: 12px;
+}
+.unified-surface .prow.dis {
+  opacity: 0.45;
+  cursor: default;
+}
+.unified-surface .prow.dis:hover {
+  background: transparent;
+}
+.unified-surface .prow.filter .p1 {
+  color: var(--accent2);
+}
+.unified-surface .palhint {
+  padding: 10px 14px;
+  font-size: 10.5px;
+  color: #3f3f3f;
+  border-top: 1px solid var(--line);
+  letter-spacing: 0.03em;
+}
+.unified-surface[data-d="pi"] .palbox input {
+  font-size: 19px;
+  padding: 19px 20px;
+}
+.unified-surface[data-d="pi"] .prow {
+  padding: 13px 12px;
+}
+.unified-surface[data-d="pi"] .prow .p1 {
+  font-size: 16px;
+}

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 104" role="img" aria-label="Sǫngr">
+  <title>Sǫngr</title>
+  <!-- Younger Futhark, long-branch: ᛋᚬᚾᚴᚱ = s o n k r.
+       Original geometry drawn to match the reference letterforms, so the mark
+       needs no runic font and carries no font licensing.
+       This standalone copy uses an explicit stroke colour because `currentColor`
+       resolves to black when an SVG is referenced through <img> or a README.
+       The header copy in UnifiedLibraryMode.svelte is inlined and uses
+       currentColor so it inherits the bar's colour and hover state. -->
+  <g fill="none" stroke="#e6c674" stroke-width="5" stroke-linecap="butt" stroke-linejoin="miter">
+    <!-- s: sol, rising zigzag -->
+    <path d="M12 2 L12 56 L36 34 L36 100" />
+    <!-- o: oss, stave with two descending branches -->
+    <path d="M88 2 L88 100" />
+    <path d="M70 22 L124 56" />
+    <path d="M70 46 L124 80" />
+    <!-- n: naud, stave with one crossing branch -->
+    <path d="M154 2 L154 100" />
+    <path d="M135 35 L186 72" />
+    <!-- k: kaun, stave with one ascending branch -->
+    <path d="M212 2 L212 100" />
+    <path d="M212 48 L242 10" />
+    <!-- r: reid, stave, bow, and leg -->
+    <path d="M278 2 L278 100" />
+    <path d="M278 2 L308 22 L278 44" />
+    <path d="M280 42 L310 100" />
+  </g>
+</svg>
