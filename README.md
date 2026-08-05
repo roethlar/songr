@@ -195,6 +195,12 @@ vendored at pinned commits.
 ᛋᚬᚾᚴᚱ, drawn as original geometry rather than set in a runic font. The app styles
 it `Sǫngr`; everything machine-facing uses the plain ASCII `songr`.
 
+## Support
+
+Songr is free and open source. If it is useful to you, you can support it on
+[GitHub Sponsors](https://github.com/sponsors/roethlar) or
+[Ko-fi](https://ko-fi.com/michaelcoelho).
+
 ## License
 
 [MIT](LICENSE).
