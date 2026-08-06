@@ -1,5 +1,6 @@
 import { ConfigError, loadConfig } from "./config/env";
 import { createLogger } from "./core/logger";
+import { attachParentDisconnectWatchdog } from "./server/parentDisconnectWatchdog";
 import { startServer } from "./server/server";
 
 const bootstrap = () => {
@@ -59,6 +60,13 @@ const bootstrap = () => {
 
     process.on("SIGINT", () => shutdown("SIGINT"));
     process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+    // When the desktop shell forked us, its death closes our IPC channel and
+    // we shut down with it. No IPC channel (appliance install) means no-op.
+    attachParentDisconnectWatchdog({
+      onDisconnect: () => shutdown("parent-disconnect"),
+      logger,
+    });
   } catch (error) {
     if (error instanceof ConfigError) {
       console.error(`Configuration error: ${error.message}`);

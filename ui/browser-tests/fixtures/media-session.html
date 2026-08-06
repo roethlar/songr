@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Media session browser fixture</title>
+		<style>
+			html,
+			body {
+				width: 100%;
+				min-height: 100%;
+				margin: 0;
+				background: #000;
+				color: #fff;
+				font: 14px system-ui, sans-serif;
+			}
+
+			.fixture-shell {
+				min-height: 100vh;
+				padding: 24px;
+				display: flex;
+				flex-direction: column;
+				gap: 12px;
+				align-items: flex-start;
+			}
+
+			button {
+				font: inherit;
+				padding: 8px 14px;
+			}
+		</style>
+	</head>
+	<body>
+		<main class="fixture-shell">
+			<button type="button" data-testid="media-session-play">Play</button>
+			<button type="button" data-testid="media-session-pause">Pause</button>
+			<button type="button" data-testid="media-session-stop">Stop</button>
+			<button type="button" data-testid="media-session-teardown">Teardown</button>
+			<p data-testid="media-session-commands"></p>
+		</main>
+		<script type="module" src="./media-session.ts"></script>
+	</body>
+</html>

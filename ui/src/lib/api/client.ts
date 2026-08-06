@@ -5,6 +5,7 @@ import type {
 	ErrorResponse,
 	FavoritesResponse,
 	HealthResponse,
+	OnboardingStatusResponse,
 	RecentlyPlayedSnapshot,
 	SearchResult,
 	ZonesResponse
@@ -135,6 +136,15 @@ function catalogArtistQuery(value: string): string {
 
 export function fetchCoreStatus(fetchFn: FetchLike): Promise<CoreStatusResponse> {
 	return request<CoreStatusResponse>(fetchFn, '/api/core');
+}
+
+/**
+ * First-run read model. Two facts the browser cannot derive: whether this
+ * install has ever paired a Core, and the hostname of the machine running
+ * the engine. See `OnboardingStatusResponse`.
+ */
+export function fetchOnboardingStatus(fetchFn: FetchLike): Promise<OnboardingStatusResponse> {
+	return request<OnboardingStatusResponse>(fetchFn, '/api/onboarding');
 }
 
 export function fetchCatalogStatus(fetchFn: FetchLike): Promise<CatalogStatus> {

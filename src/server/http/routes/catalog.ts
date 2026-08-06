@@ -81,7 +81,7 @@ export type CatalogHttpRoonClient = Pick<RoonClient, "getCoreInfo">;
 
 /**
  * The library-feature slice the catalog routes consume (Slices 3–6): the
- * explicit catalog refresh POST is one of the two refresh triggers, the index
+ * explicit catalog refresh POST is one of the refresh triggers, the index
  * serves the capability answers, and /most-played serves the pulled stats read
  * model. Optional so the router works without the feature layer.
  */
@@ -352,6 +352,15 @@ export const createCatalogRouter = (
                 : {
                     playlistFeaturesUnavailableReason:
                       capability.playlistFeaturesUnavailableReason ??
+                      capability.reason,
+                  }),
+              stateFilterFeaturesAvailable:
+                capability.stateFilterFeaturesAvailable,
+              ...(capability.stateFilterFeaturesAvailable
+                ? {}
+                : {
+                    stateFilterFeaturesUnavailableReason:
+                      capability.stateFilterFeaturesUnavailableReason ??
                       capability.reason,
                   }),
             };

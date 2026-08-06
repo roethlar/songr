@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Could not start</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1rem;
+        padding: 2rem;
+        box-sizing: border-box;
+        background: #101014;
+        color: #e6e6ea;
+        font: 400 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+        text-align: center;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      h1 {
+        margin: 0;
+        font-size: 1.15rem;
+        font-weight: 600;
+      }
+      p {
+        margin: 0;
+        max-width: 34rem;
+        color: #a5a5b0;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.85rem;
+        color: #c8c8d2;
+        user-select: text;
+        -webkit-user-select: text;
+      }
+      button {
+        margin-top: 0.5rem;
+        padding: 0.5rem 1.4rem;
+        border: 1px solid rgba(230, 230, 234, 0.28);
+        border-radius: 999px;
+        background: transparent;
+        color: #e6e6ea;
+        font: inherit;
+        cursor: pointer;
+      }
+      button:hover {
+        background: rgba(230, 230, 234, 0.1);
+      }
+      button:focus-visible {
+        outline: 2px solid #7aa2ff;
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 id="title">The player engine did not start</h1>
+    <p id="reason"></p>
+    <p><code id="detail"></code></p>
+    <button id="retry" type="button">Try again</button>
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const attempts = Number(params.get("attempts") ?? "0");
+      // The same page serves two failures: a local engine that would not start,
+      // and a configured remote server that would not answer. The remote case
+      // supplies its own wording; the local case derives it from the attempts.
+      const title = params.get("title");
+      if (title) {
+        document.getElementById("title").textContent = title;
+        document.title = title;
+      }
+      document.getElementById("reason").textContent =
+        params.get("summary") ??
+        (attempts > 1
+          ? "Tried " + attempts + " times without success."
+          : "The background process could not be started.");
+      document.getElementById("detail").textContent = params.get("reason") ?? "";
+      const retry = document.getElementById("retry");
+      retry.addEventListener("click", () => {
+        retry.disabled = true;
+        window.roonControllerShell?.retryEngine();
+      });
+    </script>
+  </body>
+</html>

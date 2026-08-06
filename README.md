@@ -7,7 +7,8 @@
 <p align="center">A browser controller for your Roon Core.</p>
 
 <p align="center">
-  <a href="#install">Install</a> ·
+  <a href="#desktop-app">Desktop app</a> ·
+  <a href="#install">Server install</a> ·
   <a href="#configuration">Configuration</a> ·
   <a href="#security">Security</a> ·
   <a href="LICENSE">MIT</a>
@@ -15,14 +16,19 @@
 
 ---
 
-Roon ships desktop and mobile control apps, but none for Linux. Songr is a
-self-hosted web controller you point a browser at: it pairs with your Core as a
-Roon extension, then gives you your library, search, transport, queue, and zones
-from any device on the network — including the Linux desktop that otherwise has
-no client at all.
+Roon ships desktop and mobile control apps, but none for Linux. Songr fills
+that gap two ways, from one codebase: a **desktop app** you download and run
+like any other application, and a **self-hosted server** you point browsers
+at. Either way it pairs with your Core as a Roon extension, then gives you
+your library, search, transport, queue, and zones. No cloud, no account, no
+telemetry.
 
-It runs as a small Node service on the machine of your choice and serves a static
-SvelteKit frontend from the same port. No cloud, no account, no telemetry.
+Pick one:
+
+- **[Desktop app](#desktop-app)** — for using Songr on this computer. One
+  download, nothing else to run.
+- **[Server install](#install)** — for a Raspberry Pi, NAS, or any always-on
+  machine; every browser and tablet on the network gets the same controller.
 
 ## Screenshots
 
@@ -41,6 +47,13 @@ per-scope sorting, a Recently played scope, and a Surprise me shuffle. Album
 sheets show full track listings with artwork. Density control switches between
 Compact and Normal, plus a layout tuned for a Raspberry Pi touchscreen.
 
+Two library views ship, and you can switch between them any time from the
+settings menu in the top bar. **Library** is the default: it browses a catalog
+Songr indexes from your Core, which is what makes the jump rails, sorting and
+counts possible. **Classic** browses your Core live, folder by folder, the way
+Roon's own browser does — it needs no index, so it is useful immediately and
+useful if you prefer walking the hierarchy.
+
 **Search.** An instant palette — start typing anywhere — with drill-down into
 results. Search runs in an isolated browse session, so exploring a result never
 disturbs the page you came from.
@@ -48,13 +61,39 @@ disturbs the page you came from.
 **Playback.** Play, pause, previous, next, seek, and volume, with a persistent
 play bar carrying deep links to the current track and artist. Zone switching is
 global, and now-playing state streams over Socket.IO so every open browser stays
-in sync.
+in sync. Hardware media keys and the system's media panel follow the selected
+zone — always in the desktop app, and in Chromium-family browsers too.
 
 **Queue.** Per-zone queue with artwork, play-from-here, shuffle, loop, and auto
 radio.
 
 **Presentation.** Light and dark themes with a persisted preference, and artwork
 cached to disk so browsing a large library stays quick.
+
+## Desktop app
+
+The same controller in its own window, with a tray icon, hardware media keys,
+and a first-run guide that finds your Core. Download the build for your
+platform from [Releases](https://github.com/roethlar/songr/releases):
+AppImage, deb, or rpm on Linux (x64 and arm64), dmg on macOS (Apple Silicon
+and Intel), or the Windows installer.
+
+- The app runs its own copy of the Songr server, privately, on your machine —
+  nothing else to install. Closing the window hides it to the tray; the music
+  keeps playing.
+- To play audio **on the computer itself**, install Roon Labs' free
+  [Roon Bridge](https://roon.app/downloads) alongside (their official
+  download, all three platforms) — Songr is a controller, and Roon Bridge is
+  what makes the machine an audio zone in Roon. The app's first-run guide
+  walks through it, and you can skip it if you only control other zones.
+- The builds are unsigned. macOS: right-click the app and choose Open the
+  first time. Windows: SmartScreen → "More info" → "Run anyway".
+- Advanced, off by default: from the tray's Advanced Settings the app can
+  also serve browsers on your network (read [Security](#security) first), or
+  connect to an existing Songr server instead of running its own.
+
+A desktop user needs only the app. The server install below is the right
+shape when several people or devices share one Songr.
 
 ## Install
 
@@ -111,6 +150,19 @@ On first run, open Roon → Settings → Extensions and enable **Songr**.
 Roon's pairing state — the paired core id plus its per-core token map — is
 written to `ROON_TOKEN_PATH` with file mode `0o600`, under a directory created
 with mode `0o700`. Reconnection is automatic on later starts.
+
+### First run: the library indexes in the background
+
+Once paired, Songr indexes your library from the Core. Until that finishes the
+Library view says so — "Showing a limited library listing while the catalog
+prepares" — and shows a reduced listing with approximate counts and album
+actions disabled. **This is normal and it clears itself.** How long it takes
+scales with library size: seconds for a small collection, a few minutes for
+tens of thousands of albums.
+
+Nothing is missing or misconfigured while that notice is up, and there is no
+setting to change. If you would rather not wait, switch to the Classic view
+from the settings menu — it browses your Core live and is usable immediately.
 
 ## Configuration
 

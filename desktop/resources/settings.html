@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Advanced Settings</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        box-sizing: border-box;
+        padding: 1.75rem 2rem 1.5rem;
+        background: #101014;
+        color: #e6e6ea;
+        font: 400 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      h1 {
+        margin: 0 0 0.25rem;
+        font-size: 1.05rem;
+        font-weight: 600;
+      }
+      .lede {
+        margin: 0 0 1.5rem;
+        color: #8f8f9c;
+      }
+      section {
+        margin-bottom: 1.75rem;
+      }
+      h2 {
+        margin: 0 0 0.35rem;
+        font-size: 0.92rem;
+        font-weight: 600;
+      }
+      p.hint {
+        margin: 0 0 0.7rem;
+        color: #8f8f9c;
+      }
+      label.field {
+        display: block;
+        margin-bottom: 0.5rem;
+      }
+      input[type="text"],
+      input[type="number"] {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 0.3rem;
+        padding: 0.45rem 0.6rem;
+        border: 1px solid rgba(230, 230, 234, 0.22);
+        border-radius: 6px;
+        background: rgba(230, 230, 234, 0.05);
+        color: #e6e6ea;
+        font: inherit;
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      input[type="number"] {
+        width: 9rem;
+      }
+      input:focus-visible {
+        outline: 2px solid #7aa2ff;
+        outline-offset: 1px;
+      }
+      .toggle {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        margin-bottom: 0.7rem;
+      }
+      .caveat {
+        display: none;
+        margin: 0.85rem 0 0;
+        padding: 0.75rem 0.9rem;
+        border: 1px solid rgba(255, 176, 92, 0.45);
+        border-left-width: 3px;
+        border-radius: 6px;
+        background: rgba(255, 176, 92, 0.09);
+        color: #f3d3ae;
+      }
+      .caveat[data-visible="true"] {
+        display: block;
+      }
+      .caveat strong {
+        display: block;
+        margin-bottom: 0.25rem;
+        color: #ffc98a;
+      }
+      .port-row[data-enabled="false"] {
+        opacity: 0.45;
+      }
+      footer {
+        display: flex;
+        align-items: center;
+        gap: 0.9rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid rgba(230, 230, 234, 0.12);
+      }
+      button {
+        padding: 0.42rem 1.15rem;
+        border: 1px solid rgba(230, 230, 234, 0.28);
+        border-radius: 999px;
+        background: transparent;
+        color: #e6e6ea;
+        font: inherit;
+        cursor: pointer;
+      }
+      button:hover {
+        background: rgba(230, 230, 234, 0.1);
+      }
+      button:focus-visible {
+        outline: 2px solid #7aa2ff;
+        outline-offset: 2px;
+      }
+      button.primary {
+        border-color: transparent;
+        background: #3f5bd9;
+      }
+      button.primary:hover {
+        background: #4d68e0;
+      }
+      #status {
+        margin: 0;
+        color: #8f8f9c;
+      }
+      #status[data-tone="error"] {
+        color: #ff9d9d;
+      }
+      #status[data-tone="saved"] {
+        color: #9fdcae;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Advanced Settings</h1>
+    <p class="lede">
+      Nothing here is needed for normal use. Changes take effect the next time
+      you start the app.
+    </p>
+
+    <section>
+      <h2>Use another server</h2>
+      <p class="hint">
+        Point this app at a controller server running somewhere else — a NAS, a
+        Raspberry Pi — instead of running its own in the background. Leave it
+        empty to run this computer's own player engine, which is what almost
+        everyone wants.
+      </p>
+      <label class="field">
+        Server address
+        <input
+          id="serverUrl"
+          type="text"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="http://nas.local:3333"
+          disabled
+        />
+      </label>
+      <p class="hint">
+        Must start with <code>http://</code> or <code>https://</code>. Anything
+        else is ignored. If the server cannot be reached, the app says so and
+        offers to try again — it will not quietly start its own server instead.
+      </p>
+    </section>
+
+    <section>
+      <h2>Serve on the local network</h2>
+      <p class="hint">
+        Normally this app's player engine is reachable only from this computer.
+        Turn this on to let phones, tablets and other computers on your network
+        open it in a browser.
+      </p>
+      <div class="toggle">
+        <input id="serveOnNetwork" type="checkbox" disabled />
+        <label for="serveOnNetwork">Allow other devices on my network</label>
+      </div>
+      <div class="port-row" id="portRow" data-enabled="false">
+        <label class="field">
+          Port
+          <input
+            id="networkPort"
+            type="number"
+            min="1"
+            max="65535"
+            step="1"
+            disabled
+          />
+        </label>
+      </div>
+      <p class="caveat" id="caveat">
+        <strong>There is no password on this.</strong>
+        Anyone who can reach this computer on your network can control your Roon
+        playback and browse your library. Only turn this on for a network you
+        trust. To expose it beyond your own network, put it behind a reverse
+        proxy that adds authentication.
+      </p>
+      <p class="hint" id="remoteNote" hidden>
+        Ignored while a server address is set above: the app is not running its
+        own engine, so there is nothing here to share.
+      </p>
+    </section>
+
+    <footer>
+      <button id="save" class="primary" type="button" disabled>Save</button>
+      <button id="close" type="button">Close</button>
+      <p id="status" role="status"></p>
+    </footer>
+
+    <script>
+      const bridge = window.roonControllerShell;
+      const serverUrl = document.getElementById("serverUrl");
+      const serveOnNetwork = document.getElementById("serveOnNetwork");
+      const networkPort = document.getElementById("networkPort");
+      const portRow = document.getElementById("portRow");
+      const caveat = document.getElementById("caveat");
+      const remoteNote = document.getElementById("remoteNote");
+      const status = document.getElementById("status");
+      const saveButton = document.getElementById("save");
+
+      function setStatus(text, tone) {
+        status.textContent = text;
+        if (tone) {
+          status.setAttribute("data-tone", tone);
+        } else {
+          status.removeAttribute("data-tone");
+        }
+      }
+
+      // The caveat is the whole point of the toggle being a toggle: it appears
+      // the moment network serving is switched on, before anything is saved.
+      function syncDependentUi() {
+        const on = serveOnNetwork.checked;
+        caveat.setAttribute("data-visible", on ? "true" : "false");
+        portRow.setAttribute("data-enabled", on ? "true" : "false");
+        networkPort.disabled = !on;
+        remoteNote.hidden = serverUrl.value.trim() === "";
+      }
+
+      function render(settings) {
+        serverUrl.value = settings.serverUrl ?? "";
+        serveOnNetwork.checked = settings.serveOnNetwork === true;
+        networkPort.value = String(settings.networkPort ?? "");
+        syncDependentUi();
+      }
+
+      // Reading the stored settings is an async trip to the main process. Every
+      // control ships disabled and is enabled only once that answer has been
+      // rendered, because a field that accepts typing before it is populated
+      // silently throws the typing away when the answer lands.
+      function enableForm() {
+        serverUrl.disabled = false;
+        serveOnNetwork.disabled = false;
+        saveButton.disabled = false;
+        syncDependentUi();
+        document.body.setAttribute("data-ready", "true");
+      }
+
+      serveOnNetwork.addEventListener("change", syncDependentUi);
+      serverUrl.addEventListener("input", syncDependentUi);
+
+      document.getElementById("close").addEventListener("click", () => {
+        window.close();
+      });
+
+      saveButton.addEventListener("click", async () => {
+        saveButton.disabled = true;
+        setStatus("Saving…");
+        try {
+          const result = await bridge.saveSettings({
+            serverUrl: serverUrl.value,
+            serveOnNetwork: serveOnNetwork.checked,
+            networkPort: networkPort.value,
+          });
+          if (result && result.ok) {
+            // Redisplay what was actually stored, so anything the main process
+            // rejected reverts in front of the user instead of looking accepted.
+            const typed = serverUrl.value.trim();
+            render(result.settings);
+            if (typed !== "" && result.settings.serverUrl === null) {
+              // "Saved" alone would be a lie by omission here: the address the
+              // user typed is gone from the box and they need to know why.
+              setStatus(
+                "Saved, but that server address was not a valid http:// or " +
+                  "https:// URL, so it was cleared.",
+                "error",
+              );
+            } else {
+              setStatus("Saved. Restart the app to apply.", "saved");
+            }
+          } else {
+            setStatus(
+              (result && result.error) || "Could not save settings.",
+              "error",
+            );
+          }
+        } catch (error) {
+          setStatus(String(error), "error");
+        } finally {
+          saveButton.disabled = false;
+        }
+      });
+
+      (async () => {
+        try {
+          render(await bridge.getSettings());
+        } catch (error) {
+          setStatus(String(error), "error");
+        } finally {
+          enableForm();
+        }
+      })();
+    </script>
+  </body>
+</html>

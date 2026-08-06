@@ -200,7 +200,12 @@ vi.mock('$lib/socket/emit', () => ({
 }));
 
 vi.mock('$lib/api/client', () => ({
-	browse: (fetchFn: unknown, opts: BrowseOptions) => apiBrowse(fetchFn, opts)
+	browse: (fetchFn: unknown, opts: BrowseOptions) => apiBrowse(fetchFn, opts),
+	// The layout mounts the first-run flow, which reads this at mount. These
+	// tests are not exercising a first run, so answer as an install that has
+	// already paired — the flow then renders nothing and stays out of the way.
+	fetchOnboardingStatus: () => Promise.resolve({ everPaired: true, hostname: '' }),
+	fetchZones: () => Promise.resolve([])
 }));
 
 vi.mock('$lib/stores/exploreRailStore', () => ({

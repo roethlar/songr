@@ -1,0 +1,113 @@
+# electron-builder configuration for the desktop shell.
+#
+# Read `scripts/package-app.mjs` beside this file: the engine payload named
+# below under `extraResources` does not exist until that script stages it, so
+# running `electron-builder` directly produces an app that cannot start. The
+# script is the entry point; this file is the part electron-builder reads.
+#
+# Every artifact here is UNSIGNED, deliberately (plan §1: "Unsigned artifacts
+# initially; install caveats documented"). Signing is follow-on work, and the
+# install caveats are in README.md.
+
+# Plan §10's stated public default. The private tree's build overrides this on
+# the command line with a `.private` suffix (see `appIdForTree` in
+# `src/packaging.ts`), so the owner's own build and a public release can be
+# installed side by side. The literal here is the public one so that a plain
+# `electron-builder` run — a contributor's, a CI job's — produces the public
+# identity without needing to know about the override.
+appId: app.songr.desktop
+productName: Songr
+copyright: Songr contributors
+
+directories:
+  output: release/artifacts
+
+# The shell is small and pure JavaScript; archiving it costs nothing and keeps
+# the app directory tidy. The engine is emphatically NOT in here — see
+# extraResources.
+asar: true
+
+# There is no native module anywhere in this workspace (socket.io-client is
+# pure JavaScript), so a rebuild step would download a toolchain to do nothing.
+# Turning it off also removes the last source of run-to-run variation.
+npmRebuild: false
+
+files:
+  - dist/**/*
+  - resources/**/*
+  - package.json
+
+# The engine: the repository's compiled backend, its built UI and a
+# production-only node_modules, staged by `scripts/package-app.mjs`. It has to
+# live outside the asar because the shell forks it as a plain Node program, and
+# Node cannot require its way into an asar archive.
+#
+# The copy root is the payload's PARENT, and that is not cosmetic.
+# app-builder-lib refuses any directory whose path relative to the copy root is
+# exactly `node_modules`, before it consults a single filter pattern. Copying
+# from the parent leaves the engine's dependencies at `engine/node_modules`,
+# which the rule does not match. Naming the payload directly here builds an app
+# that installs cleanly and then cannot require express.
+extraResources:
+  - from: release/payload
+    filter:
+      - '**/*'
+
+mac:
+  target:
+    - dmg
+  category: public.app-category.music
+  # Explicitly unsigned: without this, electron-builder discovers whatever
+  # identity happens to be in the local keychain, and the artifact stops being
+  # reproducible by anyone else.
+  identity: null
+
+dmg:
+  writeUpdateInfo: false
+
+linux:
+  target:
+    - AppImage
+    - deb
+    - rpm
+  category: AudioVideo
+  # The package name, the binary on `$PATH`, and (via syncDesktopName) the
+  # `.desktop` file and WM_CLASS. Without it every Linux artifact would be named
+  # after the npm workspace, `roon-controller-desktop`, and the window manager
+  # would not associate the running window with its launcher entry.
+  executableName: songr
+  syncDesktopName: true
+  # deb and rpm both require a maintainer field. This is not a support address:
+  # `.invalid` is the reserved never-resolvable TLD (RFC 2606), and it is the
+  # same identity the release pipeline already uses for the public commit
+  # author, so the two do not drift.
+  maintainer: Songr <release@songr.invalid>
+  synopsis: Desktop client for a Roon music library
+  description: >
+    A desktop client for Roon. It runs its own controller engine and shows it in
+    a window, so the machine in front of you needs no browser tab and no
+    separately installed server.
+
+# deb and rpm take their package name from package.json's `name`, which is the
+# npm workspace name and not a product name. Stating it here keeps the
+# installed package `songr` without renaming the workspace — a rename would
+# also move the per-user data directory a dev run writes to, for no gain.
+deb:
+  packageName: songr
+  artifactName: songr_${version}_${arch}.${ext}
+
+rpm:
+  packageName: songr
+  artifactName: songr-${version}.${arch}.${ext}
+
+win:
+  target:
+    - nsis
+
+nsis:
+  # A per-user install with a visible directory choice, because the artifact is
+  # unsigned: a one-click per-machine installer would raise a UAC prompt for an
+  # unsigned binary, which is the worst of both worlds.
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true

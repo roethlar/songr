@@ -6,6 +6,9 @@ dist/
 ui/build/
 ui/playwright-report/
 ui/test-results/
+# The desktop shell's staged engine payload and its installers. `dist/` above
+# already matches desktop/dist at any depth; this is the packaging output.
+desktop/release/
 
 # Runtime data
 data/

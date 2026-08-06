@@ -24,6 +24,7 @@ import { TimelineBrowseService } from "../core/roon/TimelineBrowseService";
 import { FileCatalogPersistence } from "../core/catalog/CatalogPersistence";
 import { CatalogService } from "../core/catalog/CatalogService";
 import { CatalogLifecycle } from "./CatalogLifecycle";
+import { attachListeningHandshake } from "./listeningHandshake";
 import {
   loadLibraryFeatureLayer,
   type LibraryFeatureLayer,
@@ -142,7 +143,10 @@ export const startServer = (
     logger,
     albumActionService,
     timelineBrowseService,
-    libraryAlbumService
+    libraryAlbumService,
+    // The feature layer refreshes its own snapshot on a schedule; shutting the
+    // catalog down stops it, so nothing it armed outlives the process.
+    libraryFeatures
   );
   const imageService = new ImageService(
     roonClient,
@@ -195,6 +199,10 @@ export const startServer = (
   );
   const httpServer = http.createServer(app);
 
+  // Answer the parent process's port question once bound. No-op unless this
+  // process was forked with an IPC channel (see listeningHandshake.ts).
+  attachListeningHandshake(httpServer, logger);
+
   const socketContext = attachSocketServer(httpServer, {
     roonClient,
     transportService,
@@ -242,10 +250,11 @@ export const startServer = (
       const coreId = currentCoreId ?? eventCoreId;
       if (coreId) {
         catalogLifecycle.corePaired(coreId);
-        // Backend startup is one of the two extended-library refresh
-        // triggers (the other is the explicit catalog-refresh POST). It is
-        // single-flight inside the feature layer, failures land in the
-        // capability answer, and it is a no-op when the layer is absent.
+        // Backend startup is one of the extended-library refresh triggers
+        // (the others are the explicit catalog-refresh POST and the layer's
+        // own schedule, which this pull is what arms). It is single-flight
+        // inside the feature layer, failures land in the capability answer,
+        // and it is a no-op when the layer is absent.
         libraryFeatures.catalog.requestRefresh(coreId);
       } else {
         logger.warn("Paired Core event omitted its Core identity");
@@ -368,8 +377,15 @@ export const startServer = (
       }
       httpServer.listen(config.port, config.host, () => {
         listening = true;
+        const address = httpServer.address();
+        // With PORT=0 the configured port is 0; the bound address carries
+        // the port the OS actually handed out.
+        const boundPort =
+          address !== null && typeof address !== "string"
+            ? address.port
+            : config.port;
         logger.info(
-          { host: config.host, port: config.port },
+          { host: config.host, port: boundPort },
           "HTTP server listening"
         );
       });

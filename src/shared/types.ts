@@ -642,6 +642,33 @@ export interface CoreStatusResponse {
 }
 
 /**
+ * The name this controller registers itself under with Roon, and therefore
+ * the exact label the user looks for in Roon Settings → Extensions. Shared
+ * so onboarding copy cannot drift from what `RoonClient` actually
+ * registers — a wrong name here sends a first-run user hunting through a
+ * list for something that is not in it.
+ */
+export const ROON_EXTENSION_DISPLAY_NAME = 'Roon Web Controller';
+
+/**
+ * First-run read model (`GET /api/onboarding`).
+ *
+ * `CoreStatusResponse.status` cannot answer "is this a first run?": a
+ * never-paired install and a paired install whose Core is currently off
+ * both report `discovering`. `everPaired` reads the persisted pairing
+ * identity instead, so the onboarding flow can show itself to a genuinely
+ * new install without ambushing an existing one during a Core outage.
+ *
+ * `hostname` is this machine's `os.hostname()`. The browser cannot know
+ * the host the engine runs on, and the local-playback step needs it to
+ * recognise a RoonBridge zone named after this computer.
+ */
+export interface OnboardingStatusResponse {
+  everPaired: boolean;
+  hostname: string;
+}
+
+/**
  * Zones list response
  */
 export interface ZonesResponse {

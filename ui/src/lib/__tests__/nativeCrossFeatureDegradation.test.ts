@@ -102,7 +102,8 @@ function indexResponse(
 const HEALTHY_NATIVE: CatalogIndexResponse['native'] = {
 	dateFeaturesAvailable: true,
 	playFeaturesAvailable: true,
-	playlistFeaturesAvailable: true
+	playlistFeaturesAvailable: true,
+	stateFilterFeaturesAvailable: true
 };
 
 /** The degraded block the index serves under PROTOCOL_INCOMPATIBLE. */
@@ -112,21 +113,25 @@ const INCOMPATIBLE_NATIVE: CatalogIndexResponse['native'] = {
 	playFeaturesAvailable: false,
 	playFeaturesUnavailableReason: PIN_REASON,
 	playlistFeaturesAvailable: false,
-	playlistFeaturesUnavailableReason: PIN_REASON
+	playlistFeaturesUnavailableReason: PIN_REASON,
+	stateFilterFeaturesAvailable: false,
+	stateFilterFeaturesUnavailableReason: PIN_REASON
 };
 
 const MOST_PLAYED_INCOMPATIBLE_NATIVE: CatalogIndexResponse['native'] = {
 	dateFeaturesAvailable: true,
 	playFeaturesAvailable: false,
 	playFeaturesUnavailableReason: MOST_PLAYED_PIN_REASON,
-	playlistFeaturesAvailable: true
+	playlistFeaturesAvailable: true,
+	stateFilterFeaturesAvailable: true
 };
 
 const PLAYLIST_INCOMPATIBLE_NATIVE: CatalogIndexResponse['native'] = {
 	dateFeaturesAvailable: true,
 	playFeaturesAvailable: true,
 	playlistFeaturesAvailable: false,
-	playlistFeaturesUnavailableReason: PLAYLIST_PIN_REASON
+	playlistFeaturesUnavailableReason: PLAYLIST_PIN_REASON,
+	stateFilterFeaturesAvailable: true
 };
 
 /** The gate the mode component derives from the store capabilities. */

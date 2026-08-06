@@ -1,0 +1,82 @@
+# Builds every desktop artifact when a release tag is pushed, and attaches
+# them to the GitHub release for that tag.
+#
+# One job per operating system; each runs the repository's own deterministic
+# packaging script (desktop/scripts/package-app.mjs), which builds the server,
+# the web UI, and the shell, stages the engine payload, and invokes
+# electron-builder. Everything after `--` is handed to electron-builder, which
+# is how one runner produces both architectures. All artifacts are unsigned;
+# the README documents the first-launch steps each platform needs.
+name: release-assets
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      # One platform failing must not cancel the others' uploads.
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos
+            os: macos-14
+            target: '--mac'
+            # dmg for Apple Silicon and Intel from one arm64 runner.
+            arches: '--arm64 --x64'
+          - name: linux
+            os: ubuntu-latest
+            target: '--linux'
+            # AppImage, deb and rpm for both architectures.
+            arches: '--arm64 --x64'
+          - name: windows
+            os: windows-latest
+            target: '--win'
+            arches: '--x64'
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # One shell everywhere: the `--` argument layering below must reach
+        # npm identically on all three platforms, and pwsh handles `--`
+        # differently.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
+            desktop/package-lock.json
+
+      - name: Install rpm tooling
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix ui
+          npm ci --prefix desktop
+
+      - name: Build and package
+        run: npm --prefix desktop run package -- ${{ matrix.target }} -- ${{ matrix.arches }}
+
+      - name: Attach artifacts to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/release/artifacts/*.dmg
+            desktop/release/artifacts/*.AppImage
+            desktop/release/artifacts/*.deb
+            desktop/release/artifacts/*.rpm
+            desktop/release/artifacts/*.exe

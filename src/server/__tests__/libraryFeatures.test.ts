@@ -198,6 +198,8 @@ describe("loading the extended library features", () => {
       playFeaturesUnavailableReason: LIBRARY_FEATURES_ABSENT_REASON,
       playlistFeaturesAvailable: false,
       playlistFeaturesUnavailableReason: LIBRARY_FEATURES_ABSENT_REASON,
+      stateFilterFeaturesAvailable: false,
+      stateFilterFeaturesUnavailableReason: LIBRARY_FEATURES_ABSENT_REASON,
     });
     expect(await layer.catalog.getMostPlayedSnapshot(CORE_ID)).toBeNull();
     expect(await layer.catalog.getPlaylistSnapshot(CORE_ID)).toBeNull();
@@ -206,6 +208,9 @@ describe("loading the extended library features", () => {
     expect(layer.playlistWrites).toBeUndefined();
     expect(layer.focusPlaylists).toBeUndefined();
     expect(layer.albumDetailFallback).toBeUndefined();
+    // The host stops the layer's own scheduled refresh while shutting down and
+    // does not branch on whether the layer has one, so absence has to answer.
+    expect(() => layer.stopScheduledRefresh()).not.toThrow();
     // Absence is a normal condition, not a fault: it is reported, not logged
     // as an error.
     expect(logger.error).not.toHaveBeenCalled();
@@ -289,6 +294,35 @@ describe("loading the extended library features", () => {
     expect(logger.error).toHaveBeenCalled();
   });
 
+  it("degrades to unavailable when a layer offers no way to stop its own schedule", async () => {
+    // Otherwise the host would wire a layer it cannot stop, and whatever that
+    // layer scheduled would outlive the shutdown that was supposed to end it.
+    jest.doMock(
+      IMPLEMENTATION,
+      () => ({
+        createLibraryFeatureLayer: () => ({
+          catalog: {
+            requestRefresh: () => undefined,
+            getCapability: () => Promise.resolve({}),
+            getMostPlayedSnapshot: () => Promise.resolve(null),
+            getPlaylistSnapshot: () => Promise.resolve(null),
+          },
+          songRelationships: { resolve: () => Promise.resolve({}) },
+          songSourceVerifier: { verify: () => Promise.resolve({}) },
+        }),
+      }),
+      VIRTUAL
+    );
+    const logger = testLogger();
+
+    const layer = loadLibraryFeatureLayer(testHost(logger));
+
+    expect((await layer.catalog.getCapability(CORE_ID)).reason).toBe(
+      LIBRARY_FEATURES_UNUSABLE_REASON
+    );
+    expect(logger.error).toHaveBeenCalled();
+  });
+
   it("degrades to unavailable when the entry point throws while starting", async () => {
     jest.doMock(
       IMPLEMENTATION,
@@ -344,6 +378,8 @@ describe("the catalog routes of a build without the extended library features", 
         playFeaturesUnavailableReason: LIBRARY_FEATURES_ABSENT_REASON,
         playlistFeaturesAvailable: false,
         playlistFeaturesUnavailableReason: LIBRARY_FEATURES_ABSENT_REASON,
+        stateFilterFeaturesAvailable: false,
+        stateFilterFeaturesUnavailableReason: LIBRARY_FEATURES_ABSENT_REASON,
       });
     } finally {
       await app.close();

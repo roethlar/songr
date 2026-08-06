@@ -42,6 +42,7 @@
 	import { zonesStore, zoneMapStore } from '$lib/stores/zonesStore';
 	import { interpolatedSeekStore } from '$lib/stores/interpolatedSeekStore';
 	import { registerSocketHandlers } from '$lib/socket/register';
+	import { startMediaSessionBinding } from '$lib/media/mediaSessionBinding';
 	import { getSocket } from '$lib/socket/client';
 	import { emitWithAck } from '$lib/socket/emit';
 	import { splitArtists } from '$lib/artistList';
@@ -51,6 +52,7 @@
 		publishLibraryIntent
 	} from '$lib/stores/libraryIntentStore';
 	import ErrorToast from '$lib/components/ErrorToast.svelte';
+	import OnboardingFlow from '$lib/components/OnboardingFlow.svelte';
 	import AppSettingsMenu from '$lib/components/AppSettingsMenu.svelte';
 	import Search from '$lib/components/Search.svelte';
 	import NowPlayingOverlay from '$lib/components/NowPlayingOverlay.svelte';
@@ -120,9 +122,15 @@
 		socket = getSocket();
 		initializeTheme();
 		const cleanupSocket = registerSocketHandlers();
+		// One media session for the whole app: mirrors the selected zone into
+		// the OS media controls (MPRIS / SMTC / Now Playing) and routes the
+		// hardware media keys back through the same transport commands the
+		// on-screen buttons send. No-op where the platform has no media session.
+		const stopMediaSession = startMediaSessionBinding();
 		void initializeStores(fetch);
 
 		return () => {
+			stopMediaSession();
 			cleanupSocket();
 			const layoutClaim = classicLayoutClaim;
 			classicLayoutClaim = null;
@@ -1076,6 +1084,11 @@
 <NowPlayingOverlay onOpenAlbum={openAlbumOfNowPlaying} />
 <ZoneGroupingModal />
 <ErrorToast />
+<!-- Renders nothing unless the server says no Roon Core has ever been
+     paired on this install. Gated on that, never on being inside the
+     desktop shell, so a plain-browser first run gets the same guidance and
+     an established appliance never sees it. -->
+<OnboardingFlow />
 
 <style>
 	/* App-level: lock the viewport so only the workspace-main scrolls.

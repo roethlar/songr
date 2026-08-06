@@ -3,6 +3,7 @@ import { EventEmitter } from "events";
 import fs from "fs";
 import path from "path";
 import { Logger } from "pino";
+import { ROON_EXTENSION_DISPLAY_NAME } from "../../shared/types";
 
 const RoonApi = require("node-roon-api");
 const RoonApiTransport = require("node-roon-api-transport");
@@ -71,8 +72,10 @@ export class RoonClient extends EventEmitter {
 
     this.roon = new RoonApi({
       extension_id: "com.roonlabs.webcontroller",
-      display_name: "Roon Web Controller",
-      display_version: "1.0.2",
+      // Shared with the UI so the onboarding step can tell the user the
+      // exact label to look for in Roon Settings → Extensions.
+      display_name: ROON_EXTENSION_DISPLAY_NAME,
+      display_version: "1.1.0",
       publisher: "roethlar",
       email: "mcoelho@gmail.com",
       website: "https://github.com/roethlar/roon-controller",
@@ -130,6 +133,34 @@ export class RoonClient extends EventEmitter {
 
   public getCoreStatus(): "discovering" | "paired" | "unpaired" {
     return this.coreStatus;
+  }
+
+  /**
+   * Has this install EVER completed pairing with a Roon Core?
+   *
+   * Distinct from `getCoreStatus()`, which reports the live connection and
+   * reads `discovering` both on a brand-new install and on a long-paired
+   * one whose Core happens to be off. The durable answer is the persisted
+   * pairing identity node-roon-api writes at `tokenPath`: a non-empty
+   * `paired_core_id`, or at least one entry in the per-core `tokens` map.
+   * An unreadable or absent file answers false, which is the same thing a
+   * first run looks like.
+   *
+   * Read-only, and read on demand rather than cached: the file is written
+   * by the library out from under us the moment pairing completes.
+   */
+  public hasEverPaired(): boolean {
+    if (this.coreStatus === "paired") return true;
+    const state = this.loadPersistedState();
+    const pairedCoreId = state.paired_core_id;
+    if (typeof pairedCoreId === "string" && pairedCoreId.length > 0) {
+      return true;
+    }
+    const tokens = state.tokens;
+    if (tokens && typeof tokens === "object" && !Array.isArray(tokens)) {
+      return Object.keys(tokens as Record<string, unknown>).length > 0;
+    }
+    return false;
   }
 
   private onCorePaired(core: any): void {

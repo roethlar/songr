@@ -142,6 +142,8 @@ describe("catalog HTTP routes", () => {
       playFeaturesUnavailableReason: null,
       playlistFeaturesAvailable: true,
       playlistFeaturesUnavailableReason: null,
+      stateFilterFeaturesAvailable: true,
+      stateFilterFeaturesUnavailableReason: null,
     } as const;
     const nativeCatalog: CatalogHttpNative = {
       requestRefresh: jest.fn(),
@@ -161,6 +163,7 @@ describe("catalog HTTP routes", () => {
         dateFeaturesAvailable: true,
         playFeaturesAvailable: true,
         playlistFeaturesAvailable: true,
+        stateFilterFeaturesAvailable: true,
       });
       // The wire payload passes the strict client-side contract.
       expect(normalizeCatalogIndexResponse(body)).not.toBeNull();
@@ -182,6 +185,9 @@ describe("catalog HTTP routes", () => {
       playFeaturesUnavailableReason: "no native catalog snapshot is available",
       playlistFeaturesAvailable: false,
       playlistFeaturesUnavailableReason: "no native catalog snapshot is available",
+      stateFilterFeaturesAvailable: false,
+      stateFilterFeaturesUnavailableReason:
+        "no native catalog snapshot is available",
     } as const;
     const nativeCatalog: CatalogHttpNative = {
       requestRefresh: jest.fn(),
@@ -203,6 +209,9 @@ describe("catalog HTTP routes", () => {
           "no native catalog snapshot is available",
         playlistFeaturesAvailable: false,
         playlistFeaturesUnavailableReason:
+          "no native catalog snapshot is available",
+        stateFilterFeaturesAvailable: false,
+        stateFilterFeaturesUnavailableReason:
           "no native catalog snapshot is available",
       });
       expect(normalizeCatalogIndexResponse(body)).not.toBeNull();

@@ -105,6 +105,87 @@ describe("RoonClient — persisted-state callbacks", () => {
   });
 });
 
+describe("RoonClient — hasEverPaired", () => {
+  it("is false on a first run with no token file", async () => {
+    const tokenPath = await makeTokenPath();
+    const client = new RoonClient({ tokenPath, logger: stubLogger });
+    client.start();
+
+    expect(client.getCoreStatus()).toBe("discovering");
+    expect(client.hasEverPaired()).toBe(false);
+  });
+
+  it("is true from a persisted paired_core_id while the Core is unreachable", async () => {
+    const tokenPath = await makeTokenPath();
+    await fsp.mkdir(path.dirname(tokenPath), { recursive: true });
+    await fsp.writeFile(
+      tokenPath,
+      JSON.stringify({ paired_core_id: "core-abc" }),
+      "utf-8"
+    );
+
+    const client = new RoonClient({ tokenPath, logger: stubLogger });
+    client.start();
+
+    // The live status is indistinguishable from a first run — which is
+    // exactly why the durable answer has to come from the token file.
+    expect(client.getCoreStatus()).toBe("discovering");
+    expect(client.hasEverPaired()).toBe(true);
+  });
+
+  it("is true from a non-empty tokens map alone", async () => {
+    const tokenPath = await makeTokenPath();
+    await fsp.mkdir(path.dirname(tokenPath), { recursive: true });
+    await fsp.writeFile(
+      tokenPath,
+      JSON.stringify({ tokens: { "core-abc": "tk-xyz" } }),
+      "utf-8"
+    );
+
+    const client = new RoonClient({ tokenPath, logger: stubLogger });
+    client.start();
+
+    expect(client.hasEverPaired()).toBe(true);
+  });
+
+  it("is false for placeholder state — empty id, empty tokens map, corrupt file", async () => {
+    const emptyish = await makeTokenPath();
+    await fsp.mkdir(path.dirname(emptyish), { recursive: true });
+    await fsp.writeFile(
+      emptyish,
+      JSON.stringify({ paired_core_id: "", tokens: {} }),
+      "utf-8"
+    );
+    expect(
+      new RoonClient({ tokenPath: emptyish, logger: stubLogger }).hasEverPaired()
+    ).toBe(false);
+
+    const corrupt = await makeTokenPath();
+    await fsp.mkdir(path.dirname(corrupt), { recursive: true });
+    await fsp.writeFile(corrupt, "{ not json", "utf-8");
+    expect(
+      new RoonClient({ tokenPath: corrupt, logger: stubLogger }).hasEverPaired()
+    ).toBe(false);
+  });
+
+  it("flips to true as soon as pairing lands, before anything is written", async () => {
+    const tokenPath = await makeTokenPath();
+    const client = new RoonClient({ tokenPath, logger: stubLogger });
+    client.start();
+    expect(client.hasEverPaired()).toBe(false);
+
+    capturedOptions.core_paired({
+      core_id: "core-live",
+      display_name: "Living Room",
+      display_version: "2.0",
+      services: {},
+    });
+
+    expect(client.hasEverPaired()).toBe(true);
+    expect(fs.existsSync(tokenPath)).toBe(false);
+  });
+});
+
 describe("RoonClient — legacy config.json migration", () => {
   let originalCwd: string;
   let cwdDir: string;

@@ -26,6 +26,15 @@ export interface LibraryAlbumLifecycleService {
 }
 
 /**
+ * Anything that refreshes catalog data on a schedule of its own. Shutdown is
+ * the whole contract: a schedule that outlived the process would keep pulling
+ * against a Core nobody is listening to.
+ */
+export interface ScheduledCatalogRefresh {
+  stopScheduledRefresh(): void;
+}
+
+/**
  * Captures paired Core identity before RoonClient erases it on unpair and owns
  * the catalog/coordinator side of Core lifecycle transitions.
  */
@@ -40,7 +49,8 @@ export class CatalogLifecycle {
     private readonly logger: Logger,
     private readonly albumActions?: AlbumActionLifecycleService,
     private readonly timelineBrowse?: TimelineBrowseLifecycleService,
-    private readonly libraryAlbums?: LibraryAlbumLifecycleService
+    private readonly libraryAlbums?: LibraryAlbumLifecycleService,
+    private readonly scheduledRefresh?: ScheduledCatalogRefresh
   ) {}
 
   public corePaired(coreId: string): void {
@@ -82,6 +92,16 @@ export class CatalogLifecycle {
   public shutdown(): void {
     if (this.stopped) return;
     this.stopped = true;
+    // First: stop anything that would start NEW catalog work, before tearing
+    // down the services that work would run through.
+    try {
+      this.scheduledRefresh?.stopScheduledRefresh();
+    } catch (error) {
+      this.logger.warn(
+        { err: error },
+        "Scheduled catalog refresh shutdown was rejected"
+      );
+    }
     try {
       this.timelineBrowse?.shutdown();
     } catch (error) {

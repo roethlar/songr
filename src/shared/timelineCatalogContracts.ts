@@ -88,6 +88,24 @@ interface AlbumRefBase {
   playCount?: number;
   /** Canonical ISO last-played instant for the configured profile. */
   lastPlayedAt?: string;
+  /**
+   * Where the album's audio comes from, as the extended layer's own opaque
+   * enumeration value (owned files versus one streaming provider or another).
+   * Never interpreted here; the surface that renders it owns the mapping.
+   */
+  contentSource?: number;
+  /**
+   * The configured listening profile's library state for this album.
+   *
+   * Each is present only when the extended layer established it. An ABSENT
+   * field means "not known for this album" and must not be read as `false`;
+   * `false` is a positive answer meaning the profile does not have the flag
+   * set. Whether the set as a whole can be trusted is a separate, snapshot-
+   * wide question the capability answer carries.
+   */
+  isFavorite?: boolean;
+  isListenLater?: boolean;
+  isBanned?: boolean;
 }
 
 /** The optional AlbumRef fields the extended layer owns (strip-and-set). */
@@ -99,6 +117,10 @@ export const CATALOG_ALBUM_EXTENDED_FIELD_KEYS = [
   "importDate",
   "playCount",
   "lastPlayedAt",
+  "contentSource",
+  "isFavorite",
+  "isListenLater",
+  "isBanned",
 ] as const;
 
 /** The extended-layer field bag applied to a matched catalog album. */
@@ -298,6 +320,10 @@ const ALBUM_OPTIONAL_KEYS = [
   "importDate",
   "playCount",
   "lastPlayedAt",
+  "contentSource",
+  "isFavorite",
+  "isListenLater",
+  "isBanned",
 ] as const;
 
 function canonicalDisplayText(value: string): string {
@@ -592,7 +618,14 @@ export function normalizeAlbumRef(value: unknown): AlbumRef | null {
         (!Number.isInteger(record.playCount) ||
           (record.playCount as number) < 0)) ||
       (hasOwn(record, "lastPlayedAt") &&
-        !isCanonicalTimestamp(record.lastPlayedAt))
+        !isCanonicalTimestamp(record.lastPlayedAt)) ||
+      (hasOwn(record, "contentSource") &&
+        (!Number.isInteger(record.contentSource) ||
+          (record.contentSource as number) < 0)) ||
+      (hasOwn(record, "isFavorite") && typeof record.isFavorite !== "boolean") ||
+      (hasOwn(record, "isListenLater") &&
+        typeof record.isListenLater !== "boolean") ||
+      (hasOwn(record, "isBanned") && typeof record.isBanned !== "boolean")
     ) {
       return null;
     }

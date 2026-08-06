@@ -62,6 +62,19 @@ export interface CatalogIndexNativeFeatures {
    * are unavailable, never when they are available.
    */
   readonly playlistFeaturesUnavailableReason?: string;
+  /**
+   * The per-profile album state fields below (`contentSource`, `isFavorite`,
+   * `isListenLater`, `isBanned`). False means the index's state fields cannot
+   * be trusted for the current listening profile — the snapshot predates them
+   * or was pulled for a different profile — and the surfaces that filter on
+   * them are absent rather than showing an empty result.
+   */
+  readonly stateFilterFeaturesAvailable: boolean;
+  /**
+   * The exact capability reason; present exactly when the state filters are
+   * unavailable, never when they are available.
+   */
+  readonly stateFilterFeaturesUnavailableReason?: string;
 }
 
 export interface CatalogIndexAlbum {
@@ -79,6 +92,18 @@ export interface CatalogIndexAlbum {
   playCount?: number;
   /** Canonical ISO last-played instant for the configured profile. */
   lastPlayedAt?: string;
+  /** Opaque audio-origin enumeration value; the surface owns the mapping. */
+  contentSource?: number;
+  /**
+   * The configured profile's library state. Each is served exactly when the
+   * album carries it. An absent field means "not known for this album" and is
+   * never `false`; `false` is the positive answer that the profile does not
+   * have the flag set. `stateFilterFeaturesAvailable` on `native` says
+   * whether the whole set is trustworthy.
+   */
+  isFavorite?: boolean;
+  isListenLater?: boolean;
+  isBanned?: boolean;
 }
 
 export interface CatalogIndexResponse {
@@ -145,6 +170,16 @@ export function buildCatalogIndexResponse(
       ...(album.lastPlayedAt !== undefined
         ? { lastPlayedAt: album.lastPlayedAt }
         : {}),
+      ...(album.contentSource !== undefined
+        ? { contentSource: album.contentSource }
+        : {}),
+      ...(album.isFavorite !== undefined
+        ? { isFavorite: album.isFavorite }
+        : {}),
+      ...(album.isListenLater !== undefined
+        ? { isListenLater: album.isListenLater }
+        : {}),
+      ...(album.isBanned !== undefined ? { isBanned: album.isBanned } : {}),
     })
   );
   return {
@@ -225,16 +260,23 @@ function normalizeIndexNativeFeatures(
     !record ||
     !hasExactKeys(
       record,
-      ["dateFeaturesAvailable", "playFeaturesAvailable", "playlistFeaturesAvailable"],
+      [
+        "dateFeaturesAvailable",
+        "playFeaturesAvailable",
+        "playlistFeaturesAvailable",
+        "stateFilterFeaturesAvailable",
+      ],
       [
         "dateFeaturesUnavailableReason",
         "playFeaturesUnavailableReason",
         "playlistFeaturesUnavailableReason",
+        "stateFilterFeaturesUnavailableReason",
       ]
     ) ||
     typeof record.dateFeaturesAvailable !== "boolean" ||
     typeof record.playFeaturesAvailable !== "boolean" ||
-    typeof record.playlistFeaturesAvailable !== "boolean"
+    typeof record.playlistFeaturesAvailable !== "boolean" ||
+    typeof record.stateFilterFeaturesAvailable !== "boolean"
   ) {
     return null;
   }
@@ -268,6 +310,17 @@ function normalizeIndexNativeFeatures(
     return null;
   }
   if (record.playlistFeaturesAvailable === hasPlaylistReason) return null;
+  const hasStateFilterReason = Object.prototype.hasOwnProperty.call(
+    record,
+    "stateFilterFeaturesUnavailableReason"
+  );
+  if (
+    hasStateFilterReason &&
+    !isBoundedDisplayText(record.stateFilterFeaturesUnavailableReason)
+  ) {
+    return null;
+  }
+  if (record.stateFilterFeaturesAvailable === hasStateFilterReason) return null;
   return {
     dateFeaturesAvailable: record.dateFeaturesAvailable,
     ...(hasReason
@@ -288,6 +341,13 @@ function normalizeIndexNativeFeatures(
       ? {
           playlistFeaturesUnavailableReason:
             record.playlistFeaturesUnavailableReason as string,
+        }
+      : {}),
+    stateFilterFeaturesAvailable: record.stateFilterFeaturesAvailable,
+    ...(hasStateFilterReason
+      ? {
+          stateFilterFeaturesUnavailableReason:
+            record.stateFilterFeaturesUnavailableReason as string,
         }
       : {}),
   };
@@ -351,6 +411,10 @@ export function normalizeCatalogIndexResponse(
           "importDate",
           "playCount",
           "lastPlayedAt",
+          "contentSource",
+          "isFavorite",
+          "isListenLater",
+          "isBanned",
         ]
       ) ||
       !isCatalogLocalId(album.localId) ||
@@ -411,6 +475,27 @@ export function normalizeCatalogIndexResponse(
       "lastPlayedAt"
     );
     if (hasLastPlayedAt && !isIndexTimestamp(album.lastPlayedAt)) return null;
+    const hasAudioOrigin = Object.prototype.hasOwnProperty.call(
+      album,
+      "contentSource"
+    );
+    if (
+      hasAudioOrigin &&
+      (!Number.isInteger(album.contentSource) ||
+        (album.contentSource as number) < 0)
+    ) {
+      return null;
+    }
+    // Each state flag is validated as a strict boolean. `hasOwnProperty` is
+    // what decides presence, never truthiness: a served `false` is a real
+    // answer and must survive the round trip as one.
+    const stateFlagKeys = ["isFavorite", "isListenLater", "isBanned"] as const;
+    const presentStateFlags = stateFlagKeys.filter((key) =>
+      Object.prototype.hasOwnProperty.call(album, key)
+    );
+    if (presentStateFlags.some((key) => typeof album[key] !== "boolean")) {
+      return null;
+    }
     albumIds.add(album.localId);
     if (hasBinding) {
       const artistLocalId = album.artistLocalId as string;
@@ -437,6 +522,10 @@ export function normalizeCatalogIndexResponse(
         : {}),
       ...(hasImportTimestamp ? { importDate: album.importDate as string } : {}),
       ...(hasPlayCount ? { playCount: album.playCount as number } : {}),
+      ...(hasAudioOrigin ? { contentSource: album.contentSource as number } : {}),
+      ...Object.fromEntries(
+        presentStateFlags.map((key) => [key, album[key] as boolean])
+      ),
       ...(hasLastPlayedAt
         ? { lastPlayedAt: album.lastPlayedAt as string }
         : {}),

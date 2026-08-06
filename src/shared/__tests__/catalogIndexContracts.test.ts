@@ -177,7 +177,12 @@ describe("native capability field (Slice 4)", () => {
         artists: [artist()],
         albums: [album()],
       },
-      { dateFeaturesAvailable: true, playFeaturesAvailable: true, playlistFeaturesAvailable: true }
+      {
+        dateFeaturesAvailable: true,
+        playFeaturesAvailable: true,
+        playlistFeaturesAvailable: true,
+        stateFilterFeaturesAvailable: true,
+      }
     );
   }
 
@@ -187,6 +192,7 @@ describe("native capability field (Slice 4)", () => {
       dateFeaturesAvailable: true,
       playFeaturesAvailable: true,
       playlistFeaturesAvailable: true,
+      stateFilterFeaturesAvailable: true,
     });
     expect(normalizeCatalogIndexResponse(wireCopy(built))).toEqual(built);
   });
@@ -201,6 +207,7 @@ describe("native capability field (Slice 4)", () => {
           "no native catalog snapshot is available",
         playFeaturesAvailable: true,
         playlistFeaturesAvailable: true,
+        stateFilterFeaturesAvailable: true,
       }
     );
     expect(normalizeCatalogIndexResponse(wireCopy(built))).toEqual(built);
@@ -216,6 +223,7 @@ describe("native capability field (Slice 4)", () => {
         playFeaturesUnavailableReason:
           "the Core does not report play-statistics support; most played is unavailable",
         playlistFeaturesAvailable: true,
+        stateFilterFeaturesAvailable: true,
       }
     );
     expect(normalizeCatalogIndexResponse(wireCopy(built))).toEqual(built);
@@ -231,6 +239,23 @@ describe("native capability field (Slice 4)", () => {
         playlistFeaturesAvailable: false,
         playlistFeaturesUnavailableReason:
           "the native playlist list has not been pulled yet; it arrives with the next catalog refresh",
+        stateFilterFeaturesAvailable: true,
+      }
+    );
+    expect(normalizeCatalogIndexResponse(wireCopy(built))).toEqual(built);
+  });
+
+  it("carries the honest reason exactly when the state filters are unavailable", () => {
+    const built = buildCatalogIndexResponse(
+      status(),
+      { artists: [artist()], albums: [album()] },
+      {
+        dateFeaturesAvailable: true,
+        playFeaturesAvailable: true,
+        playlistFeaturesAvailable: true,
+        stateFilterFeaturesAvailable: false,
+        stateFilterFeaturesUnavailableReason:
+          "the library state was pulled for a different listening profile; it is refreshed for the current profile on the next pull",
       }
     );
     expect(normalizeCatalogIndexResponse(wireCopy(built))).toEqual(built);
@@ -331,6 +356,54 @@ describe("native date/play fields (catalog v3)", () => {
     }
     // The wire round-trip preserves the fields and the omission.
     expect(normalizeCatalogIndexResponse(wireCopy(built))).toEqual(built);
+  });
+
+  // Slice 2: the per-profile album state fields. `false` is a real answer and
+  // must survive the round trip as one; absence is what means "not known".
+  it("serves a false state flag as a value, and omits it when the album has none", () => {
+    const flagged = album(ALBUM_ID, {
+      contentSource: 1,
+      isFavorite: true,
+      isListenLater: false,
+      isBanned: false,
+    });
+    const unknown = album(ALBUM_ID_2, {
+      exactTitle: "Mystery",
+      normalizedTitle: "mystery",
+    });
+    const built = buildCatalogIndexResponse(status(), {
+      artists: [artist()],
+      albums: [flagged, unknown],
+    });
+    expect(built.albums[0]).toMatchObject({
+      contentSource: 1,
+      isFavorite: true,
+      isListenLater: false,
+      isBanned: false,
+    });
+    for (const key of ["contentSource", "isFavorite", "isListenLater", "isBanned"]) {
+      expect(built.albums[1]).not.toHaveProperty(key);
+    }
+    const roundTripped = normalizeCatalogIndexResponse(wireCopy(built));
+    expect(roundTripped).toEqual(built);
+    // Explicitly: the falses came back as falses, not as absences.
+    expect(roundTripped?.albums[0]).toHaveProperty("isListenLater", false);
+    expect(roundTripped?.albums[1]).not.toHaveProperty("isListenLater");
+  });
+
+  it.each<[string, (album: any) => void]>([
+    ["a non-boolean state flag", (a) => (a.isFavorite = "yes")],
+    ["a null state flag", (a) => (a.isBanned = null)],
+    ["a non-integer audio origin", (a) => (a.contentSource = 1.5)],
+    ["a negative audio origin", (a) => (a.contentSource = -1)],
+  ])("rejects %s", (_name, mutate) => {
+    const built = buildCatalogIndexResponse(status(), {
+      artists: [artist()],
+      albums: [album(ALBUM_ID, { contentSource: 1, isFavorite: true, isBanned: false })],
+    });
+    const damaged = wireCopy(built) as any;
+    mutate(damaged.albums[0]);
+    expect(normalizeCatalogIndexResponse(damaged)).toBeNull();
   });
 
   it("never serves the native identity binding on the index", () => {

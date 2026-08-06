@@ -129,12 +129,20 @@ describe("CatalogLifecycle", () => {
       invalidateCore: jest.fn(),
       shutdown: jest.fn(() => order.push("timeline")),
     };
+    // The extended library features refresh their own snapshot on a schedule.
+    // Shutting the catalog down has to stop it, or a timer keeps pulling
+    // against a Core nothing is listening to.
+    const scheduledRefresh = {
+      stopScheduledRefresh: jest.fn(() => order.push("scheduled-refresh")),
+    };
     const lifecycle = new CatalogLifecycle(
       service,
       coordinator,
       logger,
       albumActions,
-      timelineBrowse
+      timelineBrowse,
+      undefined,
+      scheduledRefresh
     );
 
     lifecycle.corePaired("core-a");
@@ -146,8 +154,46 @@ describe("CatalogLifecycle", () => {
     expect(coordinator.shutdown).toHaveBeenCalledTimes(1);
     expect(albumActions.shutdown).toHaveBeenCalledTimes(1);
     expect(timelineBrowse.shutdown).toHaveBeenCalledTimes(1);
-    expect(order).toEqual(["timeline", "actions", "coordinator"]);
+    expect(scheduledRefresh.stopScheduledRefresh).toHaveBeenCalledTimes(1);
+    // Stopping what would START new catalog work comes before tearing down the
+    // services that work runs through.
+    expect(order).toEqual([
+      "scheduled-refresh",
+      "timeline",
+      "actions",
+      "coordinator",
+    ]);
     expect(service.start).toHaveBeenCalledTimes(1);
     expect(service.markCoreDisconnected).not.toHaveBeenCalled();
+  });
+
+  it("still shuts the rest down when stopping the scheduled refresh throws", () => {
+    const service = {
+      start: jest.fn().mockResolvedValue(undefined),
+      markCoreDisconnected: jest.fn(),
+    };
+    const coordinator = {
+      invalidateCore: jest.fn().mockResolvedValue(undefined),
+      shutdown: jest.fn(),
+    };
+    const scheduledRefresh = {
+      stopScheduledRefresh: jest.fn(() => {
+        throw new Error("the feature layer refused to stop its schedule");
+      }),
+    };
+    const lifecycle = new CatalogLifecycle(
+      service,
+      coordinator,
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      scheduledRefresh
+    );
+
+    lifecycle.shutdown();
+
+    expect(coordinator.shutdown).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalled();
   });
 });

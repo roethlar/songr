@@ -53,8 +53,12 @@ const parsePort = (value: string | undefined): number => {
 
   const parsed = Number(value);
 
-  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
-    throw new ConfigError("PORT must be an integer between 1 and 65535");
+  // 0 is legal and means "let the OS pick an ephemeral port". The desktop
+  // shell forks the engine that way and learns the real port from the
+  // `listening` IPC handshake (see server/listeningHandshake.ts). The
+  // appliance never sets PORT=0, so its 3333 default is untouched.
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+    throw new ConfigError("PORT must be an integer between 0 and 65535");
   }
 
   return parsed;
@@ -76,16 +80,54 @@ const parseLogLevel = (value: string | undefined): LogLevel => {
   return level;
 };
 
-const parseTokenPath = (value: string | undefined): string => {
-  const rawPath = coerceString(value) ?? "./config/roon-token.json";
+/**
+ * Base directories for everything the controller writes. `CONFIG_DIR` holds
+ * pairing state, `DATA_DIR` holds caches and persisted user data. They exist
+ * so a host process (the desktop shell) can relocate the whole footprint with
+ * two variables instead of five. The per-file variables below still win when
+ * set, and with both unset every resolved path is identical to the historical
+ * `./config` / `./data` layout the appliance install uses.
+ */
+const DEFAULT_CONFIG_DIR = "./config";
+const DEFAULT_DATA_DIR = "./data";
+
+const parseBaseDir = (
+  value: string | undefined,
+  fallback: string,
+  name: string
+): string => {
+  const rawPath = coerceString(value) ?? fallback;
+  if (!rawPath) {
+    throw new ConfigError(`${name} cannot be empty`);
+  }
+  return path.resolve(rawPath);
+};
+
+/**
+ * The one canonical resolution of `DATA_DIR`. Layers that parse their own
+ * configuration (and so cannot take the resolved value from `AppConfig`)
+ * call this instead of re-deriving the default, keeping "DATA_DIR relocates
+ * the whole footprint" true for every write location.
+ */
+export const resolveDataDir = (): string =>
+  parseBaseDir(process.env.DATA_DIR, DEFAULT_DATA_DIR, "DATA_DIR");
+
+const parseTokenPath = (
+  value: string | undefined,
+  configDir: string
+): string => {
+  const rawPath = coerceString(value) ?? path.join(configDir, "roon-token.json");
   if (!rawPath) {
     throw new ConfigError("ROON_TOKEN_PATH cannot be empty");
   }
   return path.resolve(rawPath);
 };
 
-const parseImageCachePath = (value: string | undefined): string => {
-  const rawPath = coerceString(value) ?? "./data/image-cache";
+const parseImageCachePath = (
+  value: string | undefined,
+  dataDir: string
+): string => {
+  const rawPath = coerceString(value) ?? path.join(dataDir, "image-cache");
   return path.resolve(rawPath);
 };
 
@@ -101,18 +143,28 @@ const parseImageCacheMaxBytes = (value: string | undefined): number => {
   return Math.floor(parsed);
 };
 
-const parseRecentlyPlayedPath = (value: string | undefined): string => {
-  const rawPath = coerceString(value) ?? "./data/recently-played.json";
+const parseRecentlyPlayedPath = (
+  value: string | undefined,
+  dataDir: string
+): string => {
+  const rawPath =
+    coerceString(value) ?? path.join(dataDir, "recently-played.json");
   return path.resolve(rawPath);
 };
 
-const parseFavoritesPath = (value: string | undefined): string => {
-  const rawPath = coerceString(value) ?? "./data/favorites.json";
+const parseFavoritesPath = (
+  value: string | undefined,
+  dataDir: string
+): string => {
+  const rawPath = coerceString(value) ?? path.join(dataDir, "favorites.json");
   return path.resolve(rawPath);
 };
 
-const parseCatalogPath = (value: string | undefined): string => {
-  const rawPath = coerceString(value) ?? "./data/catalog";
+const parseCatalogPath = (
+  value: string | undefined,
+  dataDir: string
+): string => {
+  const rawPath = coerceString(value) ?? path.join(dataDir, "catalog");
   return path.resolve(rawPath);
 };
 
@@ -134,17 +186,30 @@ export const loadConfig = (): AppConfig => {
   const host = parseHost(process.env.HOST);
   const port = parsePort(process.env.PORT);
   const logLevel = parseLogLevel(process.env.LOG_LEVEL);
-  const roonTokenPath = parseTokenPath(process.env.ROON_TOKEN_PATH);
-  const imageCachePath = parseImageCachePath(process.env.IMAGE_CACHE_PATH);
+  const configDir = parseBaseDir(
+    process.env.CONFIG_DIR,
+    DEFAULT_CONFIG_DIR,
+    "CONFIG_DIR"
+  );
+  const dataDir = resolveDataDir();
+  const roonTokenPath = parseTokenPath(process.env.ROON_TOKEN_PATH, configDir);
+  const imageCachePath = parseImageCachePath(
+    process.env.IMAGE_CACHE_PATH,
+    dataDir
+  );
   const imageCacheMaxBytes = parseImageCacheMaxBytes(process.env.IMAGE_CACHE_MAX_BYTES);
   const recentlyPlayedPath = parseRecentlyPlayedPath(
-    process.env.RECENTLY_PLAYED_PATH
+    process.env.RECENTLY_PLAYED_PATH,
+    dataDir
   );
   const recentlyPlayedCap = parseRecentlyPlayedCap(
     process.env.RECENTLY_PLAYED_CAP
   );
-  const favoritesPath = parseFavoritesPath(process.env.FAVORITES_PATH);
-  const catalogPath = parseCatalogPath(process.env.TIMELINE_CATALOG_PATH);
+  const favoritesPath = parseFavoritesPath(process.env.FAVORITES_PATH, dataDir);
+  const catalogPath = parseCatalogPath(
+    process.env.TIMELINE_CATALOG_PATH,
+    dataDir
+  );
   return {
     host,
     port,

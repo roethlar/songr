@@ -1,0 +1,32 @@
+{
+  "name": "roon-controller-desktop",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Electron shell that runs the Roon controller engine as a desktop app",
+  "main": "dist/main.js",
+  "author": "roethlar",
+  "homepage": "https://github.com/roethlar/songr",
+  "desktopName": "songr.desktop",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "start": "npm run build && electron .",
+    "lint": "tsc --project tsconfig.json --noEmit",
+    "test": "jest",
+    "package": "npm run build && node scripts/package-app.mjs",
+    "package:stage": "npm run build && node scripts/package-app.mjs --stage-only"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^26.1.2",
+    "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
+    "jest": "^30.4.2",
+    "ts-jest": "^29.4.12",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.8.3"
+  }
+}
+

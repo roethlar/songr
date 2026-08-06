@@ -265,7 +265,9 @@ networking" feature is enabled; run natively there instead.
 
 ### "ConfigError: PORT must be an integer"
 
-**Fix**: Ensure PORT in .env is a valid number 1-65535
+**Fix**: Ensure PORT in .env is a valid number 0-65535 (0 means "let the OS
+pick a free ephemeral port" and is only useful when a parent process reads the
+chosen port back over IPC)
 
 ### "ConfigError: LOG_LEVEL must be one of..."
 

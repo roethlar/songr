@@ -225,7 +225,12 @@ describe('libraryIndexStore — catalog source', () => {
 			originalReleaseDate: { year: 1975, month: 6, day: 1 },
 			releaseDate: { year: 1976, month: 0, day: 0 }
 		};
-		index.native = { dateFeaturesAvailable: true, playFeaturesAvailable: true, playlistFeaturesAvailable: true };
+		index.native = {
+			dateFeaturesAvailable: true,
+			playFeaturesAvailable: true,
+			playlistFeaturesAvailable: true,
+			stateFilterFeaturesAvailable: true
+		};
 		fetchCatalogIndexMock.mockResolvedValue({ kind: 'index', index });
 
 		await loadLibraryIndex(fetchFn, { coreId: 'core-a', claim: TEST_CLAIM });
@@ -247,7 +252,12 @@ describe('libraryIndexStore — catalog source', () => {
 	it('carries native importDate onto entries (Slice 5)', async () => {
 		const index = smallIndex();
 		index.albums[0] = { ...index.albums[0], importDate: '2026-07-24T09:30:00.000Z' };
-		index.native = { dateFeaturesAvailable: true, playFeaturesAvailable: true, playlistFeaturesAvailable: true };
+		index.native = {
+			dateFeaturesAvailable: true,
+			playFeaturesAvailable: true,
+			playlistFeaturesAvailable: true,
+			stateFilterFeaturesAvailable: true
+		};
 		fetchCatalogIndexMock.mockResolvedValue({ kind: 'index', index });
 
 		await loadLibraryIndex(fetchFn, { coreId: 'core-a', claim: TEST_CLAIM });
@@ -268,7 +278,9 @@ describe('libraryIndexStore — catalog source', () => {
 			playFeaturesAvailable: false,
 			playFeaturesUnavailableReason: 'no native catalog snapshot is available',
 			playlistFeaturesAvailable: false,
-			playlistFeaturesUnavailableReason: 'no native catalog snapshot is available'
+			playlistFeaturesUnavailableReason: 'no native catalog snapshot is available',
+			stateFilterFeaturesAvailable: false,
+			stateFilterFeaturesUnavailableReason: 'no native catalog snapshot is available'
 		};
 		fetchCatalogIndexMock.mockResolvedValue({ kind: 'index', index });
 
@@ -288,7 +300,8 @@ describe('libraryIndexStore — catalog source', () => {
 			playFeaturesAvailable: false,
 			playFeaturesUnavailableReason:
 				'the Core does not report play-statistics support; most played is unavailable',
-			playlistFeaturesAvailable: true
+			playlistFeaturesAvailable: true,
+			stateFilterFeaturesAvailable: true
 		};
 		fetchCatalogIndexMock.mockResolvedValue({ kind: 'index', index });
 
@@ -308,7 +321,8 @@ describe('libraryIndexStore — catalog source', () => {
 			playFeaturesAvailable: true,
 			playlistFeaturesAvailable: false,
 			playlistFeaturesUnavailableReason:
-				'the native playlist list has not been pulled yet; it arrives with the next catalog refresh'
+				'the native playlist list has not been pulled yet; it arrives with the next catalog refresh',
+			stateFilterFeaturesAvailable: true
 		};
 		fetchCatalogIndexMock.mockResolvedValue({ kind: 'index', index });
 

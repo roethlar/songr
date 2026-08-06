@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import { Logger } from "pino";
 import { createHealthRouter } from "./routes/health";
 import { createCoreRouter } from "./routes/core";
+import { createOnboardingRouter } from "./routes/onboarding";
 import { createZonesRouter } from "./routes/zones";
 import { createTransportRouter } from "./routes/transport";
 import { createImageRouter } from "./routes/image";
@@ -126,6 +127,7 @@ export const createHttpApp = (
     )
   );
   app.use("/api/core", createCoreRouter(roonClient));
+  app.use("/api/onboarding", createOnboardingRouter(roonClient));
   app.use("/api/zones", createZonesRouter(transportService));
   app.use("/api/transport", createTransportRouter(transportService));
   app.use("/api/image", createImageRouter(imageService));

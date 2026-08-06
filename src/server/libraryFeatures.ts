@@ -129,6 +129,13 @@ export interface LibraryFeatureCapability {
   readonly playFeaturesUnavailableReason: string | null;
   readonly playlistFeaturesAvailable: boolean;
   readonly playlistFeaturesUnavailableReason: string | null;
+  /**
+   * Whether the per-profile album state fields the layer puts on the index
+   * (`isFavorite`, `isListenLater`, `isBanned`, `contentSource`) can be
+   * trusted for the listening profile configured right now.
+   */
+  readonly stateFilterFeaturesAvailable: boolean;
+  readonly stateFilterFeaturesUnavailableReason: string | null;
 }
 
 /**
@@ -379,6 +386,13 @@ export interface LibraryFeatureLayer {
   readonly catalog: LibraryFeatureCatalogPort;
   readonly songRelationships: SongRelationshipFeaturePort;
   readonly songSourceVerifier: PublicSongSourceVerifier;
+  /**
+   * Stops the refresh the layer runs on its own schedule, so nothing it armed
+   * outlives the process. Always present — a layer with nothing scheduled
+   * answers with a no-op — because the host calls it unconditionally while
+   * shutting down.
+   */
+  stopScheduledRefresh(): void;
   readonly mostPlayed?: MostPlayedFeaturePort;
   readonly playlistContents?: PlaylistContentsFeaturePort;
   readonly playlistWrites?: PlaylistWritesFeaturePort;
@@ -435,6 +449,8 @@ export function unavailableLibraryFeatureCapability(
     playFeaturesUnavailableReason: reason,
     playlistFeaturesAvailable: false,
     playlistFeaturesUnavailableReason: reason,
+    stateFilterFeaturesAvailable: false,
+    stateFilterFeaturesUnavailableReason: reason,
   };
 }
 
@@ -459,6 +475,7 @@ export function unavailableLibraryFeatureLayer(
     songSourceVerifier: {
       verify: () => Promise.resolve({ state: "unavailable" }),
     },
+    stopScheduledRefresh: () => undefined,
   };
 }
 
@@ -506,7 +523,8 @@ function isUsableLayer(layer: unknown): layer is LibraryFeatureLayer {
     typeof candidate.catalog?.getMostPlayedSnapshot === "function" &&
     typeof candidate.catalog?.getPlaylistSnapshot === "function" &&
     typeof candidate.songRelationships?.resolve === "function" &&
-    typeof candidate.songSourceVerifier?.verify === "function"
+    typeof candidate.songSourceVerifier?.verify === "function" &&
+    typeof candidate.stopScheduledRefresh === "function"
   );
 }
 
