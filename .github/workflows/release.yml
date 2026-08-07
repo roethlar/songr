@@ -85,9 +85,21 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          # A missing repo secret renders as an EMPTY-BUT-DEFINED env var, and
+          # electron-builder treats any defined CSC_LINK as a signing request
+          # ("empty password will be used for code signing", then failure —
+          # the first icon-release mac job died exactly there). Drop empties,
+          # and make the secretless path explicitly unsigned.
+          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "$(printenv "$v")" ]; then unset "$v"; fi
+          done
           EXTRA=""
-          if [ "${{ runner.os }}" = "macOS" ] && [ -n "$CSC_LINK" ]; then
-            EXTRA="--config.mac.notarize=true"
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            if [ -n "${CSC_LINK:-}" ]; then
+              EXTRA="--config.mac.notarize=true"
+            else
+              EXTRA="--config.mac.identity=null"
+            fi
           fi
           npm --prefix desktop run package -- ${{ matrix.target }} -- ${{ matrix.arches }} $EXTRA
 
