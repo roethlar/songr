@@ -85,15 +85,25 @@ describe('product name per tree (dt7-1)', () => {
   });
 });
 
-describe('packaging script platform mapping (dt7-2)', () => {
-  it('never spawns bare npm, which execFileSync cannot run on Windows', () => {
+describe('packaging script spawning (dt7-2, revised)', () => {
+  it('never spawns a .cmd shim, which Node refuses without a shell', () => {
+    // The v1.1.0 CI run proved the first fix wrong on a real Windows host:
+    // execFileSync of npm.cmd throws EINVAL (CVE-2024-27980 hardening). npm
+    // runs via its own JS entry from npm_execpath, and electron-builder via
+    // its cli.js — both under process.execPath, no shim on any platform.
     const fs = require('fs') as typeof import('fs');
     const path = require('path') as typeof import('path');
     const script = fs.readFileSync(
       path.join(__dirname, '..', '..', 'scripts', 'package-app.mjs'),
       'utf8',
     );
-    expect(script).not.toContain("run('npm'");
-    expect(script).toContain("process.platform === 'win32' ? 'npm.cmd' : 'npm'");
+    // No quoted .cmd literal may appear in code (prose may discuss the shim).
+    expect(script).not.toMatch(/'[^']*\.cmd'/);
+    // Exactly ONE bare 'npm' literal is allowed: NPM_ARGV's POSIX fallback.
+    // The first guard checked only for single-line run('npm' and a
+    // multi-line call site sailed past it into the v1.1.0 CI run.
+    expect(script.match(/'npm'/g) ?? []).toHaveLength(1);
+    expect(script).toContain('npm_execpath');
+    expect(script).toContain("'electron-builder', 'cli.js'");
   });
 });

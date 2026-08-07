@@ -108,15 +108,28 @@ function fail(message) {
 }
 
 /**
- * npm is a `.cmd` shim on Windows, which `execFileSync` cannot execute bare —
- * the same platform mapping the electron-builder invocation already does; a
- * Windows host died at the very first build step without it (dt7-2).
+ * How npm is invoked, without ever spawning a `.cmd` shim (dt7-2, revised).
+ *
+ * The first fix mapped `npm` to `npm.cmd` on Windows, and the v1.1.0 CI run
+ * proved it wrong in a way only a real Windows host could: Node's batch-file
+ * hardening (CVE-2024-27980) makes `execFileSync` of any `.cmd`/`.bat` throw
+ * EINVAL unless a shell is requested, and a shell brings its own quoting
+ * hazards. So no shim is spawned at all: under `npm run` (every documented
+ * entry point) npm publishes its own JS entry in `npm_execpath`, and that
+ * runs under `process.execPath` on every platform. The bare-`node` fallback
+ * keeps direct invocations working on POSIX and asks Windows callers to use
+ * `npm run`.
  */
-const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const NPM_ARGV = process.env.npm_execpath
+  ? [process.execPath, process.env.npm_execpath]
+  : ['npm'];
 
+/** `command` is an argv prefix: one executable, or [executable, script]. */
 function run(command, args, cwd, extraEnv = {}) {
-  log(`${command} ${args.join(' ')}   (${path.relative(REPO_ROOT, cwd) || '.'})`);
-  execFileSync(command, args, {
+  const argv = Array.isArray(command) ? command : [command];
+  const [file, ...prefix] = argv;
+  log(`${[...argv, ...args].join(' ')}   (${path.relative(REPO_ROOT, cwd) || '.'})`);
+  execFileSync(file, [...prefix, ...args], {
     cwd,
     stdio: 'inherit',
     env: { ...process.env, ...extraEnv },
@@ -177,9 +190,9 @@ function buildEverything(options) {
     log('SKIPPING builds (--skip-builds); packaging whatever is already built');
     return;
   }
-  run(NPM, ['run', 'build'], REPO_ROOT);
-  run(NPM, ['--prefix', 'ui', 'run', 'build'], REPO_ROOT);
-  run(NPM, ['run', 'build'], DESKTOP_DIR);
+  run(NPM_ARGV, ['run', 'build'], REPO_ROOT);
+  run(NPM_ARGV, ['--prefix', 'ui', 'run', 'build'], REPO_ROOT);
+  run(NPM_ARGV, ['run', 'build'], DESKTOP_DIR);
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +276,7 @@ function stageEngine() {
   // arbitrary install hooks inside a release payload is not a thing to do by
   // default.
   run(
-    'npm',
+    NPM_ARGV,
     ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
     STAGING_DIR,
   );
@@ -366,12 +379,10 @@ function packageApp(options) {
   const productName = productNameForTree(privateTree);
   log(`${privateTree ? 'private' : 'public'} tree: building ${productName} as ${appId}`);
 
-  const builder = path.join(
-    DESKTOP_DIR,
-    'node_modules',
-    '.bin',
-    process.platform === 'win32' ? 'electron-builder.cmd' : 'electron-builder',
-  );
+  // The package's own JS entry, run under process.execPath — never the
+  // node_modules/.bin shim, whose Windows form is a `.cmd` execFileSync
+  // refuses to spawn (dt7-2, revised; same reasoning as NPM_ARGV).
+  const builder = path.join(DESKTOP_DIR, 'node_modules', 'electron-builder', 'cli.js');
   if (!fs.existsSync(builder)) {
     fail('electron-builder is not installed. Run `npm --prefix desktop install` first.');
   }
@@ -387,7 +398,7 @@ function packageApp(options) {
     ...(options.dirOnly ? ['--dir'] : []),
     ...options.passthrough,
   ];
-  run(builder, args, DESKTOP_DIR, {
+  run([process.execPath, builder], args, DESKTOP_DIR, {
     // Belt and braces with `mac.identity: null`: this is what stops
     // electron-builder from finding a signing identity in the local keychain
     // and producing an artifact nobody else can reproduce.
@@ -423,4 +434,5 @@ function main() {
 }
 
 main();
+
 
