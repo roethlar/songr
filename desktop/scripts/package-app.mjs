@@ -405,8 +405,12 @@ function packageApp(options) {
   run([process.execPath, builder], args, DESKTOP_DIR, {
     // Belt and braces with `mac.identity: null`: this is what stops
     // electron-builder from finding a signing identity in the local keychain
-    // and producing an artifact nobody else can reproduce.
-    CSC_IDENTITY_AUTO_DISCOVERY: 'false',
+    // and producing an artifact nobody else can reproduce. An explicit
+    // CSC_LINK is the opposite situation — the operator handed us the cert —
+    // and the guard must stand down: electron-builder treats a false
+    // auto-discovery as "skip macOS signing" even when CSC_LINK is set
+    // (the first secrets-present release run shipped unsigned exactly so).
+    ...(process.env.CSC_LINK ? {} : { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }),
   });
 }
 
