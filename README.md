@@ -108,8 +108,8 @@ the compiled server with its dependencies, one tarball for any platform with
 [Node.js](https://nodejs.org) 22 or newer:
 
 ```bash
-tar xzf songr-server-1.1.0.tar.gz
-cd songr-server-1.1.0
+tar xzf songr-server-1.1.1.tar.gz
+cd songr-server-1.1.1
 node dist/index.js
 ```
 
@@ -178,7 +178,7 @@ to somewhere outside those directories, mount that location separately.
 
 ## Pairing
 
-On first run, open Roon → Settings → Extensions and enable **Songr**.
+On first run, open Roon → Settings → Extensions and enable **Songr (your machine's name)** — each Songr instance registers under the name of the machine it runs on, so several installs stay tellable-apart.
 
 Roon's pairing state — the paired core id plus its per-core token map — is
 written to `ROON_TOKEN_PATH` with file mode `0o600`, under a directory created
@@ -293,3 +293,5 @@ Songr is free and open source. If it is useful to you, you can support it on
 Songr is an independent project and is not affiliated with, endorsed by, or
 sponsored by Roon Labs LLC. "Roon" is a trademark of Roon Labs LLC, used here
 only to describe what this software interoperates with.
+
+

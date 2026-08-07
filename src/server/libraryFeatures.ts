@@ -455,6 +455,25 @@ export function unavailableLibraryFeatureCapability(
 }
 
 /**
+ * Every stub layer ever produced, so hosts can ask whether the layer they
+ * hold is a real implementation or the honest absence. A WeakSet rather
+ * than a flag on the layer: the layer interface stays exactly what the
+ * implementation module implements, and nothing the stub carries can be
+ * mistaken for (or drift from) implementation surface.
+ */
+const unavailableLayers = new WeakSet<LibraryFeatureLayer>();
+
+/**
+ * True when `layer` is a loaded implementation rather than the absence stub.
+ * The public build needs this once: an installed layer owns catalog refresh
+ * scheduling, and a build without one must trigger its own first scan or a
+ * fresh install never indexes (public issue #1).
+ */
+export function isFeatureLayerInstalled(layer: LibraryFeatureLayer): boolean {
+  return !unavailableLayers.has(layer);
+}
+
+/**
  * The layer served when there is no implementation to load. It answers, it
  * never throws at wiring time, and every answer carries `reason`.
  */
@@ -462,7 +481,7 @@ export function unavailableLibraryFeatureLayer(
   reason: string
 ): LibraryFeatureLayer {
   const capability = unavailableLibraryFeatureCapability(reason);
-  return {
+  const layer: LibraryFeatureLayer = {
     catalog: {
       requestRefresh: () => undefined,
       getCapability: () => Promise.resolve(capability),
@@ -477,6 +496,8 @@ export function unavailableLibraryFeatureLayer(
     },
     stopScheduledRefresh: () => undefined,
   };
+  unavailableLayers.add(layer);
+  return layer;
 }
 
 /**

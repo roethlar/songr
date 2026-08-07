@@ -78,8 +78,11 @@ describe('OnboardingFlow — when it appears', () => {
 		expect(
 			screen.getByRole('heading', { name: 'Connect to your Roon Core' })
 		).toBeInTheDocument();
-		// The exact label the user has to find in Roon.
-		expect(screen.getByText('Roon Web Controller')).toBeInTheDocument();
+		// The exact label the user has to find in Roon: the server registers
+		// as "Songr (<host>)" so several instances paired to one Core stay
+		// tellable-apart (issue #1 follow-up — identical entries had the
+		// reporter and the owner enabling the wrong one).
+		expect(screen.getByText(`Songr (${LOCAL_HOST})`)).toBeInTheDocument();
 		expect(screen.getByTestId('onboarding-core-status')).toHaveTextContent(
 			/looking for your roon core/i
 		);

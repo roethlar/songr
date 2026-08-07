@@ -353,5 +353,6 @@ echo "  Logs       : journalctl -u ${SERVICE_NAME} -f"
 echo "  Stop       : systemctl stop ${SERVICE_NAME}"
 echo "  Uninstall  : systemctl disable --now ${SERVICE_NAME} && rm -rf ${INSTALL_DIR}"
 echo
-echo "  First run: open Roon → Settings → Extensions → enable 'Roon Web Controller'"
+echo "  First run: open Roon → Settings → Extensions → enable 'Songr (this machine''s name)'"
 echo
+

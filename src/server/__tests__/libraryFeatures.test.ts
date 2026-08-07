@@ -15,6 +15,7 @@ import type { Logger } from "pino";
 import type { CatalogStatus } from "../../shared/timelineCatalogContracts";
 import { createErrorHandler } from "../http/middleware/errorHandler";
 import {
+  isFeatureLayerInstalled,
   LIBRARY_FEATURES_ABSENT_REASON,
   LIBRARY_FEATURES_UNUSABLE_REASON,
   LibraryFeatureError,
@@ -22,6 +23,7 @@ import {
   loadLibraryFeatureLayer,
   unavailableLibraryFeatureLayer,
   type LibraryFeatureHost,
+  type LibraryFeatureLayer,
 } from "../libraryFeatures";
 import {
   createCatalogRouter,
@@ -168,6 +170,41 @@ async function serveWithoutFeatures(): Promise<{
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
+
+describe("isFeatureLayerInstalled", () => {
+  it("calls every absence stub uninstalled, whatever its reason", () => {
+    // This is the discriminator the initial-scan trigger rides (public
+    // issue #1): a build whose layer is a stub must fire its own first
+    // scan, and both stub flavors mean "nothing owns refresh".
+    expect(
+      isFeatureLayerInstalled(
+        unavailableLibraryFeatureLayer(LIBRARY_FEATURES_ABSENT_REASON)
+      )
+    ).toBe(false);
+    expect(
+      isFeatureLayerInstalled(
+        unavailableLibraryFeatureLayer(LIBRARY_FEATURES_UNUSABLE_REASON)
+      )
+    ).toBe(false);
+  });
+
+  it("calls any layer it did not manufacture installed", () => {
+    const real: LibraryFeatureLayer = {
+      catalog: {
+        requestRefresh: () => undefined,
+        getCapability: () => Promise.reject(new Error("unused")),
+        getMostPlayedSnapshot: () => Promise.resolve(null),
+        getPlaylistSnapshot: () => Promise.resolve(null),
+      },
+      songRelationships: { resolve: () => Promise.reject(new Error("unused")) },
+      songSourceVerifier: {
+        verify: () => Promise.resolve({ state: "unavailable" }),
+      },
+      stopScheduledRefresh: () => undefined,
+    };
+    expect(isFeatureLayerInstalled(real)).toBe(true);
+  });
+});
 
 describe("loading the extended library features", () => {
   afterEach(() => {

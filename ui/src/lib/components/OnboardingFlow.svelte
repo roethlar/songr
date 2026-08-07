@@ -93,7 +93,14 @@
 				<h1 id="onboarding-title">Connect to your Roon Core</h1>
 				<p class="lede">
 					Open Roon on any device and go to <strong>Settings → Extensions</strong>. Find
-					<strong>{ROON_EXTENSION_DISPLAY_NAME}</strong> in the list and choose
+					<!-- The server registers as "Songr (<host>)" so several instances
+					     paired to one Core stay tellable-apart; show the exact label
+					     when the hostname is known. -->
+					<strong
+						>{hostname
+							? `${ROON_EXTENSION_DISPLAY_NAME} (${hostname})`
+							: ROON_EXTENSION_DISPLAY_NAME}</strong
+					> in the list and choose
 					<strong>Enable</strong>.
 				</p>
 				<p class="status" role="status" data-testid="onboarding-core-status">

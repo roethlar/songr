@@ -422,7 +422,14 @@ describe('Layout — route and committed Library mode shell', () => {
 		expect(container.querySelector('[data-shell-presentation="unified"]')).not.toBeNull();
 		expect(container.querySelector('aside.sidebar')).toBeNull();
 		expect(container.querySelector('header.workspace-header')).toBeNull();
-		expect(container.querySelector('[aria-label="Open Controller settings"]')).toBeNull();
+		// The settings trigger stays reachable in unified too. The original
+		// reference frame asserted it absent here, which left settings, theme,
+		// and the view switcher unreachable from the default view — public
+		// issue #1's second finding. Reachability supersedes the glyph-free
+		// frame.
+		expect(
+			container.querySelector('[aria-label="Open Controller settings"]')
+		).not.toBeNull();
 		expect(transport).not.toBeNull();
 		expect(transport).toHaveClass('unified');
 		expect(transport.style.position).toBe('');

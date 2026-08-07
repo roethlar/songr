@@ -22,7 +22,7 @@ When you first start the Roon Controller, it will show status: `discovering`. Th
    - Go to **Extensions** section
 
 4. **Authorize the controller**:
-   - Look for "Roon Web Controller" in the list (installs paired
+   - Look for "Songr (your machine's name)" in the list (installs paired
      before mid-2026 may still show the older name "Custom Roon
      Controller")
    - Click **Enable** to authorize
@@ -59,7 +59,7 @@ When you first start the Roon Controller, it will show status: `discovering`. Th
 **Solutions**:
 1. Check Roon Core is still running
 2. Go to Roon → Settings → Extensions
-3. Re-enable "Roon Web Controller" if disabled
+3. Re-enable "Songr (your machine's name)" if disabled
 4. Check network connectivity
 
 ### "Controls not working / No zones shown"
@@ -354,3 +354,4 @@ curl http://localhost:3333/api/core
 4. **Timeline placement**: Manual album positions are visual, tab-local, and
    non-authoritative. They do not rewrite catalog chronology and are not durable
    across a page reload.
+

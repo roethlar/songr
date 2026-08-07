@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { EventEmitter } from "events";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { Logger } from "pino";
 import { ROON_EXTENSION_DISPLAY_NAME } from "../../shared/types";
@@ -71,14 +72,20 @@ export class RoonClient extends EventEmitter {
     this.migrateLegacyConfigJson();
 
     this.roon = new RoonApi({
-      extension_id: "com.roonlabs.webcontroller",
-      // Shared with the UI so the onboarding step can tell the user the
-      // exact label to look for in Roon Settings → Extensions.
-      display_name: ROON_EXTENSION_DISPLAY_NAME,
-      display_version: "1.1.0",
+      // The product's own vendor id. The historical
+      // "com.roonlabs.webcontroller" both squatted Roon Labs' namespace and
+      // collided across every install of this codebase's ancestors; Roon
+      // treats an id change as a new extension, so upgrading past this
+      // commit requires one re-enable in Roon Settings → Extensions.
+      extension_id: "app.songr.controller",
+      // Base name shared with the UI so the onboarding step can tell the
+      // user the exact label to look for in Roon Settings → Extensions; the
+      // host name disambiguates multiple instances paired to one Core.
+      display_name: `${ROON_EXTENSION_DISPLAY_NAME} (${os.hostname()})`,
+      display_version: "1.1.1",
       publisher: "roethlar",
       email: "mcoelho@gmail.com",
-      website: "https://github.com/roethlar/roon-controller",
+      website: "https://github.com/roethlar/songr",
       log_level: this.options.logger.level ?? "info",
       // node-roon-api persists pairing state via these two callbacks
       // (it reads `paired_core_id` + per-core `tokens` to resume
@@ -338,3 +345,4 @@ export class RoonClient extends EventEmitter {
     }
   }
 }
+

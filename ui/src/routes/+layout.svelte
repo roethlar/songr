@@ -1067,8 +1067,14 @@
 	{/if}
 </div>
 
+<!-- The trigger shows in EVERY presentation, unified included. Hiding it in
+     unified (the default view) left settings, theme, and the view switcher
+     unreachable for anyone who never left unified — public issue #1's second
+     finding, and it made the README's "switch any time" claim false. This
+     deliberately supersedes the reference-frame framing that kept the
+     unified top bar glyph-free. -->
 <AppSettingsMenu
-	showTrigger={shellContract.presentation !== 'unified'}
+	showTrigger={true}
 	availableViews={availableLibraryViews}
 	currentView={settingsCurrentLibraryView}
 	onLibraryViewChange={(view) => void requestSettingsLibraryView(view)}

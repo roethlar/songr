@@ -330,5 +330,6 @@ echo "  Logs       : tail -f ${LOG_DIR}/out.log"
 echo "  Stop       : sudo launchctl bootout system/${SERVICE_LABEL}"
 echo "  Uninstall  : sudo launchctl bootout system/${SERVICE_LABEL}; sudo rm -rf ${INSTALL_DIR} ${PLIST_PATH}"
 echo
-echo "  First run: open Roon > Settings > Extensions > enable 'Roon Web Controller'"
+echo "  First run: open Roon > Settings > Extensions > enable 'Songr (this machine''s name)'"
 echo
+

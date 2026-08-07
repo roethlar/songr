@@ -642,13 +642,14 @@ export interface CoreStatusResponse {
 }
 
 /**
- * The name this controller registers itself under with Roon, and therefore
- * the exact label the user looks for in Roon Settings → Extensions. Shared
- * so onboarding copy cannot drift from what `RoonClient` actually
- * registers — a wrong name here sends a first-run user hunting through a
- * list for something that is not in it.
+ * The product name Roon shows in Settings → Extensions. Each running
+ * instance appends its host machine's name — "Songr (living-room-pi)" —
+ * because several Songr instances (an appliance and a desktop app, say)
+ * may pair with one Core, and identical entries left users enabling the
+ * wrong one (public issue #1 follow-up: "I enabled the extension, but
+ * nothing").
  */
-export const ROON_EXTENSION_DISPLAY_NAME = 'Roon Web Controller';
+export const ROON_EXTENSION_DISPLAY_NAME = 'Songr';
 
 /**
  * First-run read model (`GET /api/onboarding`).

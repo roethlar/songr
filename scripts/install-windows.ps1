@@ -250,5 +250,6 @@ Write-Host "  Logs       : Get-Content $InstallDir\logs\out.log -Tail 50"
 Write-Host "  Stop       : nssm stop $ServiceName"
 Write-Host "  Uninstall  : nssm remove $ServiceName confirm; Remove-Item -Recurse $InstallDir"
 Write-Host ""
-Write-Host "  First run: open Roon > Settings > Extensions > enable 'Roon Web Controller'"
+Write-Host "  First run: open Roon > Settings > Extensions > enable 'Songr (this machine''s name)'"
 Write-Host ""
+

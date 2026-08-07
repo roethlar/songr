@@ -25,7 +25,9 @@ import { FileCatalogPersistence } from "../core/catalog/CatalogPersistence";
 import { CatalogService } from "../core/catalog/CatalogService";
 import { CatalogLifecycle } from "./CatalogLifecycle";
 import { attachListeningHandshake } from "./listeningHandshake";
+import { ensureInitialCatalogScan } from "./initialCatalogScan";
 import {
+  isFeatureLayerInstalled,
   loadLibraryFeatureLayer,
   type LibraryFeatureLayer,
 } from "./libraryFeatures";
@@ -256,6 +258,20 @@ export const startServer = (
         // inside the feature layer, failures land in the capability answer,
         // and it is a no-op when the layer is absent.
         libraryFeatures.catalog.requestRefresh(coreId);
+        // A build WITHOUT the layer has no refresh owner at all, and a
+        // fresh install would stay on "the catalog prepares" forever
+        // (public issue #1); this fires the first scan exactly then.
+        void ensureInitialCatalogScan(
+          {
+            featureLayerInstalled: isFeatureLayerInstalled(libraryFeatures),
+            start: (id) => catalogService.start(id),
+            currentCoreId: () => roonClient.getCoreInfo()?.id ?? null,
+            status: (id) => catalogService.getStatus(id),
+            scan: (id) => catalogService.scan(id),
+            logger,
+          },
+          coreId
+        );
       } else {
         logger.warn("Paired Core event omitted its Core identity");
       }
