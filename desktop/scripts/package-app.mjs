@@ -141,6 +141,7 @@ function parseArgs(argv) {
     stageOnly: false,
     skipBuilds: false,
     dirOnly: false,
+    serverTar: false,
     platforms: [],
     passthrough: [],
   };
@@ -158,6 +159,9 @@ function parseArgs(argv) {
         break;
       case '--dir':
         options.dirOnly = true;
+        break;
+      case '--server-tar':
+        options.serverTar = true;
         break;
       case '--mac':
       case '--linux':
@@ -420,11 +424,40 @@ function reportArtifacts() {
   }
 }
 
+/**
+ * The staged engine payload IS the server-only distribution: compiled
+ * backend, built UI, production dependencies — everything the appliance
+ * install builds from source, pre-built. Every dependency is pure JS, so one
+ * tarball serves any platform with Node installed. `--server-tar` wraps it
+ * as `<name>-server-<version>.tar.gz` beside the desktop artifacts.
+ */
+function tarServerPayload() {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(STAGING_DIR, ENGINE_LAYOUT.manifest), 'utf8'),
+  );
+  const rootName = `${manifest.name}-server-${manifest.version}`;
+  const tarName = `${rootName}.tar.gz`;
+  const renamed = path.join(STAGING_ROOT, rootName);
+  fs.mkdirSync(ARTIFACT_DIR, { recursive: true });
+  // Rename so the tarball unpacks to a versioned directory, then rename
+  // back so electron-builder still finds the payload where it expects it.
+  fs.renameSync(STAGING_DIR, renamed);
+  try {
+    run('tar', ['-czf', path.join(ARTIFACT_DIR, tarName), '-C', STAGING_ROOT, rootName], REPO_ROOT);
+  } finally {
+    fs.renameSync(renamed, STAGING_DIR);
+  }
+  log(`server payload wrapped as ${tarName}`);
+}
+
 function main() {
   const options = parseArgs(process.argv.slice(2));
   buildEverything(options);
   stageEngine();
   verifyStaging();
+  if (options.serverTar) {
+    tarServerPayload();
+  }
   if (options.stageOnly) {
     log('--stage-only: the payload is ready; electron-builder was not run');
     return;

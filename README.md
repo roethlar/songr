@@ -97,8 +97,34 @@ shape when several people or devices share one Songr.
 
 ## Install
 
-Each installer builds from source, deploys to a system directory, and registers
-a service that starts on boot. Run from the repository root.
+Two prebuilt options need no source checkout at all:
+
+**Prebuilt server.** Each release attaches `songr-server-<version>.tar.gz` —
+the compiled server with its dependencies, one tarball for any platform with
+[Node.js](https://nodejs.org) 22 or newer:
+
+```bash
+tar xzf songr-server-1.1.0.tar.gz
+cd songr-server-1.1.0
+node dist/index.js
+```
+
+Pairing state and caches land in `./config` and `./data` beside wherever you
+run it. Registering it as a service is up to you — or use the installers
+below, which do that from a source checkout.
+
+**Docker.** A prebuilt multi-arch image (amd64/arm64) is published with each
+release:
+
+```bash
+docker run -d --name songr -p 3333:3333 \
+  -v ./config:/app/config -v ./data:/app/data \
+  ghcr.io/roethlar/songr:latest
+```
+
+The source installers below build from a checkout, deploy to a system
+directory, and register a service that starts on boot. Run from the
+repository root.
 
 ### Linux
 
@@ -132,12 +158,15 @@ Requires [NSSM](https://nssm.cc/) (`winget install nssm` or
 Options: `-Port`, `-InstallDir` (default: `C:\Program Files\Songr`),
 `-Reinstall`, `-NoStart`
 
-### Docker
+### Docker (from source)
 
 ```bash
 docker compose build
 docker compose up -d
 ```
+
+Or skip the build and point the compose service at the published image,
+`ghcr.io/roethlar/songr:<version>`.
 
 The `./config/` and `./data/` volumes persist the pairing token, artwork cache,
 and Recently played history across restarts. If you override a persistence path
