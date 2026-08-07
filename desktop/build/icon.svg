@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Songr">
+  <title>Songr app icon</title>
+  <!-- The sol rune (s), the first rune of the Sǫngr wordmark, on the brand's
+       black-and-gold. The path is the wordmark's own geometry
+       (product/brand/songr-wordmark.svg), transformed rather than redrawn, so
+       the icon and the wordmark cannot drift apart. The tile is inset with
+       transparent corners so every platform's mask and dock treat it well;
+       the faint gold ring keeps the tile readable on dark docks. -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="#0a0a0a"/>
+  <rect x="76" y="76" width="872" height="872" rx="188" fill="none"
+        stroke="#e6c674" stroke-opacity="0.28" stroke-width="8"/>
+  <g transform="translate(389.6, 251.9) scale(5.1)"
+     fill="none" stroke="#e6c674" stroke-width="5"
+     stroke-linecap="butt" stroke-linejoin="miter">
+    <!-- s: sol, rising zigzag — verbatim from the wordmark -->
+    <path d="M12 2 L12 56 L36 34 L36 100" />
+  </g>
+</svg>

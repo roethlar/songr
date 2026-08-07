@@ -73,7 +73,23 @@ jobs:
           npm ci --prefix desktop
 
       - name: Build and package
-        run: npm --prefix desktop run package -- ${{ matrix.target }} -- ${{ matrix.arches }}
+        # macOS signing + notarization activate automatically when the repo
+        # carries the secrets; without them the build is unsigned, exactly as
+        # local builds are. MAC_CERT_P12 is a base64 Developer ID Application
+        # certificate export; APPLE_APP_SPECIFIC_PASSWORD comes from
+        # appleid.apple.com for the notarization submission.
+        env:
+          CSC_LINK: ${{ secrets.MAC_CERT_P12 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          EXTRA=""
+          if [ "${{ runner.os }}" = "macOS" ] && [ -n "$CSC_LINK" ]; then
+            EXTRA="--config.mac.notarize=true"
+          fi
+          npm --prefix desktop run package -- ${{ matrix.target }} -- ${{ matrix.arches }} $EXTRA
 
       - name: Attach artifacts to the release
         uses: softprops/action-gh-release@v2

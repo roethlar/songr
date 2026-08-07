@@ -57,10 +57,19 @@ mac:
   target:
     - dmg
   category: public.app-category.music
-  # Explicitly unsigned: without this, electron-builder discovers whatever
-  # identity happens to be in the local keychain, and the artifact stops being
-  # reproducible by anyone else.
-  identity: null
+  # A single 1024px PNG; electron-builder converts it to icns/ico/png sets
+  # per target. Rendered deterministically from build/icon.svg (the wordmark's
+  # own sol-rune geometry) by scripts/render-icons.mjs — never hand-exported.
+  icon: build/icon.png
+  # Signing is env-driven, never keychain-discovered. Local builds and CI
+  # without secrets stay unsigned (the package script sets
+  # CSC_IDENTITY_AUTO_DISCOVERY=false, so nothing is picked up from a local
+  # keychain and the artifact stays reproducible). When CI carries a
+  # Developer ID cert in CSC_LINK/CSC_KEY_PASSWORD it signs, and the
+  # workflow adds --config.mac.notarize=true alongside the Apple ID
+  # credentials. Hardened runtime is required for notarization and harmless
+  # without signing.
+  hardenedRuntime: true
 
 dmg:
   writeUpdateInfo: false
@@ -71,6 +80,7 @@ linux:
     - deb
     - rpm
   category: AudioVideo
+  icon: build/icon.png
   # The package name, the binary on `$PATH`, and (via syncDesktopName) the
   # `.desktop` file and WM_CLASS. Without it every Linux artifact would be named
   # after the npm workspace, `roon-controller-desktop`, and the window manager
@@ -103,6 +113,7 @@ rpm:
 win:
   target:
     - nsis
+  icon: build/icon.png
 
 nsis:
   # A per-user install with a visible directory choice, because the artifact is

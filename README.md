@@ -86,8 +86,12 @@ and Intel), or the Windows installer.
   download, all three platforms) — Songr is a controller, and Roon Bridge is
   what makes the machine an audio zone in Roon. The app's first-run guide
   walks through it, and you can skip it if you only control other zones.
-- The builds are unsigned. macOS: right-click the app and choose Open the
-  first time. Windows: SmartScreen → "More info" → "Run anyway".
+- The builds are currently unsigned, and recent macOS is strict about that:
+  if the app is blocked on first open, allow it under System Settings →
+  Privacy & Security → "Open Anyway"; if macOS calls the app "damaged"
+  (Apple Silicon does this to unsigned downloads), clear the quarantine flag
+  once with `xattr -dc /Applications/Songr.app`. Windows: SmartScreen →
+  "More info" → "Run anyway".
 - Advanced, off by default: from the tray's Advanced Settings the app can
   also serve browsers on your network (read [Security](#security) first), or
   connect to an existing Songr server instead of running its own.
