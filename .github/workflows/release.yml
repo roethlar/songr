@@ -170,6 +170,17 @@ jobs:
         # found" (CloudKit had no ticket for its hash at all, not merely an
         # unfetched one). Submitting the dmg itself, same account-based
         # notarytool auth electron-builder already used for the .app.
+        #
+        # electron-builder's dmg.sign defaults false (its own docs warn
+        # signing "will lead to unwanted errors in combination with
+        # notarization requirements"), which is fine for stapler validate,
+        # but spctl --type open --context context:primary-signature demands
+        # an actual primary signature on the file being assessed — the
+        # second signed run proved this too: staple succeeded, spctl still
+        # rejected with "no usable signature". ChickenScratch's tauri-built
+        # dmg passes the identical spctl check because tauri signs its dmg
+        # container; electron-builder does not, so this step signs the dmg
+        # itself before submitting it, going around that default.
         if: runner.os == 'macOS' && env.SIGNING_EXTRA == '--config.mac.notarize=true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -178,6 +189,9 @@ jobs:
         run: |
           dmg=$(find desktop/release/artifacts -maxdepth 1 -name '*.dmg' -print -quit)
           test -n "$dmg"
+          identity=$(security find-identity -v -p codesigning | grep -o '"Developer ID Application:[^"]*"' | head -1 | tr -d '"')
+          test -n "$identity"
+          codesign --sign "$identity" --timestamp "$dmg"
           xcrun notarytool submit "$dmg" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
