@@ -75,6 +75,42 @@ jobs:
           npm ci --prefix ui
           npm ci --prefix desktop
 
+      - name: Import Developer ID certificate
+        # electron-builder imports CSC_LINK into its OWN temporary keychain
+        # for the duration of its internal sign+notarize calls, then tears
+        # it down — the "Notarize and staple macOS DMG" step (which signs
+        # the dmg itself, separately) found no identity at all when it tried
+        # security find-identity afterward, on the second signed run. A
+        # persistent keychain, imported the same way ChickenScratch/blit/
+        # AMKB already do, keeps the identity available for the rest of
+        # this job regardless of what electron-builder does with its own.
+        if: runner.os == 'macOS'
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          # Same empty-but-defined-secret trap as the "Build and package"
+          # step below: a missing secret still reaches here as a defined,
+          # empty env var, so it is tested rather than assumed.
+          if [ -z "$MAC_CERT_P12" ]; then
+            echo "::notice title=Unsigned macOS release::MAC_CERT_P12 is empty; nothing to import"
+            exit 0
+          fi
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          keychain="$RUNNER_TEMP/songr-signing.keychain-db"
+          printf '%s' "$MAC_CERT_P12" | base64 --decode > "$certificate"
+          security create-keychain -p "$MAC_CERT_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$MAC_CERT_PASSWORD" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -s "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MAC_CERT_PASSWORD" "$keychain"
+          identity=$(security find-identity -v -p codesigning "$keychain" | grep -o '"Developer ID Application:[^"]*"' | head -1 | tr -d '"')
+          test -n "$identity"
+          echo "MAC_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          rm -f "$certificate"
+
       - name: Build and package
         # macOS signing + notarization activate automatically when the repo
         # carries the secrets; without them the build is unsigned, exactly as
@@ -189,9 +225,8 @@ jobs:
         run: |
           dmg=$(find desktop/release/artifacts -maxdepth 1 -name '*.dmg' -print -quit)
           test -n "$dmg"
-          identity=$(security find-identity -v -p codesigning | grep -o '"Developer ID Application:[^"]*"' | head -1 | tr -d '"')
-          test -n "$identity"
-          codesign --sign "$identity" --timestamp "$dmg"
+          test -n "$MAC_SIGNING_IDENTITY"
+          codesign --sign "$MAC_SIGNING_IDENTITY" --timestamp "$dmg"
           xcrun notarytool submit "$dmg" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
