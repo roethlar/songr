@@ -134,7 +134,7 @@ jobs:
             # discards it); electron-builder only consults it for its own
             # verifyUpdateCodeSignature auto-update check, which this
             # `--publish never` build never exercises.
-            EXTRA="$EXTRA --config.win.azureSignOptions.publisherName=Michael Coelho"
+            EXTRA="$EXTRA --config.win.azureSignOptions.publisherName=MichaelCoelho"
           fi
           npm --prefix desktop run package -- ${{ matrix.target }} -- ${{ matrix.arches }} $EXTRA
           echo "SIGNING_EXTRA=$EXTRA" >> "$GITHUB_ENV"
@@ -180,6 +180,13 @@ jobs:
           codesign --verify --deep --strict "$app"
           codesign -dv --verbose=4 "$app" 2>&1 | tee /tmp/codesign.txt
           grep -q 'Authority=Developer ID Application' /tmp/codesign.txt
+          # electron-builder notarizes and staples the .app (confirmed above)
+          # but not the dmg wrapping it — the first run's stapler validate on
+          # the dmg failed with "does not have a ticket stapled to it". The
+          # dmg itself was still submitted for notarization (electron-builder
+          # notarizes each artifact it builds), so a ticket exists to fetch;
+          # this staples it explicitly rather than assuming it already ran.
+          xcrun stapler staple "$dmg"
           xcrun stapler validate "$dmg"
           spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
 
