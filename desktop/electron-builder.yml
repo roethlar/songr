@@ -61,14 +61,13 @@ mac:
   # per target. Rendered deterministically from build/icon.svg (the wordmark's
   # own sol-rune geometry) by scripts/render-icons.mjs — never hand-exported.
   icon: build/icon.png
-  # Signing is env-driven, never keychain-discovered. Local builds and CI
-  # without secrets stay unsigned (the package script sets
-  # CSC_IDENTITY_AUTO_DISCOVERY=false, so nothing is picked up from a local
-  # keychain and the artifact stays reproducible). When CI carries a
-  # Developer ID cert in CSC_LINK/CSC_KEY_PASSWORD it signs, and the
-  # workflow adds --config.mac.notarize=true alongside the Apple ID
-  # credentials. Hardened runtime is required for notarization and harmless
-  # without signing.
+  # Signing follows electron-builder's defaults: a Developer ID identity in
+  # the local keychain signs every build (owner requirement, 2026-08-07 —
+  # local builds are signed every time), CI provides the cert via
+  # CSC_LINK/CSC_KEY_PASSWORD and adds --config.mac.notarize=true alongside
+  # the Apple ID credentials, and secretless CI passes
+  # --config.mac.identity=null to stay explicitly unsigned. Hardened runtime
+  # is required for notarization and harmless without signing.
   hardenedRuntime: true
 
 dmg:

@@ -82,7 +82,7 @@ export class RoonClient extends EventEmitter {
       // user the exact label to look for in Roon Settings → Extensions; the
       // host name disambiguates multiple instances paired to one Core.
       display_name: `${ROON_EXTENSION_DISPLAY_NAME} (${os.hostname()})`,
-      display_version: "1.1.2",
+      display_version: "1.1.3",
       publisher: "roethlar",
       email: "mcoelho@gmail.com",
       website: "https://github.com/roethlar/songr",

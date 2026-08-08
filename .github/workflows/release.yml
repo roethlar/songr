@@ -5,8 +5,11 @@
 # packaging script (desktop/scripts/package-app.mjs), which builds the server,
 # the web UI, and the shell, stages the engine payload, and invokes
 # electron-builder. Everything after `--` is handed to electron-builder, which
-# is how one runner produces both architectures. All artifacts are unsigned;
-# the README documents the first-launch steps each platform needs.
+# is how one runner produces both architectures. Signing is secrets-gated per
+# platform — mac via a Developer ID cert (CSC_LINK) + notarization, windows
+# via Azure Trusted Signing — and each falls back to an unsigned build when
+# its secrets are absent; the README documents the unsigned first-launch
+# steps each platform then needs.
 name: release-assets
 
 on:
@@ -84,13 +87,25 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Azure Trusted Signing for the windows exe. The three AZURE_*
+          # credentials are read by the TrustedSigning module's
+          # EnvironmentCredential; endpoint/account/profile ride secrets too
+          # so the public tree names no Azure resources.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
         run: |
           # A missing repo secret renders as an EMPTY-BUT-DEFINED env var, and
           # electron-builder treats any defined CSC_LINK as a signing request
           # ("empty password will be used for code signing", then failure —
           # the first icon-release mac job died exactly there). Drop empties,
           # and make the secretless path explicitly unsigned.
-          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID \
+                   AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET \
+                   AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERT_PROFILE; do
             if [ -z "$(printenv "$v")" ]; then unset "$v"; fi
           done
           EXTRA=""
@@ -101,7 +116,52 @@ jobs:
               EXTRA="--config.mac.identity=null"
             fi
           fi
+          # Presence of win.azureSignOptions is itself the signing switch in
+          # electron-builder, so the flags are only passed when the full
+          # secret set is present; without them the exe builds unsigned
+          # exactly as before.
+          if [ "${{ runner.os }}" = "Windows" ] && [ -n "${AZURE_CLIENT_SECRET:-}" ] \
+             && [ -n "${AZURE_SIGNING_ENDPOINT:-}" ] && [ -n "${AZURE_SIGNING_ACCOUNT:-}" ] \
+             && [ -n "${AZURE_CERT_PROFILE:-}" ]; then
+            EXTRA="--config.win.azureSignOptions.endpoint=$AZURE_SIGNING_ENDPOINT"
+            EXTRA="$EXTRA --config.win.azureSignOptions.codeSigningAccountName=$AZURE_SIGNING_ACCOUNT"
+            EXTRA="$EXTRA --config.win.azureSignOptions.certificateProfileName=$AZURE_CERT_PROFILE"
+          fi
           npm --prefix desktop run package -- ${{ matrix.target }} -- ${{ matrix.arches }} $EXTRA
+          echo "SIGNING_EXTRA=$EXTRA" >> "$GITHUB_ENV"
+
+      - name: Verify Windows signature
+        # A signing step can silently no-op and still exit 0 — electron-builder's
+        # CSC_IDENTITY_AUTO_DISCOVERY can grab an incidental identity and log
+        # "signing with signtool.exe" even when no azureSignOptions flags were
+        # ever passed (this happened for real: the v1.1.2 release shipped an
+        # exe electron-builder logged as signed, with no verification to catch
+        # that it was never actually Azure Trusted Signing). Only assert when
+        # this run's own gate actually injected the Azure flags.
+        if: runner.os == 'Windows' && contains(env.SIGNING_EXTRA, 'azureSignOptions')
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path desktop/release/artifacts -Filter '*.exe' -File | Select-Object -First 1
+          if (-not $exe) { throw "no .exe artifact found to verify" }
+          $signature = Get-AuthenticodeSignature -LiteralPath $exe.FullName
+          $signature | Format-List * | Out-String | Write-Output
+          if ($signature.Status -ne 'Valid') {
+            throw "$($exe.Name) signature status is $($signature.Status), expected Valid"
+          }
+
+      - name: Verify macOS signature and notarization
+        # Same rationale as the Windows check above: assert, don't trust a
+        # green build. Only when this run's own gate actually signed (mac.
+        # identity=null means an intentionally unsigned build).
+        if: runner.os == 'macOS' && !contains(env.SIGNING_EXTRA, 'identity=null')
+        run: |
+          dmg=$(find desktop/release/artifacts -maxdepth 1 -name '*.dmg' -print -quit)
+          test -n "$dmg"
+          codesign --verify --strict "$dmg"
+          codesign -dv --verbose=4 "$dmg" 2>&1 | tee /tmp/codesign.txt
+          grep -q 'Authority=Developer ID Application' /tmp/codesign.txt
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
 
       - name: Attach artifacts to the release
         uses: softprops/action-gh-release@v2
