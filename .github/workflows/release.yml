@@ -126,6 +126,15 @@ jobs:
             EXTRA="--config.win.azureSignOptions.endpoint=$AZURE_SIGNING_ENDPOINT"
             EXTRA="$EXTRA --config.win.azureSignOptions.codeSigningAccountName=$AZURE_SIGNING_ACCOUNT"
             EXTRA="$EXTRA --config.win.azureSignOptions.certificateProfileName=$AZURE_CERT_PROFILE"
+            # electron-builder's own JSON schema marks publisherName required
+            # for azureSignOptions ("Invalid configuration object... does not
+            # match the API schema" otherwise — the first signed run died
+            # exactly here). The actual Invoke-TrustedSigning call never reads
+            # it (app-builder-lib's windowsSignAzureManager.js destructures and
+            # discards it); electron-builder only consults it for its own
+            # verifyUpdateCodeSignature auto-update check, which this
+            # `--publish never` build never exercises.
+            EXTRA="$EXTRA --config.win.azureSignOptions.publisherName=Michael Coelho"
           fi
           npm --prefix desktop run package -- ${{ matrix.target }} -- ${{ matrix.arches }} $EXTRA
           echo "SIGNING_EXTRA=$EXTRA" >> "$GITHUB_ENV"
@@ -153,12 +162,23 @@ jobs:
         # Same rationale as the Windows check above: assert, don't trust a
         # green build. Only when this run's own gate actually signed (mac.
         # identity=null means an intentionally unsigned build).
+        #
+        # The DMG container itself is never code-signed here — electron-builder's
+        # own schema documents dmg.sign as "will lead to unwanted errors in
+        # combination with notarization requirements" and defaults it false, so
+        # the app inside carries the Developer ID signature and the dmg carries
+        # the stapled notarization ticket instead. codesign --verify therefore
+        # runs against the .app in the unpacked build dir, not the dmg; the dmg
+        # itself is checked via stapler + spctl (Gatekeeper's own acceptance
+        # test), matching ChickenScratch's proven macos-release.yml pattern.
         if: runner.os == 'macOS' && !contains(env.SIGNING_EXTRA, 'identity=null')
         run: |
           dmg=$(find desktop/release/artifacts -maxdepth 1 -name '*.dmg' -print -quit)
+          app=$(find desktop/release/artifacts -maxdepth 2 -name '*.app' -print -quit)
           test -n "$dmg"
-          codesign --verify --strict "$dmg"
-          codesign -dv --verbose=4 "$dmg" 2>&1 | tee /tmp/codesign.txt
+          test -n "$app"
+          codesign --verify --deep --strict "$app"
+          codesign -dv --verbose=4 "$app" 2>&1 | tee /tmp/codesign.txt
           grep -q 'Authority=Developer ID Application' /tmp/codesign.txt
           xcrun stapler validate "$dmg"
           spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
