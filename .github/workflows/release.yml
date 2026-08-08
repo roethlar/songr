@@ -116,28 +116,67 @@ jobs:
               EXTRA="--config.mac.identity=null"
             fi
           fi
-          # Presence of win.azureSignOptions is itself the signing switch in
-          # electron-builder, so the flags are only passed when the full
-          # secret set is present; without them the exe builds unsigned
-          # exactly as before.
-          if [ "${{ runner.os }}" = "Windows" ] && [ -n "${AZURE_CLIENT_SECRET:-}" ] \
-             && [ -n "${AZURE_SIGNING_ENDPOINT:-}" ] && [ -n "${AZURE_SIGNING_ACCOUNT:-}" ] \
-             && [ -n "${AZURE_CERT_PROFILE:-}" ]; then
-            EXTRA="--config.win.azureSignOptions.endpoint=$AZURE_SIGNING_ENDPOINT"
-            EXTRA="$EXTRA --config.win.azureSignOptions.codeSigningAccountName=$AZURE_SIGNING_ACCOUNT"
-            EXTRA="$EXTRA --config.win.azureSignOptions.certificateProfileName=$AZURE_CERT_PROFILE"
-            # electron-builder's own JSON schema marks publisherName required
-            # for azureSignOptions ("Invalid configuration object... does not
-            # match the API schema" otherwise — the first signed run died
-            # exactly here). The actual Invoke-TrustedSigning call never reads
-            # it (app-builder-lib's windowsSignAzureManager.js destructures and
-            # discards it); electron-builder only consults it for its own
-            # verifyUpdateCodeSignature auto-update check, which this
-            # `--publish never` build never exercises.
-            EXTRA="$EXTRA --config.win.azureSignOptions.publisherName=MichaelCoelho"
-          fi
+          # Windows signing does NOT go through electron-builder's own
+          # win.azureSignOptions: that path calls into Azure's dlib/signtool
+          # integration internally and failed with a generic SignerSign()
+          # E_FAIL (-2147467259) on the first signed run, past config
+          # validation. The manual Invoke-TrustedSigning module — the same
+          # call this owner's other four apps all sign with successfully
+          # today — is used instead, as a step after packaging. The Windows
+          # build itself always runs unsigned here.
           npm --prefix desktop run package -- ${{ matrix.target }} -- ${{ matrix.arches }} $EXTRA
           echo "SIGNING_EXTRA=$EXTRA" >> "$GITHUB_ENV"
+
+      - name: Sign Windows executable
+        if: runner.os == 'Windows' && secrets.AZURE_CLIENT_SECRET != '' && secrets.AZURE_SIGNING_ENDPOINT != '' && secrets.AZURE_SIGNING_ACCOUNT != '' && secrets.AZURE_CERT_PROFILE != ''
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+        run: |
+          try {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+          } catch {
+            Write-Host "NuGet provider not installed here: $($_.Exception.Message)"
+          }
+          Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -Repository PSGallery -Scope CurrentUser
+          $exe = Get-ChildItem -Path desktop/release/artifacts -Filter '*.exe' -File | Select-Object -First 1
+          if (-not $exe) { throw "no .exe artifact found to sign" }
+          Invoke-TrustedSigning `
+            -Endpoint $env:AZURE_SIGNING_ENDPOINT `
+            -CodeSigningAccountName $env:AZURE_SIGNING_ACCOUNT `
+            -CertificateProfileName $env:AZURE_CERT_PROFILE `
+            -TimestampRfc3161 'http://timestamp.acs.microsoft.com' `
+            -TimestampDigest SHA256 `
+            -FileDigest SHA256 `
+            -Files $exe.FullName
+
+      - name: Notarize and staple macOS DMG
+        # electron-builder's mac.notarize:true notarizes and staples the
+        # .app, but never submits the dmg wrapping it — the first signed run
+        # proved this: stapler staple on the dmg failed with "Record not
+        # found" (CloudKit had no ticket for its hash at all, not merely an
+        # unfetched one). Submitting the dmg itself, same account-based
+        # notarytool auth electron-builder already used for the .app.
+        if: runner.os == 'macOS' && env.SIGNING_EXTRA == '--config.mac.notarize=true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          dmg=$(find desktop/release/artifacts -maxdepth 1 -name '*.dmg' -print -quit)
+          test -n "$dmg"
+          xcrun notarytool submit "$dmg" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --wait 2>&1 | tee /tmp/notarytool.txt
+          grep -qE '^[[:space:]]*status: Accepted$' /tmp/notarytool.txt
+          xcrun stapler staple "$dmg"
 
       - name: Verify Windows signature
         # A signing step can silently no-op and still exit 0 — electron-builder's
@@ -147,7 +186,7 @@ jobs:
         # exe electron-builder logged as signed, with no verification to catch
         # that it was never actually Azure Trusted Signing). Only assert when
         # this run's own gate actually injected the Azure flags.
-        if: runner.os == 'Windows' && contains(env.SIGNING_EXTRA, 'azureSignOptions')
+        if: runner.os == 'Windows' && secrets.AZURE_CLIENT_SECRET != '' && secrets.AZURE_SIGNING_ENDPOINT != '' && secrets.AZURE_SIGNING_ACCOUNT != '' && secrets.AZURE_CERT_PROFILE != ''
         shell: pwsh
         run: |
           $exe = Get-ChildItem -Path desktop/release/artifacts -Filter '*.exe' -File | Select-Object -First 1
@@ -180,13 +219,10 @@ jobs:
           codesign --verify --deep --strict "$app"
           codesign -dv --verbose=4 "$app" 2>&1 | tee /tmp/codesign.txt
           grep -q 'Authority=Developer ID Application' /tmp/codesign.txt
-          # electron-builder notarizes and staples the .app (confirmed above)
-          # but not the dmg wrapping it — the first run's stapler validate on
-          # the dmg failed with "does not have a ticket stapled to it". The
-          # dmg itself was still submitted for notarization (electron-builder
-          # notarizes each artifact it builds), so a ticket exists to fetch;
-          # this staples it explicitly rather than assuming it already ran.
-          xcrun stapler staple "$dmg"
+          # The "Notarize and staple macOS DMG" step above already stapled
+          # the dmg's own ticket (electron-builder's notarize:true covers
+          # only the .app, confirmed by the first run's CloudKit "Record not
+          # found" when this step tried to staple without that prior step).
           xcrun stapler validate "$dmg"
           spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
 
