@@ -126,9 +126,17 @@ jobs:
           # build itself always runs unsigned here.
           npm --prefix desktop run package -- ${{ matrix.target }} -- ${{ matrix.arches }} $EXTRA
           echo "SIGNING_EXTRA=$EXTRA" >> "$GITHUB_ENV"
+          # `secrets` is not a recognized named-value inside a step `if:`
+          # expression (GitHub Actions rejected it outright, both signing
+          # steps below failing to parse at all) -- routing presence
+          # through GITHUB_ENV, same as SIGNING_EXTRA already does.
+          if [ -n "${AZURE_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SIGNING_ENDPOINT:-}" ] \
+             && [ -n "${AZURE_SIGNING_ACCOUNT:-}" ] && [ -n "${AZURE_CERT_PROFILE:-}" ]; then
+            echo "AZURE_SIGNING_ENABLED=true" >> "$GITHUB_ENV"
+          fi
 
       - name: Sign Windows executable
-        if: runner.os == 'Windows' && secrets.AZURE_CLIENT_SECRET != '' && secrets.AZURE_SIGNING_ENDPOINT != '' && secrets.AZURE_SIGNING_ACCOUNT != '' && secrets.AZURE_CERT_PROFILE != ''
+        if: runner.os == 'Windows' && env.AZURE_SIGNING_ENABLED == 'true'
         shell: pwsh
         env:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -186,7 +194,7 @@ jobs:
         # exe electron-builder logged as signed, with no verification to catch
         # that it was never actually Azure Trusted Signing). Only assert when
         # this run's own gate actually injected the Azure flags.
-        if: runner.os == 'Windows' && secrets.AZURE_CLIENT_SECRET != '' && secrets.AZURE_SIGNING_ENDPOINT != '' && secrets.AZURE_SIGNING_ACCOUNT != '' && secrets.AZURE_CERT_PROFILE != ''
+        if: runner.os == 'Windows' && env.AZURE_SIGNING_ENABLED == 'true'
         shell: pwsh
         run: |
           $exe = Get-ChildItem -Path desktop/release/artifacts -Filter '*.exe' -File | Select-Object -First 1
