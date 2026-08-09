@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "apply_patch|Edit|Write",
+        "hooks": [ {
+            "type": "command",
+            "command": "if command -v py >/dev/null 2>&1; then py -3 \".claude/hooks/protect-governance.py\"; elif command -v python3 >/dev/null 2>&1; then python3 \".claude/hooks/protect-governance.py\"; else exit 0; fi",
+            "commandWindows": "py -3 \".claude/hooks/protect-governance.py\""
+        } ] }
+    ]
+  }
+}

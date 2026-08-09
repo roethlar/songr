@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "compact",
+        "hooks": [ { "type": "command", "command": "echo 'Context was compacted or the session restarted. Before continuing, re-read AGENTS.md from disk, especially the Prime Invariants block. Treat AGENTS.md, not this message, as authoritative.'" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [ { "type": "command", "command": "if py -3 -c \"import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)\" >/dev/null 2>&1; then py -3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/protect-governance.py\"; elif python3 -c \"import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)\" >/dev/null 2>&1; then python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/protect-governance.py\"; elif python -c \"import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)\" >/dev/null 2>&1; then python \"${CLAUDE_PROJECT_DIR}/.claude/hooks/protect-governance.py\"; else exit 0; fi" } ] }
+    ]
+  }
+}
