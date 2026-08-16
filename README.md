@@ -107,8 +107,8 @@ the compiled server with its dependencies, one tarball for any platform with
 [Node.js](https://nodejs.org) 22 or newer:
 
 ```bash
-tar xzf songr-server-1.1.3.tar.gz
-cd songr-server-1.1.3
+tar xzf songr-server-1.1.4.tar.gz
+cd songr-server-1.1.4
 node dist/index.js
 ```
 
