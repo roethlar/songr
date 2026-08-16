@@ -94,6 +94,20 @@ export interface PlaylistsScopeViewProps<State extends PlaylistsScopeLoadState> 
 }
 
 /**
+ * A workspace another surface in this build provides, offered to the library
+ * as a plain navigation link. The library renders exactly what it is given —
+ * label, destination, optional accessible description — and knows nothing
+ * about what lives behind the link. A build with no workspaces provides an
+ * empty list and the library renders nothing: no placeholder, no disabled
+ * entry.
+ */
+export interface WorkspaceLink {
+	readonly label: string;
+	readonly href: string;
+	readonly description?: string;
+}
+
+/**
  * The slots the library surface resolves through the `@libraryFeatures` alias.
  *
  * A `null` view is the honest answer for a build that does not carry the scope:
@@ -121,4 +135,6 @@ export interface LibraryScopeSlots<
 	readonly openPlaylist: (fetchFn: typeof fetch, playlistId: string) => Promise<void>;
 	readonly closePlaylist: () => void;
 	readonly resetPlaylists: () => void;
+	/** Workspaces this build offers as links; empty when there are none. */
+	readonly workspaceLinks: readonly WorkspaceLink[];
 }

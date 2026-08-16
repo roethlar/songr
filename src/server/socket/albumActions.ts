@@ -155,7 +155,7 @@ export function registerAlbumActionSocket(
 
   socket.on("disconnect", () => {
     // The service owns the resolving/choosing cancellation claim and must run
-    // before the coordinator disconnects the owning Timeline generation.
+    // before the coordinator disconnects the owning browse-session generation.
     actionService.disconnectSocket(socket.id);
     const coreId = origin()?.coreId;
     if (coreId) coordinator.disconnectSocket(coreId, socket.id);

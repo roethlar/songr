@@ -1,68 +1,77 @@
 <script lang="ts">
+	import { tick } from 'svelte';
+	import { ROON_EXTENSION_DISPLAY_NAME } from '@shared/types';
 	import { focusTrap, isTopModalOwner } from '$lib/actions/focusTrap';
-	import type { LibraryView } from '$lib/stores/libraryViewStore';
-	import type { ThemeMode } from '$lib/stores/themeStore';
+	import { switchCore as switchCoreRequest } from '$lib/api/client';
+	import { coreStore } from '$lib/stores/coreStore';
+	import { onboardingStatusStore } from '$lib/stores/onboardingStore';
+	import { closeSettingsMenu, settingsMenuOpen } from '$lib/stores/settingsMenuStore';
+	import { setTheme, themeStore, type ThemeMode } from '$lib/stores/themeStore';
+	import {
+		requestUnifiedLibraryDensity,
+		UNIFIED_LIBRARY_DENSITY_OPTIONS,
+		unifiedLibraryPrefsStore,
+		type UnifiedLibraryDensity
+	} from '$lib/stores/unifiedLibraryPrefsStore';
 
 	let {
-		showTrigger = true,
-		availableViews,
-		currentView,
-		onLibraryViewChange,
-		theme,
-		onThemeChange,
-		connectionLabel,
-		connectionGood = false,
-		coreName = null,
-		coreVersion = null,
-		buildRevision
+		requestDensity = requestUnifiedLibraryDensity,
+		switchCoreClient = switchCoreRequest,
+		fetchFn = fetch
 	}: {
-		showTrigger?: boolean;
-		availableViews: readonly LibraryView[];
-		currentView: LibraryView | null;
-		onLibraryViewChange: (view: LibraryView) => void;
-		theme: ThemeMode;
-		onThemeChange: (theme: ThemeMode) => void;
-		connectionLabel: string;
-		connectionGood?: boolean;
-		coreName?: string | null;
-		coreVersion?: string | null;
-		buildRevision: string;
+		requestDensity?: typeof requestUnifiedLibraryDensity;
+		switchCoreClient?: typeof switchCoreRequest;
+		fetchFn?: typeof fetch;
 	} = $props();
 
-	let open = $state(false);
+	type CoreSwitchPhase = 'idle' | 'confirm' | 'requesting' | 'waiting' | 'error' | 'complete';
+
 	let dialogEl = $state<HTMLElement | null>(null);
+	let coreSwitchAction = $state<HTMLButtonElement | null>(null);
+	let coreSwitchCancel = $state<HTMLButtonElement | null>(null);
+	let coreSwitchPhase = $state<CoreSwitchPhase>('idle');
+	let coreSwitchError = $state<string | null>(null);
+	let coreSwitchSawDisconnect = $state(false);
+	const currentCoreLabel = $derived(
+		$coreStore.status === 'paired' && $coreStore.core
+			? $coreStore.core.displayName
+			: $coreStore.status === 'discovering'
+				? 'Searching for Core…'
+				: 'Disconnected'
+	);
+	const extensionLabel = $derived(
+		$onboardingStatusStore.hostname
+			? `${ROON_EXTENSION_DISPLAY_NAME} (${$onboardingStatusStore.hostname})`
+			: ROON_EXTENSION_DISPLAY_NAME
+	);
 
-	function libraryViewLabel(view: LibraryView | null): string {
-		if (view === null) return 'No active view';
-		if (view === 'timeline') return 'Timeline canvas';
-		if (view === 'unified') return 'Unified library';
-		return 'Classic';
-	}
+	$effect(() => {
+		if (coreSwitchPhase !== 'requesting' && coreSwitchPhase !== 'waiting') return;
+		if ($coreStore.status !== 'paired') {
+			coreSwitchSawDisconnect = true;
+			return;
+		}
+		if (coreSwitchSawDisconnect) {
+			coreSwitchPhase = 'complete';
+			coreSwitchError = null;
+		}
+	});
 
-	function openSettings(): void {
-		open = true;
+	/** Restore to the Unified bar trigger after every close path. */
+	function restoreTriggerFocus(): void {
+		document
+			.querySelector<HTMLElement>('[aria-label="Open Controller settings"]')
+			?.focus();
 	}
 
 	function closeSettings(): void {
-		open = false;
-	}
-
-	function requestLibraryView(event: MouseEvent, view: LibraryView): void {
-		// A radio's native click would otherwise display the requested target
-		// immediately. The host owns activation, so keep the checked state tied
-		// to currentView until the parent confirms the switch through props.
-		event.preventDefault();
-		const requestedRadio = event.currentTarget as HTMLInputElement;
-		const group = requestedRadio.closest('fieldset');
-		for (const radio of group?.querySelectorAll<HTMLInputElement>('input[type="radio"]') ?? []) {
-			radio.checked = radio.value === currentView;
-		}
-		if (view !== currentView) onLibraryViewChange(view);
+		closeSettingsMenu();
+		restoreTriggerFocus();
 	}
 
 	function handleWindowKeydown(event: KeyboardEvent): void {
 		if (
-			!open ||
+			!$settingsMenuOpen ||
 			event.key !== 'Escape' ||
 			(dialogEl !== null && !isTopModalOwner(dialogEl))
 		) {
@@ -75,27 +84,49 @@
 	function handleBackdropClick(event: MouseEvent): void {
 		if (event.target === event.currentTarget) closeSettings();
 	}
+
+	function selectDensity(value: UnifiedLibraryDensity): void {
+		requestDensity(value);
+	}
+
+	function selectTheme(value: ThemeMode): void {
+		setTheme(value);
+	}
+
+	function beginCoreSwitch(): void {
+		coreSwitchError = null;
+		coreSwitchPhase = 'confirm';
+		void tick().then(() => coreSwitchCancel?.focus());
+	}
+
+	function cancelCoreSwitch(): void {
+		coreSwitchError = null;
+		coreSwitchPhase = 'idle';
+		void tick().then(() => coreSwitchAction?.focus());
+	}
+
+	async function confirmCoreSwitch(): Promise<void> {
+		if (coreSwitchPhase === 'requesting') return;
+		coreSwitchError = null;
+		coreSwitchSawDisconnect = $coreStore.status !== 'paired';
+		coreSwitchPhase = 'requesting';
+		try {
+			await switchCoreClient(fetchFn);
+			if (coreSwitchPhase === 'requesting') coreSwitchPhase = 'waiting';
+		} catch (error) {
+			coreSwitchError =
+				error instanceof Error && error.message
+					? error.message
+					: 'Could not start Core discovery.';
+			coreSwitchPhase = 'error';
+		}
+	}
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} />
 
-<div class="settings-root floating">
-	{#if showTrigger}
-		<button
-			type="button"
-			class="settings-trigger"
-			aria-label="Open Controller settings"
-			aria-haspopup="dialog"
-			aria-expanded={open}
-			aria-controls="controller-settings-dialog"
-			title="Controller settings"
-			onclick={openSettings}
-		>
-			<span aria-hidden="true">⚙</span>
-		</button>
-	{/if}
-
-	{#if open}
+<!-- Dialog only. The Unified bar opens it through settingsMenuStore. -->
+{#if $settingsMenuOpen}
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div class="settings-backdrop" onclick={handleBackdropClick}>
@@ -107,7 +138,7 @@
 				aria-labelledby="controller-settings-title"
 				tabindex="-1"
 				bind:this={dialogEl}
-				use:focusTrap={{ initialFocus: '.settings-close' }}
+				use:focusTrap={{ initialFocus: '.settings-close', restoreFocus: false }}
 			>
 				<header class="settings-header">
 					<div>
@@ -122,81 +153,107 @@
 					>✕</button>
 				</header>
 
-				<div class="settings-body">
-					<section class="settings-section" aria-labelledby="library-view-heading">
-						<fieldset>
-							<legend id="library-view-heading">Library view</legend>
-							<p class="current-view" aria-live="polite">
-								Current view: <strong>{libraryViewLabel(currentView)}</strong>
-							</p>
-							<div class="choice-list">
-								{#each availableViews as view (view)}
-									<label class="choice-row">
-										<input
-											type="radio"
-											name="controller-library-view"
-											value={view}
-											checked={currentView === view}
-											onclick={(event) => requestLibraryView(event, view)}
-										/>
-										<span>
-											<strong>{libraryViewLabel(view)}</strong>
-											<small>
-												{view === 'timeline'
-													? 'Explore albums on a spatial chronology.'
-													: 'Browse the complete Roon library.'}
-											</small>
-										</span>
-									</label>
-								{/each}
-								{#if availableViews.length === 0}
-									<p class="empty-choice">No Library views are available.</p>
-								{/if}
-							</div>
-						</fieldset>
+				<div class="settings-content">
+					<section class="settings-section" aria-labelledby="settings-appearance-title">
+						<div>
+							<h3 id="settings-appearance-title">Appearance</h3>
+							<p>Choose the Library color theme.</p>
+						</div>
+						<div class="appearance-buttons" role="group" aria-label="Color theme">
+							{#each ['dark', 'light'] as option (option)}
+								<button
+									type="button"
+									class="appearance-button"
+									class:selected={$themeStore === option}
+									aria-pressed={$themeStore === option}
+									onclick={() => selectTheme(option as ThemeMode)}
+								>{option === 'dark' ? 'Dark' : 'Light'}</button>
+							{/each}
+						</div>
 					</section>
 
-					<section class="settings-section" aria-labelledby="appearance-heading">
-						<fieldset>
-							<legend id="appearance-heading">Appearance</legend>
-							<div class="choice-list compact">
-								{#each ['dark', 'light'] as option (option)}
-									{@const themeOption = option as ThemeMode}
-									<label class="choice-row compact">
-										<input
-											type="radio"
-											name="controller-theme"
-											value={themeOption}
-											checked={theme === themeOption}
-											onchange={() => onThemeChange(themeOption)}
-										/>
-										<span>{themeOption === 'dark' ? 'Dark' : 'Light'}</span>
-									</label>
-								{/each}
-							</div>
-						</fieldset>
+					<section class="settings-section" aria-labelledby="settings-density-title">
+						<div>
+							<h3 id="settings-density-title">Density</h3>
+							<p>Choose the size of Library rows and controls.</p>
+						</div>
+						<div class="density-buttons" role="group" aria-label="Library density">
+							{#each UNIFIED_LIBRARY_DENSITY_OPTIONS as option (option.id)}
+								<button
+									type="button"
+									class="density-button"
+									class:selected={$unifiedLibraryPrefsStore.density === option.id}
+									aria-pressed={$unifiedLibraryPrefsStore.density === option.id}
+									data-testid="settings-density-{option.id}"
+									onclick={() => selectDensity(option.id)}
+								>
+									{option.label}
+								</button>
+							{/each}
+						</div>
 					</section>
 
-					<section class="settings-section system" aria-labelledby="system-heading">
-						<h3 id="system-heading">System</h3>
-						<dl>
-							<div>
-								<dt>Connection</dt>
-								<dd class:good={connectionGood}>{connectionLabel}</dd>
+					<section class="settings-section" aria-labelledby="settings-core-title">
+						<div>
+							<h3 id="settings-core-title">Roon Core</h3>
+							<dl class="core-current">
+								<dt>Current Core</dt>
+								<dd data-testid="settings-current-core">{currentCoreLabel}</dd>
+							</dl>
+						</div>
+
+						{#if coreSwitchPhase === 'confirm'}
+							<div class="core-confirm" role="group" aria-label="Confirm Core switch">
+								<p>
+									Songr will disconnect from <strong>{currentCoreLabel}</strong> immediately.
+									Playback continues in Roon, but this controller's transport and Library
+									access stop until another Core is authorized.
+								</p>
+								<div class="core-actions">
+									<button
+										type="button"
+										class="core-secondary"
+										bind:this={coreSwitchCancel}
+										onclick={cancelCoreSwitch}
+									>Cancel</button>
+									<button
+										type="button"
+										class="core-danger"
+										onclick={confirmCoreSwitch}
+									>Disconnect and find another Core</button>
+								</div>
 							</div>
-							<div>
-								<dt>Roon Core</dt>
-								<dd>{coreName ?? '—'}</dd>
+						{:else if coreSwitchPhase === 'requesting'}
+							<p class="core-status" role="status">Disconnecting from the current Core…</p>
+						{:else if coreSwitchPhase === 'waiting'}
+							<div class="core-waiting" role="status">
+								<p>
+									Open Roon and go to <strong>Settings → Extensions</strong>. Find
+									<strong>{extensionLabel}</strong> and choose <strong>Enable</strong>.
+								</p>
+								<p>This panel updates by itself when the new Core connects.</p>
 							</div>
-							<div>
-								<dt>Core version</dt>
-								<dd>{coreVersion ?? '—'}</dd>
+						{:else if coreSwitchPhase === 'error'}
+							<div class="core-error">
+								<p role="alert">{coreSwitchError}</p>
+								<div class="core-actions">
+									<button type="button" class="core-secondary" onclick={cancelCoreSwitch}
+										>Cancel</button>
+									<button type="button" class="core-primary" onclick={confirmCoreSwitch}
+										>Try again</button>
+								</div>
 							</div>
-							<div>
-								<dt>UI build</dt>
-								<dd class="revision">{buildRevision}</dd>
-							</div>
-						</dl>
+						{:else}
+							{#if coreSwitchPhase === 'complete'}
+								<p class="core-connected" role="status">Connected to {currentCoreLabel}.</p>
+							{/if}
+							<button
+								type="button"
+								class="core-switch-action"
+								bind:this={coreSwitchAction}
+								onclick={beginCoreSwitch}
+							>Connect to a different Core</button>
+						{/if}
 					</section>
 				</div>
 
@@ -205,46 +262,19 @@
 				</footer>
 			</div>
 		</div>
-	{/if}
-</div>
+{/if}
 
 <style>
-	.settings-root {
-		display: inline-flex;
-	}
-
-	.settings-trigger {
-		display: inline-grid;
-		width: 2.35rem;
-		height: 2.35rem;
-		place-items: center;
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		background: var(--surface-2);
-		color: var(--text-soft);
-		font-size: 1.05rem;
-		line-height: 1;
-		box-shadow: var(--shadow-soft);
-	}
-
-	.floating .settings-trigger {
-		position: fixed;
-		top: max(1rem, env(safe-area-inset-top));
-		right: max(1rem, env(safe-area-inset-right));
-		z-index: 45;
-		background: color-mix(in srgb, var(--surface) 92%, transparent);
-	}
-
-	.settings-trigger:hover {
-		color: var(--text);
-		border-color: var(--accent-2);
-	}
-
-	.settings-trigger:focus-visible,
+	/* This layout-level dialog follows the same songr tokens as Unified. */
 	.settings-close:focus-visible,
-	.settings-done:focus-visible,
-	.choice-row:has(input:focus-visible) {
-		outline: 2px solid var(--accent-2);
+	.appearance-button:focus-visible,
+	.density-button:focus-visible,
+	.core-switch-action:focus-visible,
+	.core-secondary:focus-visible,
+	.core-danger:focus-visible,
+	.core-primary:focus-visible,
+	.settings-done:focus-visible {
+		outline: 2px solid var(--songr-accent-bright);
 		outline-offset: 2px;
 	}
 
@@ -256,7 +286,7 @@
 		place-items: center;
 		padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
 			max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
-		background: rgba(4, 6, 12, 0.7);
+		background: var(--songr-scrim);
 	}
 
 	.settings-dialog {
@@ -265,11 +295,12 @@
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
-		background: var(--surface);
-		color: var(--text);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-lg);
-		box-shadow: var(--shadow-strong);
+		background: var(--songr-panel);
+		color: var(--songr-text);
+		border: 1px solid var(--songr-line);
+		border-radius: 20px;
+		box-shadow: 0 22px 52px var(--songr-shadow-soft);
+		font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
 	}
 
 	.settings-header {
@@ -278,13 +309,13 @@
 		justify-content: space-between;
 		gap: 1rem;
 		padding: 1.15rem 1.2rem 0.9rem;
-		border-bottom: 1px solid var(--border);
+		border-bottom: 1px solid var(--songr-line);
 	}
 
 	.settings-eyebrow {
 		margin: 0 0 0.2rem;
-		color: var(--text-soft);
-		font-family: var(--font-display);
+		color: var(--songr-soft);
+		font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 		font-size: 0.68rem;
 		letter-spacing: 0.14em;
 		text-transform: uppercase;
@@ -301,166 +332,176 @@
 		border: 1px solid transparent;
 		border-radius: 999px;
 		background: transparent;
-		color: var(--text-soft);
+		color: var(--songr-soft);
 		line-height: 1;
 	}
 
 	.settings-close:hover {
-		background: var(--surface-2);
-		color: var(--text);
+		background: var(--songr-raise);
+		color: var(--songr-text);
 	}
 
-	.settings-body {
+	.settings-content {
+		display: grid;
+		gap: 1.15rem;
 		overflow-y: auto;
-		padding: 0 1.2rem;
+		padding: 1.1rem 1.2rem 1.2rem;
 	}
 
 	.settings-section {
-		padding: 1rem 0;
-		border-bottom: 1px solid var(--border);
+		display: grid;
+		gap: 0.85rem;
 	}
 
-	.settings-section:last-child {
-		border-bottom: none;
-	}
-
-	fieldset {
-		min-width: 0;
-		margin: 0;
-		padding: 0;
-		border: 0;
-	}
-
-	legend,
 	.settings-section h3 {
 		margin: 0;
-		padding: 0;
-		font-size: 0.92rem;
-		font-weight: 700;
+		font-size: 1rem;
 	}
 
-	.current-view {
-		margin: 0.35rem 0 0.75rem;
-		color: var(--text-soft);
-		font-size: 0.82rem;
+	.settings-section p {
+		margin: 0.25rem 0 0;
+		color: var(--songr-soft);
+		font-size: 0.85rem;
 	}
 
-	.current-view strong {
-		color: var(--text);
+	.settings-section + .settings-section {
+		padding-top: 1.15rem;
+		border-top: 1px solid var(--songr-line);
 	}
 
-	.choice-list {
-		display: grid;
-		gap: 0.5rem;
-	}
-
-	.choice-list.compact {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		margin-top: 0.65rem;
-	}
-
-	.choice-row {
+	.appearance-buttons,
+	.density-buttons {
 		display: flex;
-		align-items: flex-start;
-		gap: 0.7rem;
-		padding: 0.75rem;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: var(--surface-2);
-		cursor: pointer;
+		flex-wrap: wrap;
+		gap: 0.55rem;
 	}
 
-	.choice-row:has(input:checked) {
-		border-color: var(--accent-2);
-		background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+	.appearance-button,
+	.density-button {
+		flex: 0 0 7rem;
+		width: 7rem;
+		height: 2.75rem;
+		padding: 0;
+		border: 1px solid var(--songr-line);
+		border-radius: 8px;
+		background: var(--songr-raise);
+		color: var(--songr-text);
+		font: inherit;
+		font-size: 0.86rem;
+		font-weight: 650;
 	}
 
-	.choice-row.compact {
-		align-items: center;
-		padding: 0.65rem 0.75rem;
+	.appearance-button:hover,
+	.density-button:hover {
+		border-color: var(--songr-accent);
 	}
 
-	.choice-row input {
-		flex: 0 0 auto;
-		margin: 0.15rem 0 0;
-		accent-color: var(--accent);
+	.appearance-button.selected,
+	.density-button.selected {
+		border-color: var(--songr-accent-bright);
+		background: color-mix(in srgb, var(--songr-accent) 16%, var(--songr-raise));
+		color: var(--songr-accent-bright);
 	}
 
-	.choice-row span {
+	.core-current {
 		display: grid;
-		gap: 0.18rem;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 0.35rem 0.8rem;
+		margin: 0.7rem 0 0;
+		font-size: 0.86rem;
 	}
 
-	.choice-row strong {
-		font-size: 0.88rem;
+	.core-current dt {
+		color: var(--songr-soft);
 	}
 
-	.choice-row small {
-		color: var(--text-soft);
-		font-size: 0.75rem;
-		line-height: 1.35;
-	}
-
-	.empty-choice {
+	.core-current dd {
 		margin: 0;
-		padding: 0.7rem;
-		color: var(--text-soft);
-		font-size: 0.82rem;
-	}
-
-	.system h3 {
-		margin-bottom: 0.65rem;
-	}
-
-	dl {
-		display: grid;
-		gap: 0.45rem;
-		margin: 0;
-	}
-
-	dl div {
-		display: grid;
-		grid-template-columns: minmax(7rem, 0.7fr) minmax(0, 1fr);
-		gap: 0.8rem;
-		align-items: baseline;
-	}
-
-	dt {
-		color: var(--text-soft);
-		font-size: 0.76rem;
-	}
-
-	dd {
-		min-width: 0;
-		margin: 0;
-		font-size: 0.8rem;
 		text-align: right;
 		overflow-wrap: anywhere;
 	}
 
-	dd.good {
-		color: var(--good);
-		font-weight: 700;
+	.core-confirm,
+	.core-waiting,
+	.core-error {
+		padding: 0.85rem;
+		border: 1px solid var(--songr-line);
+		border-radius: 8px;
+		background: var(--songr-raise);
 	}
 
-	dd.revision {
-		font-family: var(--font-mono);
-		font-size: 0.73rem;
+	.core-confirm p,
+	.core-waiting p,
+	.core-error p,
+	.core-status,
+	.core-connected {
+		margin: 0;
+		color: var(--songr-settings-copy);
+		font-size: 0.86rem;
+		line-height: 1.45;
+	}
+
+	.core-waiting p + p {
+		margin-top: 0.55rem;
+		color: var(--songr-soft);
+	}
+
+	.core-error p {
+		color: var(--songr-error-soft);
+	}
+
+	.core-connected {
+		color: var(--songr-success);
+	}
+
+	.core-actions {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+		gap: 0.55rem;
+		margin-top: 0.8rem;
+	}
+
+	.core-switch-action,
+	.core-secondary,
+	.core-danger,
+	.core-primary {
+		min-height: 2.4rem;
+		padding: 0.45rem 0.75rem;
+		border: 1px solid var(--songr-line-16);
+		border-radius: 8px;
+		background: var(--songr-raise);
+		color: var(--songr-text);
+		font: inherit;
+		font-size: 0.82rem;
+		font-weight: 650;
+	}
+
+	.core-switch-action,
+	.core-primary {
+		justify-self: start;
+		border-color: var(--songr-accent);
+		color: var(--songr-accent-bright);
+	}
+
+	.core-danger {
+		border-color: var(--songr-error-border);
+		color: var(--songr-error-soft);
 	}
 
 	.settings-footer {
 		display: flex;
 		justify-content: flex-end;
 		padding: 0.85rem 1.2rem 1rem;
-		border-top: 1px solid var(--border);
+		border-top: 1px solid var(--songr-line);
 	}
 
 	.settings-done {
 		padding: 0.5rem 1rem;
-		border: 1px solid var(--accent);
-		border-radius: var(--radius-sm);
-		background: var(--accent);
-		color: #fff;
+		border: 1px solid var(--songr-accent);
+		border-radius: 8px;
+		background: var(--songr-accent);
+		color: var(--songr-on-accent);
 		font-weight: 700;
 	}
 
@@ -473,7 +514,7 @@
 		.settings-dialog {
 			width: 100%;
 			max-height: calc(100dvh - max(0.75rem, env(safe-area-inset-top)));
-			border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+			border-radius: 20px 20px 0 0;
 			padding-bottom: env(safe-area-inset-bottom);
 		}
 	}

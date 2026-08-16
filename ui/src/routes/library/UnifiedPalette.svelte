@@ -10,7 +10,9 @@
 	 * always parse and always render disabled with the no-release-dates
 	 * reason. The async section mirrors the prototype's SONGS group.
 	 * Every song row opens a song-focused panel through its opaque,
-	 * server-authorized identity. Artwork is display data only.
+	 * server-authorized identity. The same palette also previews every
+	 * keyless Roon Browse-search category; See All moves into the semantic
+	 * Browse scope. Artwork is display data only.
 	 */
 	import type { UnifiedLibraryDrillTarget } from '$lib/libraryPageState';
 	import type { LibraryIndexState } from '$lib/stores/libraryIndexStore';
@@ -26,7 +28,8 @@
 	} from '$lib/stores/unifiedPaletteSearchStore';
 	import { parseSmartFilters } from '$lib/unifiedSmartFilters';
 	import { pluralize } from '$lib/pluralize';
-	import { normalizeCatalogText } from '@shared/timelineCatalogContracts';
+	import { normalizeCatalogText } from '@shared/catalogContracts';
+	import type { SearchResult } from '@shared/types';
 
 	const INSTANT_ROW_LIMIT = 8;
 	const NAMED_ROW_LIMIT = 4;
@@ -43,6 +46,8 @@
 		onClose,
 		onDrill,
 		onSong,
+		onBrowseResult = () => {},
+		onBrowseCategory = () => {},
 		onApplyFilter,
 		onSearch
 	}: {
@@ -55,6 +60,8 @@
 		onClose: () => void;
 		onDrill: (target: UnifiedLibraryDrillTarget) => void;
 		onSong: (song: PaletteSearchRow) => void;
+		onBrowseResult?: (query: string, result: SearchResult) => void;
+		onBrowseCategory?: (query: string, categoryTitle: string) => void;
 		onApplyFilter: (text: string) => void;
 		onSearch: (query: string) => void;
 	} = $props();
@@ -211,7 +218,7 @@
 						id: `album-${entry.id}`,
 						icon: '○',
 						primary: entry.title,
-						secondary: entry.artist,
+						secondary: `${entry.artist}${(entry.versionCount ?? 1) > 1 ? ` · ${entry.versionCount} versions` : ''}`,
 						filter: false,
 						disabled: false,
 						reason: null,
@@ -246,23 +253,73 @@
 			}
 		}
 
-		// Async coordinated section — the prototype has one literal SONGS group.
+		const browseGroups = searchState.browseGroups ?? [];
+		const browseTrackGroup = browseGroups.find((group) => group.resultType === 'track');
+		const browseTrackCategoryTitle = browseTrackGroup?.categoryTitle;
+
+		// The retained-result-ID song authority stays the one direct SONGS
+		// group. Its See All row enters the full Roon Tracks category.
 		for (const group of searchState.groups) {
+			const rows: PaletteRow[] = group.rows.map((row) => ({
+				id: `song-${row.resultId}`,
+				icon: paletteIconForGroup(group.title),
+				primary: row.title,
+				secondary: row.subtitle,
+				filter: false,
+				disabled: false,
+				reason: null,
+				activate: () => onSong(row)
+			}));
+			if (
+				browseTrackCategoryTitle &&
+				browseTrackGroup.total > group.rows.length
+			) {
+				rows.push({
+					id: `roon-see-all-${browseTrackGroup.resultType}-${browseTrackGroup.title}`,
+					icon: '→',
+					primary: `See all ${browseTrackGroup.title}`,
+					secondary: `${browseTrackGroup.total.toLocaleString()} results`,
+					filter: false,
+					disabled: false,
+					reason: null,
+					activate: () => onBrowseCategory(q, browseTrackCategoryTitle)
+				});
+			}
 			out.push({
 				label: paletteLabelForGroup(group.title),
-				rows: group.rows.map((row) => {
-					return {
-						id: `song-${row.resultId}`,
-						icon: paletteIconForGroup(group.title),
-						primary: row.title,
-						secondary: row.subtitle,
-						filter: false,
-						disabled: false,
-						reason: null,
-						activate: () => onSong(row)
-					};
-				})
+				rows
 			});
+		}
+
+		// Browse-search categories are keyless previews. Tracks are omitted
+		// when the authoritative SONGS group exists, avoiding two copies of
+		// the same result while preserving full reach through See All.
+		for (const group of browseGroups) {
+			if (group.resultType === 'track' && searchState.groups.length > 0) continue;
+			const categoryTitle = group.categoryTitle;
+			const rows: PaletteRow[] = group.rows.map((row, index) => ({
+				id: `roon-${group.resultType}-${group.title}-${index}-${row.title}-${row.subtitle ?? ''}`,
+				icon: paletteIconForGroup(group.title),
+				primary: row.title,
+				secondary: row.subtitle ?? '',
+				filter: false,
+				disabled: false,
+				reason: null,
+				activate: () => onBrowseResult(q, row)
+			}));
+			if (categoryTitle && group.total > group.rows.length) {
+				rows.push({
+					id: `roon-see-all-${group.resultType}-${group.title}`,
+					icon: '→',
+					primary: `See all ${group.title}`,
+					secondary: `${group.total.toLocaleString()} results`,
+					filter: false,
+					disabled: false,
+					reason: null,
+					activate: () => onBrowseCategory(q, categoryTitle)
+				});
+			}
+			if (rows.length > 0) out.push({ label: `ROON ${paletteLabelForGroup(group.title)}`, rows });
 		}
 		return out;
 	});
@@ -390,7 +447,7 @@
 					</button>
 				{/each}
 			{:else}
-				{#each groups as group (group.label)}
+				{#each groups as group, groupIndex (`${groupIndex}:${group.label}`)}
 					<div class="pgl" data-testid="unified-palette-group">{group.label}</div>
 					{#each group.rows as row (row.id)}
 						<button
@@ -422,6 +479,10 @@
 				{:else if searchState.phase === 'error'}
 					<div class="pgl" data-testid="unified-palette-search-error">
 						Roon search failed{searchState.error ? `: ${searchState.error}` : '.'}
+					</div>
+				{:else if searchState.partialError}
+					<div class="pgl" data-testid="unified-palette-search-partial">
+						PARTIAL ROON RESULTS: {searchState.partialError}
 					</div>
 				{:else if groups.length === 0 && query.trim().length >= PALETTE_SEARCH_MIN_QUERY}
 					<div class="pgl" data-testid="unified-palette-empty">NOTHING MATCHED</div>

@@ -320,7 +320,7 @@
 	.zg-backdrop {
 		position: fixed;
 		inset: 0;
-		background: rgba(0, 0, 0, 0.7);
+		background: var(--songr-scrim);
 		display: grid;
 		place-items: center;
 		z-index: 1000;
@@ -328,14 +328,14 @@
 	}
 
 	.zg-dialog {
-		background: var(--surface);
-		color: var(--text);
-		border: 1px solid var(--border);
+		background: var(--songr-panel);
+		color: var(--songr-text);
+		border: 1px solid var(--songr-line);
 		border-radius: 12px;
 		max-width: 480px;
 		width: 100%;
 		padding: 1.25rem;
-		box-shadow: var(--shadow-strong);
+		box-shadow: 0 22px 52px var(--songr-shadow-soft);
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
@@ -362,12 +362,12 @@
 		border-radius: 6px;
 	}
 	.zg-close:hover {
-		background: var(--surface-2);
+		background: var(--songr-raise);
 	}
 
 	.zg-hint {
 		margin: 0;
-		color: var(--text-soft);
+		color: var(--songr-soft);
 		font-size: 0.85rem;
 	}
 
@@ -400,34 +400,34 @@
 		padding: 0.55rem 0.6rem;
 		border-radius: 8px;
 		cursor: pointer;
-		background: var(--surface-2);
+		background: var(--songr-raise);
 	}
 	.zg-row:hover {
-		background: var(--surface-3);
+		background: var(--songr-hover);
 	}
 
 	.zg-power {
 		flex-shrink: 0;
 		width: 36px;
-		background: var(--surface-2);
-		color: var(--text-soft);
-		border: 1px solid var(--border);
+		background: var(--songr-raise);
+		color: var(--songr-soft);
+		border: 1px solid var(--songr-line-12);
 		border-radius: 8px;
 		cursor: pointer;
 		font-size: 0.95rem;
 	}
 	.zg-power:hover {
-		background: var(--surface-3);
-		color: var(--text);
+		background: var(--songr-hover);
+		color: var(--songr-text);
 	}
 	/* Visual cue: outputs currently in standby get a muted-accent
 	   highlight so the user knows "click to wake" vs "click to sleep". */
 	.zg-power-standby {
-		color: var(--accent);
-		background: rgba(95, 109, 240, 0.14);
+		color: var(--songr-accent-bright);
+		background: color-mix(in srgb, var(--songr-accent) 14%, transparent);
 	}
 	.zg-power-standby:hover {
-		background: rgba(95, 109, 240, 0.26);
+		background: color-mix(in srgb, var(--songr-accent) 26%, transparent);
 	}
 
 	.zg-name {
@@ -436,13 +436,13 @@
 
 	.zg-zone {
 		font-size: 0.8rem;
-		color: var(--text-soft);
+		color: var(--songr-soft);
 	}
 
 	.zg-empty {
 		padding: 1rem;
 		text-align: center;
-		color: var(--text-soft);
+		color: var(--songr-soft);
 	}
 
 	.zg-footer {
@@ -464,12 +464,12 @@
 		cursor: not-allowed;
 	}
 	.zg-btn-secondary {
-		background: var(--surface-2);
-		border: 1px solid var(--border);
+		background: var(--songr-raise);
+		border: 1px solid var(--songr-line-12);
 		color: inherit;
 	}
 	.zg-btn-primary {
-		background: var(--accent);
-		color: #fff;
+		background: var(--songr-accent);
+		color: var(--songr-on-accent);
 	}
 </style>

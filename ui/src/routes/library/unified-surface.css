@@ -56,15 +56,30 @@
   color: var(--dim);
 }
 .unified-surface {
-  --bg: #000;
-  --panel: #0b0b0b;
-  --raise: #141414;
-  --line: rgba(255, 255, 255, 0.09);
-  --text: #fff;
-  --soft: #9a9a9a;
-  --dim: #5e5e5e;
-  --accent: #c8a24a;
-  --accent2: #e6c674;
+  --bg: var(--songr-bg);
+  --header: var(--songr-header);
+  --rail-bg: var(--songr-rail);
+  --panel: var(--songr-panel);
+  --control: var(--songr-control);
+  --raise: var(--songr-raise);
+  --hover: var(--songr-hover);
+  --hover-subtle: var(--songr-hover-subtle);
+  --line: var(--songr-line);
+  --line-subtle: var(--songr-line-subtle);
+  --line-strong: var(--songr-line-strong);
+  --text: var(--songr-text);
+  --text-high: var(--songr-text-high);
+  --text-mid: var(--songr-text-mid);
+  --soft: var(--songr-soft);
+  --dim: var(--songr-dim);
+  --accent: var(--songr-accent);
+  --accent2: var(--songr-accent-bright);
+  --gold: var(--songr-unified-accent);
+  --on-accent: var(--songr-on-accent);
+  --success: var(--songr-success);
+  --error: var(--songr-error);
+  --danger: var(--songr-error);
+  --scrollbar: var(--songr-scrollbar);
 }
 .unified-surface {
   height: 100%;
@@ -98,6 +113,7 @@
   padding: 13px 22px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--line);
+  background: var(--header);
 }
 .unified-surface .brand {
   font-size: 10px;
@@ -129,7 +145,13 @@
   font-size: 13px;
   letter-spacing: 0.18em;
 }
-.unified-surface .aboutbtn {
+/* Adaptation (app-owned contract, no prototype counterpart): the Controller
+   settings trigger docks in the bar as a text button styled exactly like the
+   About button. Settings must stay reachable from this surface (public
+   issue #1); the floating gear that used to carry that guarantee was excised
+   by owner ruling 2026-08-08. */
+.unified-surface .aboutbtn,
+.unified-surface .settingsbtn {
   background: none;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -138,10 +160,14 @@
   font-size: 10px;
   letter-spacing: 0.16em;
   cursor: pointer;
+}
+.unified-surface .aboutbtn {
   margin-right: 10px;
 }
 .unified-surface .aboutbtn:hover,
-.unified-surface .aboutbtn:focus-visible {
+.unified-surface .aboutbtn:focus-visible,
+.unified-surface .settingsbtn:hover,
+.unified-surface .settingsbtn:focus-visible {
   color: var(--accent2);
   border-color: var(--accent);
 }
@@ -186,6 +212,10 @@
   margin: 0;
   word-break: break-word;
 }
+.unified-surface .aboutpanel .ab-rows dd.good {
+  color: var(--success);
+  font-weight: 700;
+}
 .unified-surface .aboutpanel .ab-legal {
   color: var(--dim);
   font-size: 10px;
@@ -211,7 +241,7 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  background: #101010;
+  background: var(--songr-inset);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 9px 14px;
@@ -228,39 +258,13 @@
   margin-left: auto;
   font-size: 10px;
   letter-spacing: 0.08em;
-  color: #3c3c3c;
-  border: 1px solid #222;
+  color: var(--songr-kbd);
+  border: 1px solid var(--songr-keyline);
   border-radius: 4px;
   padding: 2px 6px;
 }
 .unified-surface .spacer {
   flex: 1;
-}
-.unified-surface .seg {
-  display: flex;
-  background: #101010;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.unified-surface .seg div,
-.unified-surface .seg button {
-  padding: 8px 12px;
-  font-size: 11.5px;
-  color: var(--soft);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.unified-surface .seg div:hover,
-.unified-surface .seg button:hover {
-  background: #1a1a1a;
-  color: #fff;
-}
-.unified-surface .seg div.on,
-.unified-surface .seg button.on {
-  background: var(--accent);
-  color: #000;
-  font-weight: 600;
 }
 
 .unified-surface .body {
@@ -282,12 +286,13 @@
   gap: var(--rg);
   overflow-y: auto;
   transition: width 0.13s;
+  background: var(--rail-bg);
 }
 .unified-surface .rail::-webkit-scrollbar {
   width: 5px;
 }
 .unified-surface .rail::-webkit-scrollbar-thumb {
-  background: #222;
+  background: var(--songr-scrollbar-rail);
   border-radius: 3px;
 }
 .unified-surface .rail b,
@@ -305,17 +310,17 @@
 }
 .unified-surface .rail b:hover,
 .unified-surface .rail button:hover {
-  background: #1c1c1c;
-  color: #fff;
+  background: var(--hover);
+  color: var(--text);
 }
 .unified-surface .rail b.on,
 .unified-surface .rail button.on {
   background: var(--accent);
-  color: #000;
+  color: var(--on-accent);
 }
 .unified-surface .rail b.off,
 .unified-surface .rail button.off {
-  color: #2b2b2b;
+  color: var(--songr-disabled);
   pointer-events: none;
 }
 .unified-surface.norail .rail {
@@ -366,7 +371,7 @@
   width: 10px;
 }
 .unified-surface .u-main::-webkit-scrollbar-thumb {
-  background: #222;
+  background: var(--songr-scrollbar-rail);
   border-radius: 6px;
 }
 
@@ -386,8 +391,8 @@
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
-  color: #c9c9c9;
-  background: #121212;
+  color: var(--songr-chip-text);
+  background: var(--control);
   border: 1px solid var(--line);
   white-space: nowrap;
   transition:
@@ -396,19 +401,23 @@
     border-color 0.12s;
 }
 .unified-surface .sc:hover {
-  background: #1d1d1d;
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.18);
+  background: var(--songr-surface-1d);
+  color: var(--text);
+  border-color: var(--line-strong);
 }
 .unified-surface .sc.on {
   background: var(--accent);
   border-color: var(--accent);
-  color: #000;
+  color: var(--on-accent);
   font-weight: 600;
 }
 .unified-surface[data-d="pi"] .sc {
   font-size: 15px;
   padding: 0 20px;
+}
+/* Workspace links share the chip look; the anchor default must not leak. */
+.unified-surface a.sc.workspace-link {
+  text-decoration: none;
 }
 
 .unified-surface .ctx {
@@ -446,20 +455,20 @@
   margin-left: auto;
   position: relative;
   font-size: 12px;
-  color: #c4c4c4;
+  color: var(--text-mid);
   cursor: pointer;
   padding: 7px 12px;
   border-radius: 7px;
-  background: #121212;
+  background: var(--control);
   border: 1px solid var(--line);
   white-space: nowrap;
   user-select: none;
 }
 .unified-surface .sortc:hover {
-  background: #1c1c1c;
+  background: var(--hover);
 }
 .unified-surface .sortc b {
-  color: #fff;
+  color: var(--text);
   font-weight: 600;
 }
 .unified-surface .smenu {
@@ -467,8 +476,8 @@
   top: calc(100% + 6px);
   right: 0;
   min-width: 230px;
-  background: #101010;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: var(--songr-inset);
+  border: 1px solid var(--songr-line-15);
   border-radius: 9px;
   padding: 6px;
   z-index: 20;
@@ -482,11 +491,11 @@
   padding: 9px 12px;
   border-radius: 6px;
   font-size: 13px;
-  color: #d8d8d8;
+  color: var(--songr-control-text);
   cursor: pointer;
 }
 .unified-surface .so:hover {
-  background: #1b1b1b;
+  background: var(--songr-surface-1b);
 }
 .unified-surface .so.on {
   color: var(--accent2);
@@ -519,7 +528,7 @@
   color: var(--dim);
   font-weight: 600;
   padding: 14px 0 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--line-subtle);
   margin-bottom: 10px;
 }
 
@@ -542,14 +551,14 @@
 }
 .unified-surface .an {
   font-size: 13.5px;
-  color: #e2e2e2;
+  color: var(--songr-list-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .unified-surface .ad {
   flex: 1;
-  border-bottom: 1px dotted rgba(255, 255, 255, 0.13);
+  border-bottom: 1px dotted var(--songr-line-13);
   transform: translateY(-3px);
   min-width: 6px;
 }
@@ -577,10 +586,10 @@
   aspect-ratio: 1;
   border-radius: 4px;
   overflow: hidden;
-  background: #111;
+  background: var(--songr-surface-11);
   box-shadow:
     0 6px 16px rgba(0, 0, 0, 0.6),
-    0 0 0 1px rgba(255, 255, 255, 0.06);
+    0 0 0 1px var(--line-subtle);
 }
 .unified-surface .tile:hover .art {
   box-shadow:
@@ -601,7 +610,7 @@
   justify-content: center;
   font-size: 26px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.42);
+  color: var(--songr-text-42);
 }
 .unified-surface .tt {
   font-size: 12.5px;
@@ -621,6 +630,16 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.unified-surface .tv {
+  display: inline-block;
+  margin-top: 5px;
+  padding: 2px 6px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 999px;
+  color: var(--soft);
+  font-size: 10px;
+  line-height: 1.2;
+}
 
 /* Slice 6 addition (Most played surface): `.mph` section heading mirrors
    the prototype's `.gl` letter heading; `.tm` is the tile listening-minutes
@@ -631,7 +650,7 @@
   color: var(--dim);
   font-weight: 600;
   padding: 14px 0 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--line-subtle);
   margin-bottom: 10px;
   text-transform: uppercase;
 }
@@ -656,12 +675,12 @@
 .unified-surface .gcard {
   padding: 14px 16px;
   border-radius: 8px;
-  background: #101010;
+  background: var(--songr-inset);
   border: 1px solid var(--line);
   cursor: pointer;
 }
 .unified-surface .gcard:hover {
-  background: #191919;
+  background: var(--songr-surface-19);
   border-color: var(--accent);
 }
 .unified-surface .gn {
@@ -688,7 +707,8 @@
   gap: 18px;
   padding: 10px 22px;
   border-top: 1px solid var(--line);
-  background: #050505;
+  background: var(--songr-app-bg);
+  color: var(--text);
 }
 .unified-surface .np {
   min-width: 190px;
@@ -705,7 +725,7 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  color: #c4c4c4;
+  color: var(--songr-text-mid);
   font-size: 15px;
   margin: 0 auto;
 }
@@ -715,12 +735,12 @@
   border-radius: 6px;
 }
 .unified-surface .tp span:hover {
-  background: #161616;
+  background: var(--songr-surface-16);
 }
 .unified-surface .tp .big {
   width: 38px;
   height: 38px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--songr-line-20);
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -738,7 +758,7 @@
 .unified-surface .vbar {
   width: 90px;
   height: 3px;
-  background: #1c1c1c;
+  background: var(--songr-hover);
   border-radius: 2px;
   overflow: hidden;
 }
@@ -761,21 +781,21 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #3fcf8e;
+  background: var(--songr-success);
   margin-right: 6px;
-  box-shadow: 0 0 8px #3fcf8e;
+  box-shadow: 0 0 8px var(--songr-success);
 }
 .unified-surface .qbtn {
   padding: 7px 14px;
   border-radius: 7px;
-  background: #121212;
+  background: var(--songr-control);
   border: 1px solid var(--line);
-  color: #d8d8d8;
+  color: var(--songr-control-text);
   cursor: pointer;
   font-size: 12px;
 }
 .unified-surface .qbtn:hover {
-  background: #1c1c1c;
+  background: var(--songr-hover);
 }
 .unified-surface[data-d="pi"] .player {
   padding: 14px 22px;
@@ -792,7 +812,7 @@
 .unified-surface .sheet {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.88);
+  background: var(--songr-scrim-88);
   display: none;
   align-items: center;
   justify-content: center;
@@ -808,7 +828,7 @@
   background: var(--panel);
   border-radius: 12px;
   padding: 26px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--songr-line-12);
   display: flex;
   gap: 22px;
   position: relative;
@@ -829,7 +849,7 @@
   height: 196px;
   border-radius: 4px;
   overflow: hidden;
-  background: #111;
+  background: var(--songr-surface-11);
 }
 .unified-surface .panel .art img {
   width: 100%;
@@ -862,17 +882,17 @@
   width: 100%;
   padding: 10px;
   border-radius: 7px;
-  background: #161616;
+  background: var(--songr-surface-16);
   border: 1px solid var(--line);
   font: inherit;
   font-size: 12.5px;
   text-align: center;
   cursor: pointer;
-  color: #d8d8d8;
+  color: var(--songr-control-text);
 }
 .unified-surface .pb div:hover,
 .unified-surface .pb button:hover:not(:disabled) {
-  background: #202020;
+  background: var(--songr-surface-20);
   border-color: var(--accent);
 }
 .unified-surface .pb button:disabled {
@@ -890,7 +910,7 @@
   width: 7px;
 }
 .unified-surface .tl::-webkit-scrollbar-thumb {
-  background: #242424;
+  background: var(--scrollbar);
   border-radius: 4px;
 }
 .unified-surface .tr {
@@ -902,7 +922,7 @@
   cursor: pointer;
 }
 .unified-surface .tr:hover {
-  background: #181818;
+  background: var(--hover-subtle);
 }
 .unified-surface .tn {
   font-size: 11px;
@@ -939,7 +959,7 @@
 }
 .unified-surface .tgo:hover,
 .tq:hover {
-  background: #242424;
+  background: var(--scrollbar);
 }
 .unified-surface[data-d="pi"] .tgo,
 .unified-surface[data-d="pi"] .tq {
@@ -973,7 +993,7 @@
 .unified-surface .pal {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.74);
+  background: var(--songr-scrim-74);
   display: none;
   z-index: 50;
 }
@@ -984,8 +1004,8 @@
   width: 660px;
   max-width: 92vw;
   margin: 13vh auto 0;
-  background: #0d0d0d;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: var(--songr-palette);
+  border: 1px solid var(--songr-line-16);
   border-radius: 13px;
   overflow: hidden;
   box-shadow: 0 40px 100px rgba(0, 0, 0, 0.85);
@@ -997,7 +1017,7 @@
   background: transparent;
   border: 0;
   outline: none;
-  color: #fff;
+  color: var(--text);
   font: inherit;
   font-size: 17.5px;
   padding: 17px 20px;
@@ -1014,7 +1034,7 @@
   width: 8px;
 }
 .unified-surface .pres::-webkit-scrollbar-thumb {
-  background: #242424;
+  background: var(--scrollbar);
   border-radius: 5px;
 }
 .unified-surface .pgl {
@@ -1034,7 +1054,7 @@
 }
 .unified-surface .prow.sel,
 .prow:hover {
-  background: #1c1c1c;
+  background: var(--hover);
 }
 .unified-surface .prow .ic {
   width: 20px;
@@ -1045,7 +1065,7 @@
 }
 .unified-surface .prow .p1 {
   font-size: 14px;
-  color: #eee;
+  color: var(--songr-result-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1070,7 +1090,7 @@
 .unified-surface .palhint {
   padding: 10px 14px;
   font-size: 10.5px;
-  color: #3f3f3f;
+  color: var(--songr-hint);
   border-top: 1px solid var(--line);
   letter-spacing: 0.03em;
 }

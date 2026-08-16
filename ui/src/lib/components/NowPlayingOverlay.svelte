@@ -436,7 +436,7 @@
 	.np-backdrop {
 		position: fixed;
 		inset: 0;
-		background: rgba(0, 0, 0, 0.75);
+		background: var(--songr-scrim-75);
 		display: grid;
 		place-items: center;
 		z-index: 1000;
@@ -444,11 +444,11 @@
 	}
 
 	.np-dialog {
-		background: var(--surface);
-		color: var(--text);
-		border: 1px solid var(--border);
+		background: var(--songr-panel);
+		color: var(--songr-text);
+		border: 1px solid var(--songr-line);
 		border-radius: 12px;
-		box-shadow: var(--shadow-strong);
+		box-shadow: 0 22px 52px var(--songr-shadow-soft);
 		max-width: 720px;
 		width: 100%;
 		display: grid;
@@ -487,7 +487,7 @@
 		border-radius: 8px;
 	}
 	.np-close:hover {
-		background: var(--surface-2);
+		background: var(--songr-raise);
 	}
 
 	.np-art img,
@@ -496,11 +496,11 @@
 		aspect-ratio: 1;
 		object-fit: cover;
 		border-radius: 8px;
-		background: var(--surface-3);
+		background: var(--songr-hover-subtle);
 		display: grid;
 		place-items: center;
 		font-size: 3rem;
-		color: var(--text-soft);
+		color: var(--songr-soft);
 	}
 
 	.np-meta {
@@ -518,33 +518,33 @@
 		word-break: break-word;
 	}
 	.np-title-empty {
-		color: var(--text-soft);
+		color: var(--songr-soft);
 	}
 
 	.np-artist {
 		font-size: 1.05rem;
 		margin: 0;
-		color: var(--text-soft);
+		color: var(--songr-soft);
 	}
 
 	.np-album {
 		font-size: 0.95rem;
 		text-align: left;
 		padding: 0;
-		color: var(--text-soft);
+		color: var(--songr-soft);
 		background: transparent;
 		border: 0;
 		cursor: pointer;
 	}
 	.np-link:hover {
-		color: var(--accent);
+		color: var(--songr-accent-bright);
 		text-decoration: underline;
 	}
 
 	.np-progress {
 		position: relative;
 		height: 6px;
-		background: var(--border);
+		background: var(--songr-hover);
 		border-radius: 3px;
 		margin-top: 1rem;
 		cursor: default;
@@ -553,7 +553,7 @@
 		cursor: pointer;
 	}
 	.np-progress:focus-visible {
-		outline: 2px solid var(--accent-2);
+		outline: 2px solid var(--songr-accent-bright);
 		outline-offset: 2px;
 	}
 	.np-progress-fill {
@@ -561,7 +561,7 @@
 		left: 0;
 		top: 0;
 		bottom: 0;
-		background: var(--accent);
+		background: var(--songr-accent);
 		border-radius: 3px;
 	}
 
@@ -569,7 +569,7 @@
 		display: flex;
 		justify-content: space-between;
 		font-size: 0.85rem;
-		color: var(--text-soft);
+		color: var(--songr-soft);
 		margin-top: 0.3rem;
 	}
 
@@ -582,9 +582,9 @@
 	}
 
 	.np-ctrl {
-		background: var(--surface-2);
+		background: var(--songr-raise);
 		color: inherit;
-		border: 1px solid var(--border);
+		border: 1px solid var(--songr-line-12);
 		border-radius: 999px;
 		width: 44px;
 		height: 44px;
@@ -596,9 +596,9 @@
 		cursor: not-allowed;
 	}
 	.np-ctrl.primary {
-		background: var(--accent);
-		border-color: var(--accent);
-		color: #fff;
+		background: var(--songr-accent);
+		border-color: var(--songr-accent);
+		color: var(--songr-on-accent);
 		width: 56px;
 		height: 56px;
 		font-size: 1.4rem;
@@ -613,11 +613,12 @@
 	}
 	.np-vol-slider input[type='range'] {
 		flex: 1;
+		accent-color: var(--songr-accent);
 	}
 	.np-vol-step {
-		background: var(--surface-2);
+		background: var(--songr-raise);
 		color: inherit;
-		border: 1px solid var(--border);
+		border: 1px solid var(--songr-line-12);
 		border-radius: 6px;
 		width: 32px;
 		height: 32px;

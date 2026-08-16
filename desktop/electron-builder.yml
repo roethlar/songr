@@ -91,11 +91,10 @@ linux:
   # same identity the release pipeline already uses for the public commit
   # author, so the two do not drift.
   maintainer: Songr <release@songr.invalid>
-  synopsis: Desktop client for a Roon music library
+  synopsis: Multi platform controller for your Roon Core
   description: >
-    A desktop client for Roon. It runs its own controller engine and shows it in
-    a window, so the machine in front of you needs no browser tab and no
-    separately installed server.
+    Multi platform controller for your Roon Core. Linux, macOS, Windows, or
+    browser, your library is at your fingertips.
 
 # deb and rpm take their package name from package.json's `name`, which is the
 # npm workspace name and not a product name. Stating it here keeps the

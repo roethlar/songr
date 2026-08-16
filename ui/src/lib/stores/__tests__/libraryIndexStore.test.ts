@@ -28,6 +28,7 @@ import {
 	BROWSE_FALLBACK_CAPABILITIES,
 	CATALOG_CAPABILITIES,
 	INCOMPLETE_ARTIST_COUNTS_CAPABILITIES,
+	groupLibraryAlbums,
 	parseRoonArtistAlbumCount,
 	reconcileBrowseAlbumsToCatalog
 } from '../libraryIndexStore';
@@ -44,7 +45,7 @@ const fetchFn = (() => {
 }) as unknown as typeof fetch;
 
 describe('reconcileBrowseAlbumsToCatalog', () => {
-	it('uses unique title/artist identities and cover keys without guessing at ambiguity', () => {
+	it('groups exact title/artist versions without using artwork as identity', () => {
 		const catalog = [
 			{
 				id: 'kind',
@@ -52,6 +53,7 @@ describe('reconcileBrowseAlbumsToCatalog', () => {
 				artist: 'Miles Davis',
 				searchKey: 'kind of blue miles davis',
 				imageKey: 'kind-cover',
+				versionCount: 1,
 				catalogLocalId: 'kind',
 				resolutionStatus: 'resolved' as const
 			},
@@ -61,6 +63,7 @@ describe('reconcileBrowseAlbumsToCatalog', () => {
 				artist: 'Same Artist',
 				searchKey: 'same album same artist',
 				imageKey: 'cover-a',
+				versionCount: 1,
 				catalogLocalId: 'duplicate-a',
 				resolutionStatus: 'ambiguous' as const
 			},
@@ -70,6 +73,7 @@ describe('reconcileBrowseAlbumsToCatalog', () => {
 				artist: 'Same Artist',
 				searchKey: 'same album same artist',
 				imageKey: 'cover-b',
+				versionCount: 1,
 				catalogLocalId: 'duplicate-b',
 				resolutionStatus: 'ambiguous' as const
 			}
@@ -87,8 +91,7 @@ describe('reconcileBrowseAlbumsToCatalog', () => {
 
 		expect(reconciled.map((album) => album.catalogLocalId)).toEqual([
 			'kind',
-			'duplicate-b',
-			undefined,
+			'duplicate-a',
 			undefined
 		]);
 		expect(reconciled[0]).toMatchObject({
@@ -97,7 +100,12 @@ describe('reconcileBrowseAlbumsToCatalog', () => {
 			imageKey: 'kind-cover',
 			resolutionStatus: 'resolved'
 		});
-		expect(reconciled[2].id).toBe('drill:2:Same Album');
+		expect(reconciled[1]).toMatchObject({
+			catalogLocalId: 'duplicate-a',
+			versionCount: 2,
+			memberLocalIds: ['duplicate-a', 'duplicate-b']
+		});
+		expect(reconciled[2].id).toBe('drill:3:Missing Album');
 	});
 
 	it('carries the matched catalog entry native release dates onto the browse row (Slice 4)', () => {
@@ -107,6 +115,7 @@ describe('reconcileBrowseAlbumsToCatalog', () => {
 				title: 'Kind of Blue',
 				artist: 'Miles Davis',
 				searchKey: 'kind of blue miles davis',
+				versionCount: 1,
 				catalogLocalId: 'kind',
 				resolutionStatus: 'resolved' as const,
 				originalReleaseDate: { year: 1959, month: 8, day: 17 }
@@ -119,6 +128,56 @@ describe('reconcileBrowseAlbumsToCatalog', () => {
 		);
 
 		expect(reconciled.originalReleaseDate).toEqual({ year: 1959, month: 8, day: 17 });
+	});
+});
+
+describe('groupLibraryAlbums', () => {
+	it('uses one deterministic anchor and preserves every current catalog member', () => {
+		const grouped = groupLibraryAlbums([
+			{
+				id: 'version-b',
+				title: ' Same Album ',
+				artist: 'THE ARTIST',
+				searchKey: 'same album the artist',
+				imageKey: 'art-b',
+				catalogLocalId: 'version-b',
+				versionCount: 1
+			},
+			{
+				id: 'version-a',
+				title: 'Same Album',
+				artist: 'The Artist',
+				searchKey: 'same album the artist',
+				imageKey: 'art-a',
+				catalogLocalId: 'version-a',
+				versionCount: 1
+			}
+		]);
+
+		expect(grouped).toHaveLength(1);
+		expect(grouped[0]).toMatchObject({
+			id: 'version-a',
+			catalogLocalId: 'version-a',
+			versionCount: 2,
+			memberLocalIds: ['version-a', 'version-b'],
+			imageKey: 'art-a'
+		});
+	});
+
+	it('keeps title suffixes and different album-artist credits in separate groups', () => {
+		const entries = [
+			['base', 'Album', 'Artist'],
+			['deluxe', 'Album (Deluxe)', 'Artist'],
+			['credit', 'Album', 'Artist & Guest']
+		].map(([id, title, artist]) => ({
+			id,
+			title,
+			artist,
+			searchKey: `${title} ${artist}`,
+			versionCount: 1
+		}));
+
+		expect(groupLibraryAlbums(entries)).toHaveLength(3);
 	});
 });
 
@@ -216,6 +275,26 @@ describe('libraryIndexStore — catalog source', () => {
 			{ letter: 'A', start: 0, count: 1 },
 			{ letter: 'Z', start: 1, count: 1 }
 		]);
+	});
+
+	it('publishes one prepared entry for exact duplicate versions', async () => {
+		const index = smallIndex();
+		index.albums.push({
+			...index.albums[1],
+			localId: 'alb-1-version-b',
+			imageKeyHint: 'different-art'
+		});
+		fetchCatalogIndexMock.mockResolvedValue({ kind: 'index', index });
+
+		await loadLibraryIndex(fetchFn, { coreId: 'core-a', claim: TEST_CLAIM });
+
+		const state = get(libraryIndexStore);
+		expect(state.albums).toHaveLength(3);
+		expect(state.albumBuckets.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(3);
+		expect(state.albums.find((album) => album.title === 'Alpha')).toMatchObject({
+			versionCount: 2,
+			memberLocalIds: ['alb-1', 'alb-1-version-b']
+		});
 	});
 
 	it('carries native release dates onto entries and the capability answer onto capabilities (Slice 4)', async () => {
@@ -779,7 +858,10 @@ describe('libraryIndexStore — browse-drain fallback', () => {
 		await loadLibraryIndex(fetchFn, { coreId: 'core-a', claim: TEST_CLAIM });
 
 		const state = get(libraryIndexStore);
-		expect(state.albums).toHaveLength(BROWSE_DRAIN_MAX_ITEMS);
+		expect(state.albums).toHaveLength(BROWSE_DRAIN_PAGE_SIZE);
+		expect(
+			state.albums.reduce((sum, album) => sum + (album.versionCount ?? 1), 0)
+		).toBe(BROWSE_DRAIN_MAX_ITEMS);
 		expect(state.truncated).toBe(true);
 		expect(loadCalls.length).toBe(BROWSE_DRAIN_MAX_ITEMS / BROWSE_DRAIN_PAGE_SIZE - 1);
 	});

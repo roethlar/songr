@@ -1,38 +1,11 @@
 import { browser } from '$app/environment';
 import { writable, type Readable } from 'svelte/store';
 
-export type LibraryView = 'classic' | 'timeline' | 'unified';
+export type LibraryView = 'unified';
 
-export const CLASSIC_LIBRARY_VIEW: LibraryView = 'classic';
 export const DEFAULT_LIBRARY_VIEW: LibraryView = 'unified';
 export const LIBRARY_VIEW_PREFERENCE_VERSION = 1;
 export const LIBRARY_VIEW_STORAGE_KEY = 'roon-controller-library-view';
-
-// Release policy, not a user preference. Later release work may enable the
-// already-tested path only after every production gate has passed.
-export const TIMELINE_LIBRARY_VIEW_AVAILABLE = false;
-// Production release gate for the Unified Library surface. Enabled only after
-// the plan's owner-acceptance, catalog-refresh, and live-action gates passed.
-export const UNIFIED_LIBRARY_VIEW_AVAILABLE = true;
-
-export interface LibraryViewAvailabilityOptions {
-	/** `import.meta.env.DEV` at the call site; production builds inline `false`. */
-	readonly dev: boolean;
-}
-
-const DEFAULT_AVAILABILITY: LibraryViewAvailabilityOptions = Object.freeze({
-	dev: import.meta.env.DEV === true
-});
-
-/**
- * Reachability combines the production release flag with the retained dev
- * preview path used while a future gated view is under construction.
- */
-export function isUnifiedLibraryViewReachable(
-	options: LibraryViewAvailabilityOptions = DEFAULT_AVAILABILITY
-): boolean {
-	return UNIFIED_LIBRARY_VIEW_AVAILABLE || options.dev === true;
-}
 
 interface PersistedLibraryViewPreference {
 	version: typeof LIBRARY_VIEW_PREFERENCE_VERSION;
@@ -54,7 +27,7 @@ interface LibraryViewPreferenceStoreOptions {
 }
 
 export function isLibraryView(value: unknown): value is LibraryView {
-	return value === 'classic' || value === 'timeline' || value === 'unified';
+	return value === 'unified';
 }
 
 function parsePersistedPreference(raw: string | null): LibraryView {
@@ -129,20 +102,10 @@ export function commitPreferredLibraryView(value: unknown): boolean {
 	return preferredLibraryView.commit(value);
 }
 
-export function resolveAvailableLibraryView(
-	preferred: unknown,
-	options: LibraryViewAvailabilityOptions = DEFAULT_AVAILABILITY
-): LibraryView {
-	if (preferred === 'timeline' && TIMELINE_LIBRARY_VIEW_AVAILABLE) return 'timeline';
-	if (preferred === 'unified' && isUnifiedLibraryViewReachable(options)) return 'unified';
-	return CLASSIC_LIBRARY_VIEW;
+export function resolveAvailableLibraryView(_preferred: unknown): LibraryView {
+	return DEFAULT_LIBRARY_VIEW;
 }
 
-export function getAvailableLibraryViews(
-	options: LibraryViewAvailabilityOptions = DEFAULT_AVAILABILITY
-): readonly LibraryView[] {
-	const views: LibraryView[] = ['classic'];
-	if (TIMELINE_LIBRARY_VIEW_AVAILABLE) views.push('timeline');
-	if (isUnifiedLibraryViewReachable(options)) views.push('unified');
-	return Object.freeze(views);
+export function getAvailableLibraryViews(): readonly LibraryView[] {
+	return Object.freeze([DEFAULT_LIBRARY_VIEW]);
 }

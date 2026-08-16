@@ -35,27 +35,34 @@ const withEnv = (names: string[]) => {
   return { save, restore, clear };
 };
 
-describe("Timeline catalog configuration", () => {
-  const original = process.env.TIMELINE_CATALOG_PATH;
+describe("Catalog path configuration", () => {
+  const env = withEnv(["CATALOG_PATH", "TIMELINE_CATALOG_PATH"]);
 
-  afterEach(() => {
-    if (original === undefined) {
-      delete process.env.TIMELINE_CATALOG_PATH;
-    } else {
-      process.env.TIMELINE_CATALOG_PATH = original;
-    }
+  beforeEach(() => {
+    env.save();
+    env.clear();
   });
 
+  afterEach(env.restore);
+
   it("defaults to a controller-local catalog directory", () => {
-    delete process.env.TIMELINE_CATALOG_PATH;
     expect(loadConfig().catalogPath).toBe(path.resolve("./data/catalog"));
   });
 
   it("resolves an explicit catalog directory", () => {
-    process.env.TIMELINE_CATALOG_PATH = "./var/timeline-catalog";
-    expect(loadConfig().catalogPath).toBe(
-      path.resolve("./var/timeline-catalog")
-    );
+    process.env.CATALOG_PATH = "./var/catalog";
+    expect(loadConfig().catalogPath).toBe(path.resolve("./var/catalog"));
+  });
+
+  it("honors the legacy TIMELINE_CATALOG_PATH key from pre-removal deployments", () => {
+    process.env.TIMELINE_CATALOG_PATH = "./var/legacy-catalog";
+    expect(loadConfig().catalogPath).toBe(path.resolve("./var/legacy-catalog"));
+  });
+
+  it("prefers CATALOG_PATH when both keys are set", () => {
+    process.env.CATALOG_PATH = "./var/catalog";
+    process.env.TIMELINE_CATALOG_PATH = "./var/legacy-catalog";
+    expect(loadConfig().catalogPath).toBe(path.resolve("./var/catalog"));
   });
 });
 
@@ -132,6 +139,7 @@ describe("Config and data base directories", () => {
     "IMAGE_CACHE_PATH",
     "RECENTLY_PLAYED_PATH",
     "FAVORITES_PATH",
+    "CATALOG_PATH",
     "TIMELINE_CATALOG_PATH",
   ]);
 

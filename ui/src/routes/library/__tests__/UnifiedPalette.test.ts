@@ -101,6 +101,8 @@ function mountPalette(options: {
 	const onClose = vi.fn();
 	const onDrill = vi.fn();
 	const onSong = vi.fn();
+	const onBrowseResult = vi.fn();
+	const onBrowseCategory = vi.fn();
 	const onApplyFilter = vi.fn();
 	const onSearch = vi.fn();
 	const result = render(UnifiedPalette, {
@@ -114,11 +116,23 @@ function mountPalette(options: {
 			onClose,
 			onDrill,
 			onSong,
+			onBrowseResult,
+			onBrowseCategory,
 			onApplyFilter,
 			onSearch
 		}
 	});
-	return { ...result, searchStore, onClose, onDrill, onSong, onApplyFilter, onSearch };
+	return {
+		...result,
+		searchStore,
+		onClose,
+		onDrill,
+		onSong,
+		onBrowseResult,
+		onBrowseCategory,
+		onApplyFilter,
+		onSearch
+	};
 }
 
 function input(): HTMLInputElement {
@@ -260,6 +274,19 @@ describe('UnifiedPalette — instant sections', () => {
 		await fireEvent.click(albumRow!);
 		expect(harness.onDrill).toHaveBeenCalledWith({ kind: 'album', localId: 'alb-1' });
 	});
+
+	it('shows a grouped album once with its version count', () => {
+		mountPalette({
+			seed: 'quiet',
+			index: readyIndex({
+				albums: [{ ...album('Quiet Album', 'Someone Else', 1), versionCount: 3 }]
+			})
+		});
+
+		const rows = screen.getAllByTestId('unified-palette-row');
+		const albumRow = rows.find((el) => el.textContent?.includes('Quiet Album'));
+		expect(albumRow?.querySelector('.p2')).toHaveTextContent('Someone Else · 3 versions');
+	});
 });
 
 describe('UnifiedPalette — smart filters', () => {
@@ -362,6 +389,112 @@ describe('UnifiedPalette — async coordinated section', () => {
 		expect(harness.onSong).toHaveBeenCalledWith(
 			expect.objectContaining({ resultId: 'song-fame', title: 'Fame' })
 		);
+	});
+
+	it('adds keyless Roon categories without duplicating authoritative songs', async () => {
+		const harness = mountPalette({
+			seed: 'bowie',
+			search: {
+				phase: 'ready',
+				query: 'bowie',
+				groups: [
+					{
+						title: 'Tracks',
+						rows: [
+							{
+								resultId: 'opaque-heroes',
+								title: 'Heroes',
+								subtitle: 'David Bowie',
+								imageKey: null
+							}
+						]
+					}
+				],
+				browseGroups: [
+					{
+						title: 'Tracks',
+						categoryTitle: 'Tracks',
+						resultType: 'track',
+						total: 20,
+						rows: [
+							{
+								title: 'Heroes',
+								subtitle: 'David Bowie',
+								hint: 'action_list',
+								isLoadable: false,
+								isPlayable: false,
+								resultType: 'track',
+								categoryTitle: 'Tracks',
+								categoryTotal: 20
+							}
+						]
+					},
+					{
+						title: 'Albums',
+						categoryTitle: 'Albums',
+						resultType: 'album',
+						total: 7,
+						rows: [
+							{
+								title: 'Low',
+								subtitle: 'David Bowie',
+								hint: 'action_list',
+								isLoadable: false,
+								isPlayable: false,
+								resultType: 'album',
+								categoryTitle: 'Albums',
+								categoryTotal: 7
+							}
+						]
+					}
+				],
+				error: null
+			}
+		});
+
+		expect(screen.getAllByText('Heroes')).toHaveLength(1);
+		expect(screen.getByText('ROON ALBUMS')).toBeInTheDocument();
+		await fireEvent.click(screen.getByRole('button', { name: /Low/ }));
+		expect(harness.onBrowseResult).toHaveBeenCalledWith(
+			'bowie',
+			expect.objectContaining({ title: 'Low', resultType: 'album' })
+		);
+		await fireEvent.click(screen.getByRole('button', { name: /See all Albums/ }));
+		expect(harness.onBrowseCategory).toHaveBeenCalledWith('bowie', 'Albums');
+		await fireEvent.click(screen.getByRole('button', { name: /See all Tracks/ }));
+		expect(harness.onBrowseCategory).toHaveBeenCalledWith('bowie', 'Tracks');
+	});
+
+	it('does not offer See All for a synthetic Browse-search group', () => {
+		const harness = mountPalette({
+			seed: 'obscure',
+			search: {
+				phase: 'ready',
+				query: 'obscure',
+				groups: [],
+				browseGroups: [
+					{
+						title: 'Other',
+						categoryTitle: null,
+						resultType: 'unknown',
+						total: 20,
+						rows: Array.from({ length: 4 }, (_, index) => ({
+							title: `Unknown ${index}`,
+							hint: 'list' as const,
+							isLoadable: false,
+							isPlayable: false,
+							resultType: 'unknown' as const
+						}))
+					}
+				],
+				error: null
+			}
+		});
+
+		expect(screen.getByText('ROON OTHER')).toBeInTheDocument();
+		expect(screen.getAllByText(/Unknown \d/)).toHaveLength(4);
+		expect(screen.queryByRole('button', { name: /See all Other/ })).toBeNull();
+		expect(harness.onBrowseCategory).not.toHaveBeenCalled();
 	});
 
 	it('keeps the selected row when live song results arrive later', async () => {

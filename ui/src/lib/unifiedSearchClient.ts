@@ -25,8 +25,8 @@ import {
 	type ClassicBrowseSessionClaim,
 	type ClassicBrowseSessionClient
 } from '$lib/stores/classicBrowseSessionStore';
-import { createSecureTimelineOpaqueId } from '$lib/timeline/secureOpaqueId';
-import { getTimelineTabId } from '$lib/timeline/tabId';
+import { createSecureOpaqueId } from '$lib/secureOpaqueId';
+import { getTabId } from '$lib/tabId';
 
 export interface UnifiedSearchClient {
 	search(
@@ -224,8 +224,8 @@ export function createUnifiedSearchClient(
 
 export const unifiedSearchClient = createUnifiedSearchClient({
 	getSocket,
-	getTabId: getTimelineTabId,
-	createRequestId: createSecureTimelineOpaqueId,
+	getTabId: getTabId,
+	createRequestId: createSecureOpaqueId,
 	sessionClient: classicBrowseSessionClient,
 	emit: emitWithAck
 });

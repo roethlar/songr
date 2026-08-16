@@ -14,7 +14,7 @@ import {
   normalizeAlbumRef,
   normalizeArtistRef,
   normalizeCatalogText,
-} from "../../shared/timelineCatalogContracts";
+} from "../../shared/catalogContracts";
 
 export const CATALOG_SELECTED_ARTIST_OBSERVATION_SOURCE_CONTRACT =
   "controller-normalized-selected-artist-v1" as const;

@@ -126,14 +126,15 @@ volume mode from the current output type.
 
 ### Browse & Search
 
-Browse navigation and search are not exposed as REST mutations. Classic clients
-use the correlated `classic-session:*` and `browse:*` Socket.IO commands with an
-opaque server-owned session generation. Requests to the retired
+Browse navigation and search are not exposed as REST mutations. The Library's
+live Browse and search clients use the correlated `classic-session:*` and
+`browse:*` Socket.IO commands with an opaque server-owned session generation.
+The `classic-*` names are retained wire-protocol identifiers, not a separate UI.
+Requests to the retired
 `POST /api/browse*` routes return JSON `404 Not Found`.
 
-Timeline uses the catalog REST reads below for keyless discovery, followed by
-the correlated `timeline-*` Socket.IO protocol for interactive artist and album
-detail browsing. Neither surface is a UI feature flag.
+The Library's Unified view uses the catalog REST reads below for keyless
+discovery.
 
 ---
 
@@ -190,10 +191,7 @@ derives the active Core from the paired Roon connection; clients must not send
 or select a `coreId`. Responses contain only durable catalog descriptors, never
 Roon browse-session keys or actions.
 
-All catalog responses set `Cache-Control: no-store`. Catalog route availability
-does **not** enable the Timeline UI: the current production build keeps Timeline
-behind a separate release gate and offers Classic as its selectable Library
-view.
+All catalog responses set `Cache-Control: no-store`.
 
 #### GET /catalog/status
 
@@ -362,7 +360,7 @@ malformed or unsupported input, **404** for an unknown artist in an available
 complete catalog, **409** for a revision conflict, and **503** when no Core is
 paired or the requested operation cannot be served safely. `/api/health`
 exposes catalog readiness and degradation as a non-critical diagnostic; it
-never changes Classic controller readiness.
+never changes controller readiness.
 
 ---
 
@@ -462,7 +460,7 @@ Transport command failed
 
 ### Client → Server Commands
 
-Transport commands support optional acknowledgment callbacks. Classic browse
+Transport commands support optional acknowledgment callbacks. Browse-session
 commands require acknowledgments: their correlated response is returned only in
 the acknowledgment, never as a `browse-result` or `search-result` broadcast.
 
@@ -488,7 +486,7 @@ the acknowledgment, never as a `browse-result` or `search-result` broadcast.
 **Payload**: `{ "requestId": "request-id", "tabId": "tab-id" }`
 
 Returns an opaque `{ handleId, generation }` session reference in its mandatory
-acknowledgment. A client must acquire a session before issuing Classic browse
+acknowledgment. A client must acquire a session before issuing browse-session
 commands.
 
 #### classic-session:release
@@ -528,34 +526,7 @@ schema and limits are defined in `src/shared/classicBrowseContracts.ts`.
 
 ---
 
-### Timeline Artist and Album-Detail Browse
-
-Timeline interactive browsing is an origin-bound, keyless protocol. Every
-client command below requires a Socket.IO acknowledgment callback; a command
-without one is ignored so the server cannot create an operation the caller is
-unable to correlate.
-
-| Client → server | Request type | Acknowledgment type | Server follow-up event |
-|---|---|---|---|
-| `timeline-artist:begin` | `TimelineArtistLoadRequest` | `TimelineArtistLoadBeginAck` | `timeline-artist:loaded` or `timeline-artist:failed` |
-| `timeline-detail:begin` | `TimelineAlbumDetailRequest` | `TimelineAlbumDetailBeginAck` | `timeline-detail:loaded` or `timeline-detail:failed` |
-| `timeline-detail:close` | `TimelineAlbumDetailCloseRequest` | `TimelineAlbumDetailCloseAck` | `timeline-detail:closed` or `timeline-detail:close-failed` |
-| `timeline-session:reconnect` | `TimelineSessionReconnectRequest` | `TimelineSessionReconnectAck` | none |
-| `timeline-session:release` | `TimelineSessionReleaseRequest` | `TimelineSessionReleaseAck` | none |
-
-A successful begin/close acknowledgment supplies the correlation data for its
-later event. Session references (`handleId`, `generation`) are opaque,
-socket/tab-owned, and validated during the bounded reconnect transfer; stable
-catalog local IDs identify artists and albums. Roon item keys and Roon
-browse-session keys are never client payloads.
-
-The exact closed request objects, acknowledgment unions, event payloads,
-deadline/correlation rules, error-code enums, and bounds are defined in
-`src/shared/timelineBrowseContracts.ts`. That shared contract file, imported in
-the frontend as `@shared/timelineBrowseContracts`, is authoritative rather than
-an example payload in this document.
-
-### Timeline Album Actions
+### Album Actions
 
 Album actions use a separate two-phase protocol. Resolving current Roon choices
 does not itself execute a transport or queue command.
@@ -567,7 +538,7 @@ does not itself execute a transport or queue command.
 | `album-action:execute` | `AlbumActionExecuteRequest` | `AlbumActionExecuteAck` | none |
 
 All three client commands require acknowledgment callbacks. `begin` binds a
-catalog `albumLocalId`, current `zoneId`, tab, and Timeline generation; a
+catalog `albumLocalId`, current `zoneId`, tab, and browse-session generation; a
 successful resolution event returns bounded choices with opaque `actionId`
 values. `execute` accepts only one such `actionId`—display labels and semantic
 names grant no execution authority. Its acknowledgment distinguishes not
@@ -626,15 +597,14 @@ one file:
 
 - `src/shared/types.ts` — common Core, zone, transport, queue, health,
   favorites, and recently-played API types
-- `src/shared/classicBrowseContracts.ts` — Classic browse session wire contract
+- `src/shared/classicBrowseContracts.ts` — browse-session wire contract (the
+  legacy filename matches the retained `classic-*` protocol identifiers)
 - `src/shared/browseHierarchies.ts` — accepted public browse hierarchy values
 - `src/shared/searchTypes.ts` — shared Roon-to-controller search type mapping
 - `src/shared/recentlyPlayed.ts` — shared recently-played identity and deduplication
   helpers
-- `src/shared/timelineCatalogContracts.ts` — catalog REST descriptors,
-  responses, placement evidence, parsers, and bounds
-- `src/shared/timelineBrowseContracts.ts` — interactive Timeline browse wire
-  contract
-- `src/shared/albumActionContracts.ts` — Timeline album-action wire contract
+- `src/shared/catalogContracts.ts` — catalog REST descriptors, responses,
+  placement evidence, parsers, and bounds
+- `src/shared/albumActionContracts.ts` — album-action wire contract
 
 Frontend code imports these modules through the `@shared/<module>` alias.

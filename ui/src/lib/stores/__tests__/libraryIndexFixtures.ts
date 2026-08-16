@@ -1,5 +1,5 @@
 import type { CatalogIndexResponse } from '@shared/catalogIndexContracts';
-import type { CatalogStatus } from '@shared/timelineCatalogContracts';
+import type { CatalogStatus } from '@shared/catalogContracts';
 
 /**
  * Synthetic library fixtures for scale/responsiveness tests (Unified

@@ -4,6 +4,10 @@ import { AppConfig } from "../config/env";
 import { Logger } from "pino";
 import { createHttpApp } from "./http/app";
 import { attachSocketServer, SocketContext } from "./socket";
+import {
+  loadWorkspaceFeatureLayer,
+  WorkspaceFeatureLayer,
+} from "./workspaceFeatures";
 import { RoonClient } from "../core/roon/RoonClient";
 
 import { TransportService } from "../core/roon/TransportService";
@@ -13,14 +17,15 @@ import { RecentlyPlayedService } from "../core/recently-played/RecentlyPlayedSer
 import { FavoritesService } from "../core/favorites/FavoritesService";
 import { BrowseSessionCoordinator } from "../core/roon/BrowseSessionCoordinator";
 import { PublicSongResolverService } from "../core/roon/PublicSongResolverService";
+import { EditorialItemSessionService } from "../core/roon/EditorialItemSessionService";
 import { PublicSongSelectionRegistry } from "../core/roon/PublicSongSelectionRegistry";
 import { AlbumActionResolver } from "../core/roon/AlbumActionResolver";
 import { AlbumActionService } from "../core/roon/AlbumActionService";
 import {
   LibraryAlbumResolver,
   LibraryAlbumService,
+
 } from "../core/roon/LibraryAlbumService";
-import { TimelineBrowseService } from "../core/roon/TimelineBrowseService";
 import { FileCatalogPersistence } from "../core/catalog/CatalogPersistence";
 import { CatalogService } from "../core/catalog/CatalogService";
 import { CatalogLifecycle } from "./CatalogLifecycle";
@@ -41,9 +46,10 @@ export interface ServerContext {
   readonly recentlyPlayedService: RecentlyPlayedService;
   readonly catalogService: CatalogService;
   readonly libraryFeatures: LibraryFeatureLayer;
+  readonly workspaceFeatures: WorkspaceFeatureLayer;
   readonly albumActionService: AlbumActionService;
   readonly libraryAlbumService: LibraryAlbumService;
-  readonly timelineBrowseService: TimelineBrowseService;
+  readonly editorialItemService: EditorialItemSessionService;
   readonly catalogLifecycle: CatalogLifecycle;
   /**
    * httpServer.listen() is deferred until RecentlyPlayedService.start
@@ -74,18 +80,6 @@ export const startServer = (
   const catalogService = new CatalogService(browseSessionCoordinator, logger, {
     persistence: new FileCatalogPersistence({ directory: config.catalogPath }),
   });
-  const albumActionService = new AlbumActionService(
-    browseSessionCoordinator,
-    catalogService,
-    transportService,
-    new AlbumActionResolver(),
-    logger
-  );
-  const timelineBrowseService = new TimelineBrowseService(
-    browseSessionCoordinator,
-    catalogService,
-    { getCurrentCoreId: () => roonClient.getCoreInfo()?.id ?? null }
-  );
   const publicSongSelectionRegistry = new PublicSongSelectionRegistry();
   // Manual playlist reads ride the public Browse playlist path on a
   // serialized server-driven catalog-lease session. The tail keeps those
@@ -123,6 +117,36 @@ export const startServer = (
     getCoreAddress: () => roonClient.getCoreAddress(),
     runCatalogBrowse,
   });
+  // The optional workspace layer follows the same absence mechanics: a build
+  // without it attaches nothing to any socket and the server serves on.
+  const workspaceFeatures = loadWorkspaceFeatureLayer({
+    logger,
+    getCoreId: () => roonClient.getCoreInfo()?.id ?? null,
+    getCoreAddress: () => roonClient.getCoreAddress(),
+    getZones: () =>
+      transportService.getZones().map((zone) => ({
+        zoneId: zone.zone_id,
+        name: zone.display_name ?? "",
+        outputs: (zone.outputs ?? []).map((output) => ({
+          outputId: output.output_id,
+          name: output.display_name ?? "",
+        })),
+      })),
+    onZonesChanged: (listener) => {
+      transportService.on("zone-updated", listener);
+      transportService.on("zone-removed", listener);
+      return () => {
+        transportService.off("zone-updated", listener);
+        transportService.off("zone-removed", listener);
+      };
+    },
+    onCoreChanged: (listener) => {
+      roonClient.on("core-status", listener);
+      return () => {
+        roonClient.off("core-status", listener);
+      };
+    },
+  });
   const publicSongResolverService = new PublicSongResolverService({
     coordinator: browseSessionCoordinator,
     browseService,
@@ -135,20 +159,42 @@ export const startServer = (
     catalogService,
     new LibraryAlbumResolver(),
     logger,
-    libraryFeatures.albumDetailFallback
-      ? { fallbackResolver: libraryFeatures.albumDetailFallback }
-      : {}
+    {
+      ...(libraryFeatures.albumDetailFallback
+        ? { fallbackResolver: libraryFeatures.albumDetailFallback }
+        : {}),
+      ...(libraryFeatures.albumVersionInventory
+        ? { versionInventory: libraryFeatures.albumVersionInventory }
+        : {}),
+    }
   );
+  const albumActionService = new AlbumActionService(
+    browseSessionCoordinator,
+    libraryAlbumService,
+    transportService,
+    new AlbumActionResolver(),
+    logger
+  );
+  // Editorial item sessions (rich-item plan §5.3). Without the feature
+  // layer's editorial port the service still mounts and acks every open
+  // with an honest FEATURE_UNAVAILABLE — the pages render no editorial
+  // surface at all in that build.
+  const editorialItemService = new EditorialItemSessionService({
+    ...(libraryFeatures.editorialItems
+      ? { port: libraryFeatures.editorialItems }
+      : {}),
+    logger,
+  });
   const catalogLifecycle = new CatalogLifecycle(
     catalogService,
     browseSessionCoordinator,
     logger,
     albumActionService,
-    timelineBrowseService,
     libraryAlbumService,
     // The feature layer refreshes its own snapshot on a schedule; shutting the
     // catalog down stops it, so nothing it armed outlives the process.
-    libraryFeatures
+    libraryFeatures,
+    editorialItemService
   );
   const imageService = new ImageService(
     roonClient,
@@ -211,10 +257,11 @@ export const startServer = (
     browseService,
     albumActionService,
     libraryAlbumService,
-    timelineBrowseService,
+    editorialItemService,
     browseSessionCoordinator,
     publicSongResolverService,
     songRelationships: libraryFeatures.songRelationships,
+    workspaceFeatures,
     logger,
   });
 
@@ -428,9 +475,10 @@ export const startServer = (
     recentlyPlayedService,
     catalogService,
     libraryFeatures,
+    workspaceFeatures,
     albumActionService,
     libraryAlbumService,
-    timelineBrowseService,
+    editorialItemService,
     catalogLifecycle,
     requestShutdown: () => {
       shutdownRequested = true;

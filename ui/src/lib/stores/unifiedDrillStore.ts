@@ -99,11 +99,40 @@ export async function drainDrillAlbums(
 	return collected.slice(0, total).filter((item) => !isActionItem(item));
 }
 
+/**
+ * Re-resolve a persisted semantic target and consume its fresh opaque key
+ * without releasing the Explore-role transaction between those operations.
+ * A key cached by the named-counts view may have been evicted after another
+ * large Explore result (notably the complete Composers list) was published.
+ */
+export async function drainSemanticDrillAlbums(
+	transaction: DrillTransaction,
+	hierarchy: DrillHierarchy,
+	label: string
+): Promise<BrowseItem[] | null> {
+	const root = await transaction.browse({ hierarchy, pageSize: DRILL_PAGE_SIZE });
+	const total = Math.min(root.totalCount ?? root.count, DRILL_MAX_ITEMS);
+	let target = root.items.find((item) => item.title === label && item.itemKey);
+	let offset = root.items.length;
+	while (!target && offset < total) {
+		const page = await transaction.browseLoad({
+			hierarchy,
+			offset,
+			count: Math.min(DRILL_PAGE_SIZE, total - offset)
+		});
+		if (page.items.length === 0) break;
+		target = page.items.find((item) => item.title === label && item.itemKey);
+		offset += page.items.length;
+	}
+	if (!target?.itemKey) return null;
+	return drainDrillAlbums(transaction, hierarchy, target.itemKey);
+}
+
 export interface UnifiedDrillStore extends Readable<UnifiedDrillState> {
 	load(
 		claim: ClassicBrowseSessionClaim,
 		hierarchy: DrillHierarchy,
-		itemKey: string
+		label: string
 	): Promise<void>;
 	reset(): void;
 }
@@ -115,23 +144,24 @@ export function createUnifiedDrillStore(): UnifiedDrillStore {
 	async function load(
 		claim: ClassicBrowseSessionClaim,
 		hierarchy: DrillHierarchy,
-		itemKey: string
+		label: string
 	): Promise<void> {
 		loadToken += 1;
 		const myToken = loadToken;
 		internalStore.set({ ...INITIAL_STATE, loading: true });
 		try {
 			const items = await withClassicBrowseRoleTransaction('classic-explore', claim, (transaction) =>
-				drainDrillAlbums(transaction, hierarchy, itemKey)
+				drainSemanticDrillAlbums(transaction, hierarchy, label)
 			);
 			if (myToken !== loadToken || !classicBrowseSessionClient.isClaimCurrent(claim)) return;
+			const resolvedItems = items ?? [];
 			internalStore.set({
-				albums: items.map((item) => ({
+				albums: resolvedItems.map((item) => ({
 					title: item.title,
 					artist: item.subtitle ?? '',
 					imageKey: item.imageKey ?? null
 				})),
-				totalCount: items.length,
+				totalCount: resolvedItems.length,
 				loading: false,
 				loaded: true,
 				error: null

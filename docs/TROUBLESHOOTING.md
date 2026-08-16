@@ -108,34 +108,18 @@ When you first start the Roon Controller, it will show status: `discovering`. Th
 
 ---
 
-## Timeline Canvas Diagnostics
+## Library Catalog Diagnostics
 
-These checks apply to development or acceptance builds in which Timeline has
-been explicitly enabled. The production build currently keeps Timeline behind
-its release gate.
+### "The artist catalog is not ready yet" or a limited library listing
 
-### "Timeline canvas" is not listed in Controller settings
-
-This is expected in the current production build. Controller settings lists
-only production-available Library views, so **Classic** is the only choice while
-the Timeline release gate is closed.
-
-The catalog REST routes and Timeline Socket.IO handlers may still be present.
-They are backend capabilities, not feature flags, and calling them does not
-enable the Timeline UI. A saved Timeline preference also resolves safely to
-Classic while the gate is closed.
-
-### "The artist catalog is not ready yet"
-
-Timeline uses a controller-owned catalog scoped to the currently paired Core.
-Check its state without caching the result:
+The Library uses a controller-owned catalog scoped to the currently paired
+Core. Check its state without caching the result:
 
 ```bash
 curl http://localhost:3333/api/catalog/status
 ```
 
-- `available: false` with `freshness: "empty"`: use **Scan library** in an
-  enabled Timeline build, or start the same background scan with
+- `available: false` with `freshness: "empty"`: start the background scan with
   `curl -X POST http://localhost:3333/api/catalog/refresh`.
 - `refresh: "running"`: the scan is asynchronous. Wait and poll `/status`;
   repeated refresh requests join the same scan.
@@ -144,7 +128,7 @@ curl http://localhost:3333/api/catalog/status
   library membership.
 - `persistence: "degraded"`: artist loading and refresh are intentionally
   blocked. Check backend logs and make sure the service account can read and
-  write `TIMELINE_CATALOG_PATH` (default `./data/catalog`), then restart after
+  write `CATALOG_PATH` (default `./data/catalog`), then restart after
   correcting the filesystem problem.
 
 A Core change creates a different catalog scope. Wait for the new Core to pair,
@@ -153,9 +137,9 @@ Core to carry over.
 
 ### Album action is unavailable, rejected, or has an unknown outcome
 
-Timeline resolves the actions Roon currently offers for one resolved album and
-one current zone. The Core connection, Timeline session, album resolution, and
-zone must remain current while that happens.
+The Library resolves the actions Roon currently offers for one resolved album
+and one current zone. The Core connection, browse session, album resolution,
+and zone must remain current while that happens.
 
 - Dropping an album on a zone or choosing **Send to…** opens a chooser; it does
   not start playback or alter the queue by itself.
@@ -169,36 +153,12 @@ zone must remain current while that happens.
 - If the album, Core, session, or target zone changed, settle the connection and
   reopen the album's action menu to resolve a fresh set of actions.
 
-### Timeline offers to open something in Classic
+### An album's year is missing
 
-This is a deliberate fallback for Library workflows that remain in Classic,
-including broad search, Favorites, Recently Played, and some album/track
-drill-downs. Confirming the dialog changes the Library view; it does not send a
-playback command. In a build where Timeline is available, use browser **Back**
-or Controller settings to return.
-
-### An album appears under "Undated"
-
-Timeline puts a resolved album on the calendar axis only when the catalog has
-proven original-release-date evidence. An edition or reissue date is not used
-as a substitute. Unresolved albums and albums without that evidence remain
-explicitly **Undated** rather than receiving a guessed year.
-
-Refresh the catalog if the library metadata changed. If the album remains
-Undated after a successful refresh, that is the expected fail-closed placement.
-
-### A moved album returned to the timeline or its placement is unavailable
-
-Manual placement is visual and held only in the current browser tab; it never
-changes release order or catalog chronology. A reload, a different Core or
-artist scope, or a changed catalog model can clear or prune offsets.
-
-- Use the album action menu's **Return to timeline** command to restore its
-  canonical anchor. Dropping it close to that anchor also snaps it back.
-- **Fit** and **Recenter** change the camera, not album placement.
-- If placement is temporarily unavailable, wait for Timeline reconnection or
-  re-resolution to settle, then retry. Reloading the page clears the tab's
-  remaining manual placements.
+The catalog records a year only when it has proven original-release-date
+evidence. An edition or reissue date is not used as a substitute; albums
+without that evidence stay undated rather than receiving a guessed year.
+Refresh the catalog if the library metadata changed.
 
 ---
 
@@ -342,16 +302,10 @@ curl http://localhost:3333/api/core
 
 ## Known Limitations
 
-1. **Timeline availability**: Timeline code and protocols are present, but the
-   current production UI release gate remains closed; Classic is the selectable
-   Library view.
-2. **Queue editing**: Roon's public transport API does not expose remove or
+1. **Queue editing**: Roon's public transport API does not expose remove or
    reorder operations. Queue subscription, play-from-here, shuffle, loop, and
    auto-radio controls are implemented.
-3. **Multi-output volume**: The UI controls the first controllable output in a
+2. **Multi-output volume**: The UI controls the first controllable output in a
    zone. Fixed-volume outputs expose no control; `number`, `db`, and
    `incremental` controls are supported.
-4. **Timeline placement**: Manual album positions are visual, tab-local, and
-   non-authoritative. They do not rewrite catalog chronology and are not durable
-   across a page reload.
 

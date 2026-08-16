@@ -1,3 +1,5 @@
+import { createHash } from "crypto";
+
 import {
   ALBUM_ACTION_LABEL_MAX_LENGTH,
   ALBUM_ACTION_MAX_CHOICES,
@@ -6,11 +8,16 @@ import {
 } from "../../shared/albumActionContracts";
 import {
   AlbumRef,
+  ArtistRef,
   normalizeCatalogText,
-} from "../../shared/timelineCatalogContracts";
+} from "../../shared/catalogContracts";
 import { BrowseItem, BrowseResult } from "../../shared/types";
 import { createCatalogTrackTitleFingerprint } from "../catalog/CatalogReconciliation";
 import { CoordinatedBrowseSession } from "./BrowseSessionCoordinator";
+import {
+  DiscographyResolver,
+  ObservedDiscography,
+} from "./DiscographyResolver";
 
 const MAX_SEARCH_ROWS = 500;
 const MAX_TRACK_ROWS = 500;
@@ -22,6 +29,7 @@ const CONTROL_CHARACTER = /\p{Cc}/u;
 export type AlbumActionResolutionErrorCode =
   | "ALBUM_NOT_FOUND"
   | "ALBUM_AMBIGUOUS"
+  | "ALBUM_CHANGED"
   | "TRACK_NOT_FOUND"
   | "TRACK_MISMATCH"
   | "ACTION_PATH_NOT_FOUND"
@@ -49,10 +57,39 @@ export interface ResolvedAlbumActions {
   readonly actions: readonly ResolvedAlbumAction[];
 }
 
+export interface AlbumActionVersionSource {
+  readonly album: Readonly<AlbumRef>;
+  readonly artist: Readonly<ArtistRef>;
+  readonly detailDigest: string;
+  readonly versionCount: number;
+}
+
+export function createAlbumVersionDetailDigest(
+  title: string,
+  artist: string,
+  orderedTrackTitles: readonly string[]
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        normalizeCatalogText(title),
+        normalizeCatalogText(artist),
+        orderedTrackTitles.map(normalizeCatalogText),
+      ])
+    )
+    .digest("hex");
+}
+
 export interface AlbumActionResolverPort {
   resolve(
     session: CoordinatedBrowseSession,
     album: Readonly<AlbumRef>,
+    zoneId: string,
+    track?: Readonly<AlbumActionTrackSelector>
+  ): Promise<ResolvedAlbumActions>;
+  resolveSelectedVersion(
+    session: CoordinatedBrowseSession,
+    source: Readonly<AlbumActionVersionSource>,
     zoneId: string,
     track?: Readonly<AlbumActionTrackSelector>
   ): Promise<ResolvedAlbumActions>;
@@ -64,6 +101,192 @@ export interface AlbumActionResolverPort {
  * original zone. Ephemeral item keys never leave the returned server object.
  */
 export class AlbumActionResolver implements AlbumActionResolverPort {
+  public constructor(
+    private readonly discographyResolver = new DiscographyResolver()
+  ) {}
+
+  public async resolveSelectedVersion(
+    session: CoordinatedBrowseSession,
+    source: Readonly<AlbumActionVersionSource>,
+    zoneId: string,
+    track?: Readonly<AlbumActionTrackSelector>
+  ): Promise<ResolvedAlbumActions> {
+    const zonedSession = this.zoneBoundSession(session, zoneId);
+    const resolution = await this.discographyResolver.resolve(
+      zonedSession,
+      source.artist
+    );
+    if (resolution.kind !== "resolved") {
+      throw new AlbumActionResolutionError(
+        resolution.kind === "missing" ? "ALBUM_NOT_FOUND" : "ALBUM_AMBIGUOUS",
+        resolution.kind === "missing"
+          ? "The selected album artist is no longer available"
+          : "The selected album artist is no longer unique"
+      );
+    }
+    const discography = await this.discographyResolver.observeCurrent(
+      zonedSession,
+      source.artist
+    );
+    const versionRows = this.versionRows(discography, source);
+    if (versionRows.length !== source.versionCount) {
+      throw new AlbumActionResolutionError(
+        "ALBUM_CHANGED",
+        "The album version set changed"
+      );
+    }
+    const versionKeys = versionRows.map((row) => row.itemKey);
+    let current = discography;
+    let matchingItemKey: string | null = null;
+    let matchingCount = 0;
+    for (let index = 0; index < versionKeys.length; index += 1) {
+      this.assertStableVersionRows(current, source, versionKeys);
+      const detail = await this.readVersionDetail(
+        zonedSession,
+        source,
+        versionKeys[index]
+      );
+      if (detail.digest === source.detailDigest) {
+        matchingItemKey = versionKeys[index];
+        matchingCount += 1;
+      }
+      const parent = await zonedSession.pop({
+        hierarchy: "artists",
+        levels: 1,
+        refresh: false,
+        pageSize: 100,
+      });
+      current = await this.discographyResolver.observeCurrent(
+        zonedSession,
+        source.artist,
+        parent
+      );
+    }
+    if (matchingCount === 0 || !matchingItemKey) {
+      throw new AlbumActionResolutionError(
+        "ALBUM_CHANGED",
+        "The selected album track list changed"
+      );
+    }
+    if (matchingCount !== 1) {
+      throw new AlbumActionResolutionError(
+        "ALBUM_AMBIGUOUS",
+        "The selected album version is not distinguishable for actions"
+      );
+    }
+    this.assertStableVersionRows(current, source, versionKeys);
+    const finalDetail = await this.readVersionDetail(
+      zonedSession,
+      source,
+      matchingItemKey
+    );
+    if (finalDetail.digest !== source.detailDigest) {
+      throw new AlbumActionResolutionError(
+        "ALBUM_CHANGED",
+        "The selected album track list changed during final validation"
+      );
+    }
+
+    const target = track
+      ? this.trackRow(finalDetail.detail, track)
+      : this.playAlbumRow(finalDetail.detail);
+    const leaves = await this.resolveLeaves(
+      zonedSession,
+      zoneId,
+      target,
+      "artists"
+    );
+    return Object.freeze({ actions: Object.freeze(leaves) });
+  }
+
+  private versionRows(
+    discography: Readonly<ObservedDiscography>,
+    source: Readonly<AlbumActionVersionSource>
+  ): ObservedDiscography["liveAlbums"] {
+    return discography.liveAlbums.filter((row) => {
+      const observed = discography.observation.albums[row.observationIndex];
+      return Boolean(
+        observed &&
+          normalizeCatalogText(observed.exactTitle) ===
+            source.album.normalizedTitle &&
+          normalizeCatalogText(observed.exactArtist) ===
+            source.album.normalizedArtist
+      );
+    });
+  }
+
+  private assertStableVersionRows(
+    discography: Readonly<ObservedDiscography>,
+    source: Readonly<AlbumActionVersionSource>,
+    versionKeys: readonly string[]
+  ): void {
+    const rows = this.versionRows(discography, source);
+    const currentKeys = new Set(rows.map((row) => row.itemKey));
+    if (
+      rows.length !== source.versionCount ||
+      currentKeys.size !== versionKeys.length ||
+      versionKeys.some((itemKey) => !currentKeys.has(itemKey))
+    ) {
+      throw new AlbumActionResolutionError(
+        "ALBUM_CHANGED",
+        "The album version set changed during action resolution"
+      );
+    }
+  }
+
+  private async readVersionDetail(
+    session: CoordinatedBrowseSession,
+    source: Readonly<AlbumActionVersionSource>,
+    itemKey: string
+  ): Promise<{ readonly detail: BrowseResult; readonly digest: string }> {
+    const detail = await session.browse({
+      hierarchy: "artists",
+      itemKey,
+      offset: 0,
+      pageSize: MAX_DETAIL_ROWS,
+    });
+    this.assertComplete(detail, MAX_DETAIL_ROWS, "ALBUM_CHANGED");
+    const detailTitle = detail.title ?? "";
+    const detailArtist = detail.subtitle ?? "";
+    if (
+      normalizeCatalogText(detailTitle) !== source.album.normalizedTitle ||
+      normalizeCatalogText(detailArtist) !== source.album.normalizedArtist
+    ) {
+      throw new AlbumActionResolutionError(
+        "ALBUM_CHANGED",
+        "An album version detail header changed"
+      );
+    }
+    const structural = this.structuralRows(detail.items);
+    if (
+      structural.length !== detail.items.length ||
+      new Set(structural.map((item) => item.itemKey)).size !== structural.length
+    ) {
+      throw new AlbumActionResolutionError(
+        "ALBUM_CHANGED",
+        "An album version detail contained invalid rows"
+      );
+    }
+    const tracks = this.trackRows(detail.items);
+    if (
+      tracks.length === 0 ||
+      structural.length - tracks.length > ALBUM_ACTION_MAX_CHOICES
+    ) {
+      throw new AlbumActionResolutionError(
+        "ALBUM_CHANGED",
+        "An album version track list changed"
+      );
+    }
+    return {
+      detail,
+      digest: createAlbumVersionDetailDigest(
+        detailTitle,
+        detailArtist,
+        tracks.map((candidate) => candidate.title)
+      ),
+    };
+  }
+
   public async resolve(
     session: CoordinatedBrowseSession,
     album: Readonly<AlbumRef>,
@@ -181,7 +404,7 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
     const target = track
       ? this.trackRow(detail, track)
       : this.playAlbumRow(detail);
-    const leaves = await this.resolveLeaves(session, zoneId, target);
+    const leaves = await this.resolveLeaves(session, zoneId, target, "search");
     return Object.freeze({ actions: Object.freeze(leaves) });
   }
 
@@ -327,12 +550,13 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
   private async resolveLeaves(
     session: CoordinatedBrowseSession,
     zoneId: string,
-    initial: BrowseItem
+    initial: BrowseItem,
+    hierarchy: "search" | "artists"
   ): Promise<ResolvedAlbumAction[]> {
     let cursor = initial;
     for (let depth = 0; depth < MAX_ACTION_DEPTH; depth += 1) {
       const result = await session.browse({
-        hierarchy: "search",
+        hierarchy,
         zoneId,
         itemKey: cursor.itemKey,
         pageSize: ALBUM_ACTION_MAX_CHOICES + 1,
@@ -366,6 +590,18 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
       "ACTION_PATH_NOT_FOUND",
       "The album action path exceeded its depth bound"
     );
+  }
+
+  private zoneBoundSession(
+    session: CoordinatedBrowseSession,
+    zoneId: string
+  ): CoordinatedBrowseSession {
+    const zoned: CoordinatedBrowseSession = {
+      browse: (options) => session.browse({ ...options, zoneId }),
+      load: (options) => session.load({ ...options, zoneId }),
+      pop: (options) => session.pop({ ...options, zoneId }),
+    };
+    return Object.freeze(zoned);
   }
 
   private normalizeLeaves(leaves: readonly BrowseItem[]): ResolvedAlbumAction[] {

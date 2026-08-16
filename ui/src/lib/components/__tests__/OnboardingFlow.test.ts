@@ -271,3 +271,21 @@ describe('OnboardingFlow — local playback step', () => {
 	});
 });
 
+describe('OnboardingFlow — self-contained palette', () => {
+	it('references no theme tokens: the surface must be readable before a theme exists', async () => {
+		// The scrim and panel are hardcoded dark. Inheriting var(--text) once
+		// painted near-black on black for every first run on a light-mode OS
+		// (the theme initializer follows prefers-color-scheme), making the
+		// pairing screen unreadable. Style-contract check, same technique as
+		// unifiedSurfaceStyleContract.test.ts.
+		const fs = await import('node:fs');
+		const path = await import('node:path');
+		const source = fs.readFileSync(
+			path.resolve(process.cwd(), 'src/lib/components/OnboardingFlow.svelte'),
+			'utf8'
+		);
+		const styleBlock = source.slice(source.indexOf('<style>'));
+		expect(styleBlock).not.toContain('var(--');
+	});
+});
+

@@ -142,6 +142,7 @@
 		readonly title: string;
 		readonly artist: string;
 		readonly imageKey: string | null;
+		readonly versionCount: number;
 		readonly drill?: UnifiedLibraryDrillTarget;
 	}
 
@@ -205,6 +206,7 @@
 		title: entry.title,
 		artist: entry.artist,
 		imageKey: entry.imageKey ?? null,
+		versionCount: entry.versionCount ?? 1,
 		// Albums without a catalog identity stay inert (browse fallback
 		// rows); the sheet needs a stable localId.
 		...(entry.catalogLocalId
@@ -241,7 +243,8 @@
 				key: `rp:${index}:${entry.played_at}`,
 				title: entry.title ?? 'Unknown track',
 				artist: entry.artist ?? '',
-				imageKey: entry.image_key ?? null
+				imageKey: entry.image_key ?? null,
+				versionCount: 1
 			})
 		)
 	);
@@ -343,6 +346,9 @@
 				</div>
 				<div class="tt">{tile.title}</div>
 				<div class="ta">{tile.artist}</div>
+				{#if tile.versionCount > 1}
+					<div class="tv" data-testid="unified-album-version-count">{tile.versionCount} versions</div>
+				{/if}
 			</button>
 		{/each}
 	</div>

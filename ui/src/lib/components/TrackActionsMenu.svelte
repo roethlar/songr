@@ -95,7 +95,7 @@
 		position: fixed;
 		inset: 0;
 		z-index: 60;
-		background: rgba(0, 0, 0, 0.45);
+		background: var(--songr-scrim-soft);
 		display: grid;
 		place-items: center;
 		padding: 1rem;
@@ -103,14 +103,15 @@
 
 	.menu {
 		width: min(320px, 92vw);
-		background: var(--surface);
-		border: 1px solid var(--border);
+		background: var(--songr-panel);
+		color: var(--songr-text);
+		border: 1px solid var(--songr-line);
 		border-radius: 12px;
 		padding: 0.7rem;
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;
-		box-shadow: var(--shadow-soft);
+		box-shadow: 0 16px 42px var(--songr-shadow);
 	}
 
 	.menu-title {
@@ -137,13 +138,13 @@
 		border: none;
 		border-radius: 8px;
 		background: none;
-		color: var(--text);
+		color: var(--songr-text);
 		font-size: 0.9rem;
 		cursor: pointer;
 	}
 
 	.menu-item:hover:not(:disabled) {
-		background: var(--surface-2);
+		background: var(--songr-hover-subtle);
 	}
 
 	.menu-item:disabled {
@@ -152,22 +153,22 @@
 	}
 
 	.menu-divider {
-		border-top: 1px solid var(--border);
+		border-top: 1px solid var(--songr-line-12);
 		margin: 0.3rem 0.2rem;
 	}
 
 	.menu-close {
 		align-self: flex-end;
 		padding: 0.35rem 0.8rem;
-		border: 1px solid var(--border);
+		border: 1px solid var(--songr-line-12);
 		border-radius: 8px;
-		background: var(--surface-2);
-		color: var(--text-soft);
+		background: var(--songr-raise);
+		color: var(--songr-soft);
 		font-size: 0.8rem;
 		cursor: pointer;
 	}
 
 	.menu-close:hover {
-		color: var(--text);
+		color: var(--songr-text);
 	}
 </style>

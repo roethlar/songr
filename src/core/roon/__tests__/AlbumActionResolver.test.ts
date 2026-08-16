@@ -1,10 +1,15 @@
-import { createCatalogTrackTitleFingerprint } from "../../catalog/CatalogReconciliation";
+import {
+  CATALOG_SELECTED_ARTIST_OBSERVATION_SOURCE_CONTRACT,
+  createCatalogTrackTitleFingerprint,
+} from "../../catalog/CatalogReconciliation";
 import {
   AlbumActionResolutionError,
   AlbumActionResolver,
+  createAlbumVersionDetailDigest,
 } from "../AlbumActionResolver";
 import { CoordinatedBrowseSession } from "../BrowseSessionCoordinator";
-import { AlbumRef } from "../../../shared/timelineCatalogContracts";
+import { DiscographyResolver, ObservedDiscography } from "../DiscographyResolver";
+import { AlbumRef, ArtistRef } from "../../../shared/catalogContracts";
 import { BrowseItem, BrowseResult } from "../../../shared/types";
 
 function item(
@@ -95,6 +100,37 @@ function album(trackTitles = ["1. First", "2. Second"]): AlbumRef {
   };
 }
 
+function artist(): ArtistRef {
+  return {
+    localId: "018f0f64-3f31-7a9b-8c2d-8f572cb18a13",
+    coreId: "core-1",
+    exactName: "Artist",
+    normalizedName: "artist",
+    firstSeenAt: "2026-07-14T00:00:00.000Z",
+    lastSeenAt: "2026-07-14T00:00:00.000Z",
+    resolutionStatus: "resolved",
+  };
+}
+
+function observed(itemKeys = ["row-a", "row-b"]): ObservedDiscography {
+  return {
+    observation: {
+      sourceContract: CATALOG_SELECTED_ARTIST_OBSERVATION_SOURCE_CONTRACT,
+      artist: { exactName: "Artist", candidateCount: 1 },
+      discographyComplete: true,
+      albums: itemKeys.map(() => ({
+        exactTitle: "Album",
+        exactArtist: "Artist",
+        editionText: "",
+      })),
+    },
+    liveAlbums: itemKeys.map((itemKey, observationIndex) => ({
+      itemKey,
+      observationIndex,
+    })),
+  };
+}
+
 class ScriptedSession implements CoordinatedBrowseSession {
   public readonly calls: Array<{
     method: "browse" | "load" | "pop";
@@ -128,6 +164,158 @@ class ScriptedSession implements CoordinatedBrowseSession {
 
 describe("AlbumActionResolver", () => {
   const resolver = new AlbumActionResolver();
+
+  function retainedResolver(discography = observed()): AlbumActionResolver {
+    return new AlbumActionResolver({
+      resolve: () =>
+        Promise.resolve({ kind: "resolved", observation: discography.observation }),
+      observeCurrent: () => Promise.resolve(discography),
+    } as unknown as DiscographyResolver);
+  }
+
+  function retainedSource(
+    tracks = ["1. First", "2. Second"],
+    versionCount = 2
+  ) {
+    return {
+      album: album(tracks),
+      artist: artist(),
+      detailDigest: createAlbumVersionDetailDigest("Album", "Artist", tracks),
+      versionCount,
+    };
+  }
+
+  it("matches the selected digest across session-local row keys and resolves its album actions", async () => {
+    const session = new ScriptedSession([
+      detail(["Different"]),
+      result([]),
+      detail(["1. First", "2. Second"]),
+      result([]),
+      detail(["1. First", "2. Second"]),
+      actionLeaves(),
+    ]);
+
+    await expect(
+      retainedResolver().resolveSelectedVersion(
+        session,
+        retainedSource(),
+        "zone-1"
+      )
+    ).resolves.toEqual({
+      actions: [
+        { label: "Play Now", semantic: "play-now", itemKey: "play-now" },
+        { label: "Add Next", semantic: "add-next", itemKey: "add-next" },
+        { label: "Queue", semantic: "queue", itemKey: "queue" },
+      ],
+    });
+    expect(session.calls.map((call) => call.method)).toEqual([
+      "browse",
+      "pop",
+      "browse",
+      "pop",
+      "browse",
+      "browse",
+    ]);
+    expect(session.calls[0]).toMatchObject({
+      method: "browse",
+      options: { hierarchy: "artists", itemKey: "row-a", zoneId: "zone-1" },
+    });
+    expect(session.calls[2]).toMatchObject({
+      method: "browse",
+      options: { hierarchy: "artists", itemKey: "row-b", zoneId: "zone-1" },
+    });
+    expect(session.calls[4]).toMatchObject({
+      method: "browse",
+      options: { hierarchy: "artists", itemKey: "row-b", zoneId: "zone-1" },
+    });
+    expect(session.calls[5]).toMatchObject({
+      options: { hierarchy: "artists", itemKey: "play-album", zoneId: "zone-1" },
+    });
+  });
+
+  it("binds a track action to the exact index and title on the digest-matched row", async () => {
+    const session = new ScriptedSession([
+      detail(["Different"]),
+      result([]),
+      detail(["1. First", "2. Second"]),
+      result([]),
+      detail(["1. First", "2. Second"]),
+      actionLeaves(),
+    ]);
+
+    await retainedResolver().resolveSelectedVersion(
+      session,
+      retainedSource(),
+      "zone-1",
+      { index: 1, title: "2. Second" }
+    );
+    expect(session.calls[5].options.itemKey).toBe("track-1");
+  });
+
+  it("fails when the action session sees a different version set", async () => {
+    const session = new ScriptedSession([]);
+    await expect(
+      retainedResolver(observed(["row-a"])).resolveSelectedVersion(
+        session,
+        retainedSource(),
+        "zone-1"
+      )
+    ).rejects.toMatchObject<Partial<AlbumActionResolutionError>>({
+      code: "ALBUM_CHANGED",
+    });
+    expect(session.calls).toEqual([]);
+  });
+
+  it("fails when no action-session row has the selected digest or the track selector drifts", async () => {
+    await expect(
+      retainedResolver().resolveSelectedVersion(
+        new ScriptedSession([
+          detail(["Changed A"]),
+          result([]),
+          detail(["Changed B"]),
+          result([]),
+        ]),
+        retainedSource(),
+        "zone-1"
+      )
+    ).rejects.toMatchObject<Partial<AlbumActionResolutionError>>({
+      code: "ALBUM_CHANGED",
+    });
+
+    await expect(
+      retainedResolver().resolveSelectedVersion(
+        new ScriptedSession([
+          detail(["Different"]),
+          result([]),
+          detail(["1. First", "2. Second"]),
+          result([]),
+          detail(["1. First", "2. Second"]),
+        ]),
+        retainedSource(),
+        "zone-1",
+        { index: 1, title: "Wrong title" }
+      )
+    ).rejects.toMatchObject<Partial<AlbumActionResolutionError>>({
+      code: "TRACK_MISMATCH",
+    });
+  });
+
+  it("fails instead of choosing the first duplicate when digests are identical", async () => {
+    await expect(
+      retainedResolver().resolveSelectedVersion(
+        new ScriptedSession([
+          detail(["1. First", "2. Second"]),
+          result([]),
+          detail(["1. First", "2. Second"]),
+          result([]),
+        ]),
+        retainedSource(),
+        "zone-1"
+      )
+    ).rejects.toMatchObject<Partial<AlbumActionResolutionError>>({
+      code: "ALBUM_AMBIGUOUS",
+    });
+  });
 
   it("resolves exact fingerprint-bound leaves through the Albums category", async () => {
     const candidate = item("Album", "album-1", { subtitle: "Artist" });

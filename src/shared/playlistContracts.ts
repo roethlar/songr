@@ -1,8 +1,8 @@
-import type { CatalogStatus } from "./timelineCatalogContracts";
+import type { CatalogStatus } from "./catalogContracts";
 import {
   CATALOG_DISPLAY_TEXT_MAX_LENGTH,
   normalizeCatalogStatus,
-} from "./timelineCatalogContracts";
+} from "./catalogContracts";
 import {
   normalizePublicSongRowAuthority,
   type PublicSongRowAuthority,

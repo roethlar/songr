@@ -5,7 +5,6 @@ import {
 	normalizeLibraryPageStateEnvelope,
 	type LibraryPageState
 } from '$lib/libraryPageState';
-import { persistTimelineSessionPageState } from '$lib/timelinePageSessionState';
 
 let pendingSelfAuthoredFingerprint: string | null = null;
 
@@ -13,11 +12,7 @@ function fingerprint(state: LibraryPageState): string {
 	return JSON.stringify(buildLibraryPageStateEnvelope(state));
 }
 
-function writeLibraryPageState(
-	mutation: 'push' | 'replace',
-	state: LibraryPageState,
-	options: { readonly persistTimelineSession?: boolean } = {}
-): boolean {
+function writeLibraryPageState(mutation: 'push' | 'replace', state: LibraryPageState): boolean {
 	const envelope = buildLibraryPageStateEnvelope(state);
 	const current = normalizeLibraryPageStateEnvelope(page.state);
 	if (mutation === 'push' && current && fingerprint(current) === fingerprint(state)) {
@@ -34,24 +29,28 @@ function writeLibraryPageState(
 		pendingSelfAuthoredFingerprint = null;
 		throw reason;
 	}
-	if (state.libraryView === 'timeline' && options.persistTimelineSession !== false) {
-		persistTimelineSessionPageState(state);
-	}
 	return true;
 }
 
-export function pushLibraryPageState(
-	state: LibraryPageState,
-	options?: { readonly persistTimelineSession?: boolean }
-): boolean {
-	return writeLibraryPageState('push', state, options);
+export function pushLibraryPageState(state: LibraryPageState): boolean {
+	return writeLibraryPageState('push', state);
 }
 
-export function replaceLibraryPageState(
-	state: LibraryPageState,
-	options?: { readonly persistTimelineSession?: boolean }
-): boolean {
-	return writeLibraryPageState('replace', state, options);
+export function replaceLibraryPageState(state: LibraryPageState): boolean {
+	return writeLibraryPageState('replace', state);
+}
+
+/**
+ * Arms the same one-shot suppression for a self-initiated history
+ * TRAVERSAL: an in-page Back over an entry the mode pushed calls
+ * `history.back()` while it already shows the destination state, so the
+ * arriving pop must not trigger a teardown restore (ri8-1). A
+ * fingerprint mismatch — entry noise drifted since the push — falls
+ * through to the normal pop path, which restores the same destination
+ * the slow way.
+ */
+export function expectSelfAuthoredLibraryPageState(state: LibraryPageState): void {
+	pendingSelfAuthoredFingerprint = fingerprint(state);
 }
 
 /**

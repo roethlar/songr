@@ -1,11 +1,11 @@
-import type { CatalogStatus } from "./timelineCatalogContracts";
+import type { CatalogStatus } from "./catalogContracts";
 import {
   CATALOG_DISPLAY_TEXT_MAX_LENGTH,
   CATALOG_OPAQUE_TEXT_MAX_LENGTH,
   isCatalogLocalId,
   normalizeCatalogStatus,
   normalizeCatalogText,
-} from "./timelineCatalogContracts";
+} from "./catalogContracts";
 import {
   isPublicSongSelectionId,
   normalizePublicSongRowAuthority,

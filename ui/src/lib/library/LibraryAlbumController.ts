@@ -3,18 +3,40 @@ import {
 	normalizeLibraryAlbumOpenAck,
 	normalizeLibraryAlbumOpenRequest,
 	normalizeLibraryAlbumResolvedEvent,
-	type LibraryAlbumCandidate,
+	normalizeLibraryAlbumSelectAck,
+	normalizeLibraryAlbumSelectRequest,
+	normalizeLibraryAlbumVersionFailedEvent,
+	normalizeLibraryAlbumVersionsEvent,
 	type LibraryAlbumCorrelation,
 	type LibraryAlbumOpenRequest,
-	type LibraryAlbumTrack
+	type LibraryAlbumTrack,
+	type LibraryAlbumVersionSummary
 } from '@shared/libraryAlbumContracts';
 import { emitWithBoundedAck, type BoundedAckSocket } from '$lib/socket/emit';
-import { createSecureTimelineOpaqueId } from '$lib/timeline/secureOpaqueId';
+import { createSecureOpaqueId } from '$lib/secureOpaqueId';
 
-export type LibraryAlbumPhase = 'idle' | 'resolving' | 'resolved' | 'failed' | 'canceled';
+export type LibraryAlbumPhase =
+	| 'idle'
+	| 'opening'
+	| 'versions'
+	| 'loading-detail'
+	| 'details'
+	| 'failed'
+	| 'canceled';
+
+export type LibraryAlbumTab = 'versions' | 'details';
+export type LibraryAlbumVersionPhase = 'idle' | 'loading' | 'loaded' | 'failed';
+
+export type LibraryAlbumVersionState = Omit<LibraryAlbumVersionSummary, 'trackCount'> & {
+	readonly phase: LibraryAlbumVersionPhase;
+	readonly trackCount: number | null;
+	readonly code: string | null;
+	readonly error: string | null;
+};
 
 export interface LibraryAlbumState {
 	readonly phase: LibraryAlbumPhase;
+	readonly activeTab: LibraryAlbumTab;
 	readonly albumLocalId: string | null;
 	readonly generation: number | null;
 	readonly requestId: string | null;
@@ -23,10 +45,10 @@ export interface LibraryAlbumState {
 	readonly resolvingDeadlineAt: number | null;
 	readonly artist: string | null;
 	readonly title: string | null;
+	readonly versions: readonly LibraryAlbumVersionState[];
+	readonly selectedVersionId: string | null;
 	readonly actionsAvailable: boolean;
 	readonly orderedTracks: readonly LibraryAlbumTrack[];
-	/** Present only after an ALBUM_AMBIGUOUS failure; the chooser option set. */
-	readonly candidates: readonly LibraryAlbumCandidate[];
 	readonly code: string | null;
 	readonly error: string | null;
 	readonly transitionedAt: number;
@@ -37,13 +59,15 @@ export interface LibraryAlbumOpenInput {
 	readonly tabId: string;
 	/** Generation from the live unified session claim. */
 	readonly generation: number;
-	/** Chooser retry: resolve exactly this previously offered candidate. */
-	readonly candidate?: LibraryAlbumCandidate;
 }
 
 export type LibraryAlbumOpenResult =
 	| { readonly started: true; readonly requestId: string }
 	| { readonly started: false; readonly reason: 'disposed' | 'invalid' | 'not-connected' };
+
+export type LibraryAlbumSelectResult =
+	| { readonly started: true; readonly versionId: string }
+	| { readonly started: false; readonly reason: 'disposed' | 'invalid' | 'not-ready' };
 
 export interface LibraryAlbumSocket extends BoundedAckSocket {
 	readonly connected: boolean;
@@ -64,16 +88,21 @@ export interface LibraryAlbumControllerDependencies {
 	readonly resolvingTimeoutMs?: number;
 }
 
-interface ActiveAttempt {
+interface ActivePage {
 	readonly request: LibraryAlbumOpenRequest;
 	readonly socket: LibraryAlbumSocket;
-	ackSettled: boolean;
+	openAckSettled: boolean;
 	operationId: string | null;
-	resolvingDeadlineAt: number | null;
+	openDeadlineAt: number | null;
+	selectVersionId: string | null;
+	selectDeadlineAt: number | null;
 	timer: TimerHandle | null;
 	listenersAttached: boolean;
+	readonly versions: (value: unknown) => void;
 	readonly resolved: (value: unknown) => void;
+	readonly versionFailed: (value: unknown) => void;
 	readonly failed: (value: unknown) => void;
+	readonly disconnected: () => void;
 }
 
 const ACK_TIMEOUT_MS = 5_000;
@@ -90,21 +119,23 @@ function frozenTracks(tracks: readonly LibraryAlbumTrack[]): readonly LibraryAlb
 	return Object.freeze(tracks.map((track) => Object.freeze({ ...track })));
 }
 
-function frozenCandidates(
-	candidates: readonly LibraryAlbumCandidate[]
-): readonly LibraryAlbumCandidate[] {
-	return Object.freeze(candidates.map((candidate) => Object.freeze({ ...candidate })));
+function frozenVersions(
+	versions: readonly LibraryAlbumVersionState[]
+): readonly LibraryAlbumVersionState[] {
+	return Object.freeze(versions.map((version) => Object.freeze({ ...version })));
 }
 
-/**
- * DOM-independent client state machine for the single-phase library-album
- * read lease. Listeners attach before the open emit so a fast server can
- * never publish an event into a listener gap. A newer open supersedes the
- * previous attempt locally, mirroring the server's per-tab supersede rule.
- * Server deadline timestamps are correlation evidence only; local bounded
- * timers start at acknowledgment so browser and server clocks never need to
- * agree.
- */
+function initialVersion(summary: LibraryAlbumVersionSummary): LibraryAlbumVersionState {
+	return Object.freeze({
+		...summary,
+		phase: 'idle',
+		trackCount: summary.trackCount ?? null,
+		code: null,
+		error: null
+	});
+}
+
+/** DOM-independent retained album-page client state machine. */
 export class LibraryAlbumController {
 	readonly #getSocket: () => LibraryAlbumSocket | null;
 	readonly #createRequestId: () => string;
@@ -115,13 +146,12 @@ export class LibraryAlbumController {
 	readonly #resolvingTimeoutMs: number;
 	readonly #subscribers = new Set<(state: LibraryAlbumState) => void>();
 	#state: LibraryAlbumState;
-	#attempt: ActiveAttempt | null = null;
+	#page: ActivePage | null = null;
 	#disposed = false;
 
 	public constructor(dependencies: LibraryAlbumControllerDependencies) {
 		this.#getSocket = dependencies.getSocket;
-		this.#createRequestId =
-			dependencies.createRequestId ?? (() => createSecureTimelineOpaqueId());
+		this.#createRequestId = dependencies.createRequestId ?? (() => createSecureOpaqueId());
 		this.#now = dependencies.now ?? Date.now;
 		this.#setTimer =
 			dependencies.setTimer ?? ((callback, milliseconds) => setTimeout(callback, milliseconds));
@@ -140,9 +170,7 @@ export class LibraryAlbumController {
 	public subscribe(run: (state: LibraryAlbumState) => void): () => void {
 		this.#subscribers.add(run);
 		run(this.#state);
-		return () => {
-			this.#subscribers.delete(run);
-		};
+		return () => this.#subscribers.delete(run);
 	}
 
 	public snapshot(): LibraryAlbumState {
@@ -156,58 +184,117 @@ export class LibraryAlbumController {
 			requestId,
 			tabId: input.tabId,
 			albumLocalId: input.albumLocalId,
-			generation: input.generation,
-			...(input.candidate ? { candidate: { ...input.candidate } } : {})
+			generation: input.generation
 		});
 		if (!request) return { started: false, reason: 'invalid' };
 		const socket = this.#getSocket();
 		if (!socket || !socket.connected) return { started: false, reason: 'not-connected' };
 
-		// A newer open supersedes the previous attempt, mirroring the server.
-		this.#retireAttempt(true);
-
-		const attempt: ActiveAttempt = {
+		this.#retirePage(true);
+		const page: ActivePage = {
 			request,
 			socket,
-			ackSettled: false,
+			openAckSettled: false,
 			operationId: null,
-			resolvingDeadlineAt: null,
+			openDeadlineAt: null,
+			selectVersionId: null,
+			selectDeadlineAt: null,
 			timer: null,
 			listenersAttached: false,
-			resolved: (value: unknown) => this.#handleResolved(attempt, value),
-			failed: (value: unknown) => this.#handleFailed(attempt, value)
+			versions: (value) => this.#handleVersions(page, value),
+			resolved: (value) => this.#handleResolved(page, value),
+			versionFailed: (value) => this.#handleVersionFailed(page, value),
+			failed: (value) => this.#handleFailed(page, value),
+			disconnected: () => this.#handleDisconnect(page)
 		};
-		this.#attempt = attempt;
-		// Listeners attach before the emit so acceptance can never race a
-		// resolution event into a listener gap.
-		this.#attachListeners(attempt);
+		this.#page = page;
+		this.#attachListeners(page);
 		this.#publish({
 			...this.#idleState(),
-			phase: 'resolving',
+			phase: 'opening',
 			albumLocalId: request.albumLocalId,
 			generation: request.generation,
 			requestId: request.requestId
 		});
-		this.#armTimer(attempt, this.#ackTimeoutMs, () => this.#handleAckTimeout(attempt));
+		this.#armTimer(page, this.#ackTimeoutMs, () => this.#handleOpenAckTimeout(page));
 		try {
 			emitWithBoundedAck(socket, 'library-album:open', request, this.#ackTimeoutMs, (result) =>
-				this.#handleOpenAck(attempt, result.acknowledged ? result.value : null)
+				this.#handleOpenAck(page, result.acknowledged ? result.value : null)
 			);
 		} catch {
-			this.#failAttempt(attempt, 'OPEN_FAILED', 'The album read request could not be sent');
-			return { started: true, requestId };
+			this.#failPage(page, 'OPEN_FAILED', 'The album page request could not be sent');
 		}
 		return { started: true, requestId };
 	}
 
-	/** Cancels the active read, notifying the server best-effort. */
+	public select(versionId: string): LibraryAlbumSelectResult {
+		if (this.#disposed) return { started: false, reason: 'disposed' };
+		const page = this.#page;
+		if (
+			!page ||
+			page.operationId === null ||
+			!this.#state.versions.some((version) => version.versionId === versionId)
+		) {
+			return { started: false, reason: 'not-ready' };
+		}
+		const request = normalizeLibraryAlbumSelectRequest({
+			operationId: page.operationId,
+			versionId
+		});
+		if (!request) return { started: false, reason: 'invalid' };
+
+		page.selectVersionId = versionId;
+		page.selectDeadlineAt = null;
+		this.#publish({
+			...this.#state,
+			phase: 'loading-detail',
+			activeTab: 'details',
+			selectedVersionId: versionId,
+			actionsAvailable: false,
+			orderedTracks: Object.freeze([]) as readonly LibraryAlbumTrack[],
+			versions: this.#updateVersion(versionId, {
+				phase: 'loading',
+				code: null,
+				error: null
+			}),
+			code: null,
+			error: null,
+			transitionedAt: this.#now()
+		});
+		this.#armTimer(page, this.#ackTimeoutMs, () => this.#handleSelectAckTimeout(page, versionId));
+		try {
+			emitWithBoundedAck(
+				page.socket,
+				'library-album:select',
+				request,
+				this.#ackTimeoutMs,
+				(result) =>
+					this.#handleSelectAck(page, versionId, result.acknowledged ? result.value : null)
+			);
+		} catch {
+			this.#failVersion(page, versionId, 'SELECT_FAILED', 'The album version request could not be sent');
+		}
+		return { started: true, versionId };
+	}
+
+	public showVersions(): void {
+		if (!this.#page || this.#state.phase === 'opening') return;
+		this.#publish({ ...this.#state, activeTab: 'versions', transitionedAt: this.#now() });
+	}
+
+	public showDetails(): void {
+		if (!this.#page || !this.#state.selectedVersionId) return;
+		this.#publish({ ...this.#state, activeTab: 'details', transitionedAt: this.#now() });
+	}
+
+	/** Closes the active page, notifying the server best-effort. */
 	public cancel(): void {
-		const attempt = this.#attempt;
-		if (!attempt) return;
-		this.#emitCancel(attempt);
-		this.#detachListeners(attempt);
-		this.#clearAttemptTimer(attempt);
-		this.#attempt = null;
+		const page = this.#page;
+		if (!page) return;
+		this.#emitCancel(page);
+		this.#detachListeners(page);
+		this.#clearPageTimer(page);
+		this.#page = null;
 		this.#publish({
 			...this.#state,
 			phase: 'canceled',
@@ -217,23 +304,22 @@ export class LibraryAlbumController {
 		});
 	}
 
-	/** Resets a terminal state back to idle. No-op while a read is active. */
 	public reset(): void {
-		if (this.#attempt || this.#disposed) return;
-		if (this.#state.phase === 'idle') return;
+		if (this.#page || this.#disposed || this.#state.phase === 'idle') return;
 		this.#publish(this.#idleState());
 	}
 
 	public dispose(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
-		this.#retireAttempt(true);
+		this.#retirePage(true);
 		this.#subscribers.clear();
 	}
 
 	#idleState(): LibraryAlbumState {
 		return Object.freeze({
 			phase: 'idle' as const,
+			activeTab: 'details' as const,
 			albumLocalId: null,
 			generation: null,
 			requestId: null,
@@ -241,9 +327,10 @@ export class LibraryAlbumController {
 			resolvingDeadlineAt: null,
 			artist: null,
 			title: null,
+			versions: Object.freeze([]) as readonly LibraryAlbumVersionState[],
+			selectedVersionId: null,
 			actionsAvailable: false,
 			orderedTracks: Object.freeze([]) as readonly LibraryAlbumTrack[],
-			candidates: Object.freeze([]) as readonly LibraryAlbumCandidate[],
 			code: null,
 			error: null,
 			transitionedAt: this.#now()
@@ -261,173 +348,265 @@ export class LibraryAlbumController {
 		}
 	}
 
-	#retireAttempt(emitCancel: boolean): void {
-		const attempt = this.#attempt;
-		if (!attempt) return;
-		if (emitCancel) this.#emitCancel(attempt);
-		this.#detachListeners(attempt);
-		this.#clearAttemptTimer(attempt);
-		this.#attempt = null;
+	#updateVersion(
+		versionId: string,
+		patch: Partial<LibraryAlbumVersionState>
+	): readonly LibraryAlbumVersionState[] {
+		return frozenVersions(
+			this.#state.versions.map((version) =>
+				version.versionId === versionId ? { ...version, ...patch } : version
+			)
+		);
 	}
 
-	#emitCancel(attempt: ActiveAttempt): void {
+	#retirePage(emitCancel: boolean): void {
+		const page = this.#page;
+		if (!page) return;
+		if (emitCancel) this.#emitCancel(page);
+		this.#detachListeners(page);
+		this.#clearPageTimer(page);
+		this.#page = null;
+	}
+
+	#emitCancel(page: ActivePage): void {
 		try {
-			attempt.socket.emit(
+			page.socket.emit(
 				'library-album:cancel',
-				attempt.operationId
-					? { operationId: attempt.operationId }
-					: { requestId: attempt.request.requestId }
+				page.operationId ? { operationId: page.operationId } : { requestId: page.request.requestId }
 			);
 		} catch {
-			// Best-effort: the server's own TTL retires unreachable operations.
+			// Best-effort: the server also retires on disconnect and Core loss.
 		}
 	}
 
-	#attachListeners(attempt: ActiveAttempt): void {
-		if (attempt.listenersAttached) return;
-		attempt.socket.on('library-album:resolved', attempt.resolved);
-		attempt.socket.on('library-album:failed', attempt.failed);
-		attempt.listenersAttached = true;
+	#attachListeners(page: ActivePage): void {
+		if (page.listenersAttached) return;
+		page.socket.on('library-album:versions', page.versions);
+		page.socket.on('library-album:resolved', page.resolved);
+		page.socket.on('library-album:version-failed', page.versionFailed);
+		page.socket.on('library-album:failed', page.failed);
+		page.socket.on('disconnect', page.disconnected);
+		page.listenersAttached = true;
 	}
 
-	#detachListeners(attempt: ActiveAttempt): void {
-		if (!attempt.listenersAttached) return;
-		attempt.socket.off('library-album:resolved', attempt.resolved);
-		attempt.socket.off('library-album:failed', attempt.failed);
-		attempt.listenersAttached = false;
+	#detachListeners(page: ActivePage): void {
+		if (!page.listenersAttached) return;
+		page.socket.off('library-album:versions', page.versions);
+		page.socket.off('library-album:resolved', page.resolved);
+		page.socket.off('library-album:version-failed', page.versionFailed);
+		page.socket.off('library-album:failed', page.failed);
+		page.socket.off('disconnect', page.disconnected);
+		page.listenersAttached = false;
 	}
 
-	#armTimer(attempt: ActiveAttempt, milliseconds: number, expire: () => void): void {
-		this.#clearAttemptTimer(attempt);
-		attempt.timer = this.#setTimer(expire, milliseconds);
+	#armTimer(page: ActivePage, milliseconds: number, expire: () => void): void {
+		this.#clearPageTimer(page);
+		page.timer = this.#setTimer(expire, milliseconds);
 	}
 
-	#clearAttemptTimer(attempt: ActiveAttempt): void {
-		if (attempt.timer !== null) this.#clearTimer(attempt.timer);
-		attempt.timer = null;
+	#clearPageTimer(page: ActivePage): void {
+		if (page.timer !== null) this.#clearTimer(page.timer);
+		page.timer = null;
 	}
 
-	#handleOpenAck(attempt: ActiveAttempt, value: unknown): void {
-		if (this.#attempt !== attempt || attempt.ackSettled) {
-			// A superseded attempt whose open still landed must not leak its
-			// server-side lease.
-			this.#cancelLateAcceptance(attempt, value);
+	#handleOpenAck(page: ActivePage, value: unknown): void {
+		if (this.#page !== page || page.openAckSettled) {
+			this.#cancelLateAcceptance(page, value);
 			return;
 		}
-		attempt.ackSettled = true;
-		const ack = normalizeLibraryAlbumOpenAck(value, attempt.request.requestId);
+		page.openAckSettled = true;
+		const ack = normalizeLibraryAlbumOpenAck(value, page.request.requestId);
 		if (!ack) {
-			this.#failAttempt(attempt, 'OPEN_FAILED', 'The album read was not acknowledged');
+			this.#failPage(page, 'OPEN_FAILED', 'The album page was not acknowledged');
 			return;
 		}
 		if (!ack.success) {
-			this.#failAttempt(attempt, ack.code, ack.error);
+			this.#failPage(page, ack.code, ack.error);
 			return;
 		}
-		attempt.operationId = ack.data.operationId;
-		attempt.resolvingDeadlineAt = ack.data.resolvingDeadlineAt;
+		page.operationId = ack.data.operationId;
+		page.openDeadlineAt = ack.data.resolvingDeadlineAt;
 		this.#publish({
 			...this.#state,
 			operationId: ack.data.operationId,
 			resolvingDeadlineAt: ack.data.resolvingDeadlineAt,
 			transitionedAt: this.#now()
 		});
-		this.#armTimer(attempt, this.#resolvingTimeoutMs, () =>
-			this.#handleResolvingTimeout(attempt)
+		this.#armTimer(page, this.#resolvingTimeoutMs, () =>
+			this.#failPage(page, 'RESOLUTION_TIMEOUT', 'The album page did not open in time')
 		);
 	}
 
-	#cancelLateAcceptance(attempt: ActiveAttempt, value: unknown): void {
-		const ack = normalizeLibraryAlbumOpenAck(value, attempt.request.requestId);
-		if (ack?.success) {
-			try {
-				attempt.socket.emit('library-album:cancel', {
-					operationId: ack.data.operationId
-				});
-			} catch {
-				// Best-effort: the server's own TTL retires the lease.
-			}
+	#cancelLateAcceptance(page: ActivePage, value: unknown): void {
+		const ack = normalizeLibraryAlbumOpenAck(value, page.request.requestId);
+		if (!ack?.success) return;
+		try {
+			page.socket.emit('library-album:cancel', { operationId: ack.data.operationId });
+		} catch {
+			// Best-effort.
 		}
 	}
 
-	#correlation(attempt: ActiveAttempt): LibraryAlbumCorrelation | null {
-		if (attempt.operationId === null || attempt.resolvingDeadlineAt === null) return null;
+	#openCorrelation(page: ActivePage): LibraryAlbumCorrelation | null {
+		if (page.operationId === null || page.openDeadlineAt === null) return null;
 		return {
-			requestId: attempt.request.requestId,
-			operationId: attempt.operationId,
-			generation: attempt.request.generation,
-			resolvingDeadlineAt: attempt.resolvingDeadlineAt
+			requestId: page.request.requestId,
+			operationId: page.operationId,
+			generation: page.request.generation,
+			resolvingDeadlineAt: page.openDeadlineAt
 		};
 	}
 
-	#handleResolved(attempt: ActiveAttempt, value: unknown): void {
-		if (this.#attempt !== attempt) return;
-		const expected = this.#correlation(attempt);
+	#selectCorrelation(page: ActivePage): LibraryAlbumCorrelation | null {
+		if (page.operationId === null || page.selectDeadlineAt === null) return null;
+		return {
+			requestId: page.request.requestId,
+			operationId: page.operationId,
+			generation: page.request.generation,
+			resolvingDeadlineAt: page.selectDeadlineAt
+		};
+	}
+
+	#handleVersions(page: ActivePage, value: unknown): void {
+		if (this.#page !== page) return;
+		const expected = this.#openCorrelation(page);
 		if (!expected) return;
-		const event = normalizeLibraryAlbumResolvedEvent(value, expected);
+		const event = normalizeLibraryAlbumVersionsEvent(value, expected);
 		if (!event) return;
-		this.#detachListeners(attempt);
-		this.#clearAttemptTimer(attempt);
-		this.#attempt = null;
+		this.#clearPageTimer(page);
+		const versions = frozenVersions(event.versions.map(initialVersion));
 		this.#publish({
 			...this.#state,
-			phase: 'resolved',
+			phase: 'versions',
+			activeTab: versions.length === 1 ? 'details' : 'versions',
 			artist: event.artist,
 			title: event.title,
-			actionsAvailable: event.actionsAvailable,
-			orderedTracks: frozenTracks(event.orderedTracks),
-			candidates: Object.freeze([]) as readonly LibraryAlbumCandidate[],
+			versions,
+			selectedVersionId: null,
 			code: null,
 			error: null,
 			transitionedAt: this.#now()
 		});
+		if (versions.length === 1) this.select(versions[0].versionId);
 	}
 
-	#handleFailed(attempt: ActiveAttempt, value: unknown): void {
-		if (this.#attempt !== attempt) return;
-		const expected = this.#correlation(attempt);
-		if (!expected) return;
-		const event = normalizeLibraryAlbumFailedEvent(value, expected);
-		if (!event) return;
-		this.#detachListeners(attempt);
-		this.#clearAttemptTimer(attempt);
-		this.#attempt = null;
+	#handleSelectAck(page: ActivePage, versionId: string, value: unknown): void {
+		if (this.#page !== page || page.selectVersionId !== versionId) return;
+		const ack = normalizeLibraryAlbumSelectAck(value, {
+			operationId: page.operationId ?? '',
+			versionId
+		});
+		if (!ack) {
+			this.#failVersion(page, versionId, 'SELECT_FAILED', 'The album version was not acknowledged');
+			return;
+		}
+		if (!ack.success) {
+			if (ack.code === 'SESSION_LOST') {
+				this.#failPage(page, ack.code, ack.error);
+			} else {
+				this.#failVersion(page, versionId, ack.code, ack.error);
+			}
+			return;
+		}
+		page.selectDeadlineAt = ack.data.resolvingDeadlineAt;
 		this.#publish({
 			...this.#state,
-			phase: event.code === 'CANCELED' ? 'canceled' : 'failed',
-			candidates: event.candidates
-				? frozenCandidates(event.candidates)
-				: (Object.freeze([]) as readonly LibraryAlbumCandidate[]),
-			code: event.code,
-			error: event.error,
+			resolvingDeadlineAt: ack.data.resolvingDeadlineAt,
+			transitionedAt: this.#now()
+		});
+		this.#armTimer(page, this.#resolvingTimeoutMs, () =>
+			this.#failVersion(page, versionId, 'RESOLUTION_TIMEOUT', 'The album version did not load in time')
+		);
+	}
+
+	#handleResolved(page: ActivePage, value: unknown): void {
+		if (this.#page !== page) return;
+		const expected = this.#selectCorrelation(page);
+		if (!expected) return;
+		const event = normalizeLibraryAlbumResolvedEvent(value, expected);
+		if (!event || event.versionId !== page.selectVersionId) return;
+		const tracks = frozenTracks(event.orderedTracks);
+		page.selectVersionId = null;
+		page.selectDeadlineAt = null;
+		this.#clearPageTimer(page);
+		this.#publish({
+			...this.#state,
+			phase: 'details',
+			activeTab: 'details',
+			selectedVersionId: event.versionId,
+			actionsAvailable: event.actionsAvailable,
+			orderedTracks: tracks,
+			versions: this.#updateVersion(event.versionId, {
+				...event.versionSummary,
+				phase: 'loaded',
+				trackCount: tracks.length,
+				code: null,
+				error: null
+			}),
 			transitionedAt: this.#now()
 		});
 	}
 
-	#handleAckTimeout(attempt: ActiveAttempt): void {
-		if (this.#attempt !== attempt || attempt.ackSettled) return;
-		attempt.ackSettled = true;
-		this.#failAttempt(attempt, 'OPEN_FAILED', 'The album read was not acknowledged in time');
+	#handleVersionFailed(page: ActivePage, value: unknown): void {
+		if (this.#page !== page || !page.selectVersionId) return;
+		const expected = this.#selectCorrelation(page);
+		if (!expected) return;
+		const event = normalizeLibraryAlbumVersionFailedEvent(value, {
+			...expected,
+			versionId: page.selectVersionId
+		});
+		if (!event) return;
+		this.#failVersion(page, event.versionId, event.code, event.error);
 	}
 
-	#handleResolvingTimeout(attempt: ActiveAttempt): void {
-		if (this.#attempt !== attempt) return;
-		this.#emitCancel(attempt);
-		this.#failAttempt(
-			attempt,
-			'RESOLUTION_TIMEOUT',
-			'The album read did not resolve in time'
-		);
+	#handleFailed(page: ActivePage, value: unknown): void {
+		if (this.#page !== page) return;
+		const expected = this.#openCorrelation(page);
+		if (!expected) return;
+		const event = normalizeLibraryAlbumFailedEvent(value, expected);
+		if (!event) return;
+		this.#failPage(page, event.code, event.error, event.code === 'CANCELED');
 	}
 
-	#failAttempt(attempt: ActiveAttempt, code: string, error: string): void {
-		if (this.#attempt !== attempt) return;
-		this.#detachListeners(attempt);
-		this.#clearAttemptTimer(attempt);
-		this.#attempt = null;
+	#handleDisconnect(page: ActivePage): void {
+		this.#failPage(page, 'SESSION_LOST', 'The album page connection was lost');
+	}
+
+	#handleOpenAckTimeout(page: ActivePage): void {
+		if (this.#page !== page || page.openAckSettled) return;
+		page.openAckSettled = true;
+		this.#failPage(page, 'OPEN_FAILED', 'The album page was not acknowledged in time');
+	}
+
+	#handleSelectAckTimeout(page: ActivePage, versionId: string): void {
+		if (this.#page !== page || page.selectVersionId !== versionId) return;
+		this.#failVersion(page, versionId, 'SELECT_FAILED', 'The album version was not acknowledged in time');
+	}
+
+	#failVersion(page: ActivePage, versionId: string, code: string, error: string): void {
+		if (this.#page !== page) return;
+		page.selectVersionId = null;
+		page.selectDeadlineAt = null;
+		this.#clearPageTimer(page);
 		this.#publish({
 			...this.#state,
-			phase: 'failed',
+			phase: 'versions',
+			activeTab: 'versions',
+			versions: this.#updateVersion(versionId, { phase: 'failed', code, error }),
+			code,
+			error,
+			transitionedAt: this.#now()
+		});
+	}
+
+	#failPage(page: ActivePage, code: string, error: string, canceled = false): void {
+		if (this.#page !== page) return;
+		this.#detachListeners(page);
+		this.#clearPageTimer(page);
+		this.#page = null;
+		this.#publish({
+			...this.#state,
+			phase: canceled ? 'canceled' : 'failed',
 			code,
 			error,
 			transitionedAt: this.#now()

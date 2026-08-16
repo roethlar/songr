@@ -27,7 +27,11 @@ import type { Logger } from "pino";
 import type { AppConfig } from "../config/env";
 import type { CatalogService, CatalogSnapshot } from "../core/catalog/CatalogService";
 import type { CoordinatedBrowseSession } from "../core/roon/BrowseSessionCoordinator";
-import type { LibraryAlbumFallbackResolverPort } from "../core/roon/LibraryAlbumService";
+import type {
+  LibraryAlbumFallbackResolverPort,
+  LibraryAlbumVersionInventoryPort,
+} from "../core/roon/LibraryAlbumService";
+import type { EditorialItemReadPort } from "../core/roon/EditorialItemSessionService";
 import type {
   PublicSongSourceVerifier,
 } from "../core/roon/PublicSongResolverService";
@@ -370,6 +374,17 @@ export interface SongRelationshipFeaturePort {
   ): Promise<UnifiedSongRelationship>;
 }
 
+/**
+ * Editorial item reads (rich-item plan §5.3): product-language input (a
+ * browser-safe public anchor or a server-held follow key) and output (the
+ * §5.4 browser-safe view plus server-held follow keys). Declared as the
+ * session service's port type so the contract lives with its lifecycle
+ * rules; re-exported here as the feature layer's named surface. Absence is
+ * the port simply not being present on the layer — the session service
+ * then acks FEATURE_UNAVAILABLE and the page renders no editorial surface.
+ */
+export type EditorialItemFeaturePort = EditorialItemReadPort;
+
 // ---------------------------------------------------------------------------
 // The layer and its host
 // ---------------------------------------------------------------------------
@@ -398,6 +413,8 @@ export interface LibraryFeatureLayer {
   readonly playlistWrites?: PlaylistWritesFeaturePort;
   readonly focusPlaylists?: FocusPlaylistFeaturePort;
   readonly albumDetailFallback?: LibraryAlbumFallbackResolverPort;
+  readonly albumVersionInventory?: LibraryAlbumVersionInventoryPort;
+  readonly editorialItems?: EditorialItemFeaturePort;
 }
 
 /** Runs one unit of work on a serialized server-driven browse lease. */

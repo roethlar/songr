@@ -27,7 +27,7 @@ import {
   normalizeCatalogArtistSearchResponse,
   normalizeCatalogRefreshAcceptedResponse,
   normalizeCatalogStatus,
-} from "../../../../shared/timelineCatalogContracts";
+} from "../../../../shared/catalogContracts";
 import {
   normalizeCatalogIndexResponse,
 } from "../../../../shared/catalogIndexContracts";

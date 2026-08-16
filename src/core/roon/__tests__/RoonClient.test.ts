@@ -9,13 +9,24 @@ import { Logger } from "pino";
 // no-op stub here — start() must not try to discover/network during a
 // unit test.
 let capturedOptions: any = null;
+interface MockRoonApiInstance {
+  init_services: jest.Mock;
+  start_discovery: jest.Mock;
+  stop_discovery: jest.Mock;
+  disconnect_all: jest.Mock;
+}
+const mockRoonInstances: MockRoonApiInstance[] = [];
 jest.mock("node-roon-api", () => {
   return jest.fn().mockImplementation((opts: unknown) => {
     capturedOptions = opts;
-    return {
+    const instance: MockRoonApiInstance = {
       init_services: jest.fn(),
       start_discovery: jest.fn(),
+      stop_discovery: jest.fn(),
+      disconnect_all: jest.fn(),
     };
+    mockRoonInstances.push(instance);
+    return instance;
   });
 });
 jest.mock("node-roon-api-transport", () => ({}));
@@ -40,6 +51,7 @@ async function makeTokenPath(): Promise<string> {
 
 beforeEach(() => {
   capturedOptions = null;
+  mockRoonInstances.length = 0;
   jest.clearAllMocks();
 });
 
@@ -86,7 +98,7 @@ describe("RoonClient — persisted-state callbacks", () => {
     capturedOptions.set_persisted_state(state);
 
     const onDisk = JSON.parse(fs.readFileSync(tokenPath, "utf-8"));
-    expect(onDisk).toEqual(state);
+    expect(onDisk).toEqual({ ...state, songr_ever_paired: true });
     expect(fs.existsSync(`${tokenPath}.tmp`)).toBe(false);
     // 0o600 — the token grants Roon control identity.
     const mode = fs.statSync(tokenPath).mode & 0o777;
@@ -148,6 +160,19 @@ describe("RoonClient — hasEverPaired", () => {
     expect(client.hasEverPaired()).toBe(true);
   });
 
+  it("stays true from the Songr marker while a new Core awaits authorization", async () => {
+    const tokenPath = await makeTokenPath();
+    await fsp.mkdir(path.dirname(tokenPath), { recursive: true });
+    await fsp.writeFile(
+      tokenPath,
+      JSON.stringify({ songr_ever_paired: true, tokens: {} }),
+      "utf-8"
+    );
+
+    const client = new RoonClient({ tokenPath, logger: stubLogger });
+    expect(client.hasEverPaired()).toBe(true);
+  });
+
   it("is false for placeholder state — empty id, empty tokens map, corrupt file", async () => {
     const emptyish = await makeTokenPath();
     await fsp.mkdir(path.dirname(emptyish), { recursive: true });
@@ -183,6 +208,135 @@ describe("RoonClient — hasEverPaired", () => {
 
     expect(client.hasEverPaired()).toBe(true);
     expect(fs.existsSync(tokenPath)).toBe(false);
+  });
+});
+
+describe("RoonClient — switch Core", () => {
+  function pairedCore(id: string, services: Record<string, unknown> = {}): unknown {
+    return {
+      core_id: id,
+      display_name: id === "core-a" ? "Core A" : "Core B",
+      display_version: "2.0",
+      moo: { transport: { host: "10.0.0.5" } },
+      services,
+    };
+  }
+
+  it("retires the current API, preserves unrelated tokens, and fences stale callbacks", async () => {
+    const tokenPath = await makeTokenPath();
+    await fsp.writeFile(
+      tokenPath,
+      JSON.stringify({
+        paired_core_id: "core-a",
+        tokens: { "core-a": "token-a", "core-b": "token-b" },
+        retained: "value",
+      }),
+      "utf-8"
+    );
+    const client = new RoonClient({ tokenPath, logger: stubLogger });
+    const statuses: string[] = [];
+    client.on("core-status", ({ coreStatus }) => statuses.push(coreStatus));
+    client.start();
+    const firstOptions = capturedOptions;
+    const firstApi = mockRoonInstances[0];
+    const transport = { transport: true };
+    firstOptions.core_paired(
+      pairedCore("core-a", {
+        RoonApiTransport: transport,
+        RoonApiBrowse: { browse: true },
+        RoonApiImage: { image: true },
+      })
+    );
+
+    expect(client.switchCore()).toBe(true);
+
+    expect(firstApi.stop_discovery).toHaveBeenCalledTimes(1);
+    expect(firstApi.disconnect_all).toHaveBeenCalledTimes(1);
+    expect(mockRoonInstances).toHaveLength(2);
+    expect(mockRoonInstances[1].start_discovery).toHaveBeenCalledTimes(1);
+    expect(statuses.slice(-2)).toEqual(["unpaired", "discovering"]);
+    expect(client.getCoreStatus()).toBe("discovering");
+    expect(client.getCoreInfo()).toBeNull();
+    expect(client.getTransport()).toBeNull();
+    expect(client.getBrowse()).toBeNull();
+    expect(client.getImage()).toBeNull();
+    expect(JSON.parse(await fsp.readFile(tokenPath, "utf-8"))).toEqual({
+      tokens: { "core-b": "token-b" },
+      retained: "value",
+      songr_ever_paired: true,
+    });
+
+    // The retired instance can close or report a late pair after the switch;
+    // neither callback may reclaim live Core/service authority.
+    firstOptions.core_paired(pairedCore("core-a", { RoonApiTransport: transport }));
+    firstOptions.core_unpaired();
+    expect(client.getCoreStatus()).toBe("discovering");
+    expect(client.getCoreInfo()).toBeNull();
+    firstOptions.set_persisted_state({
+      paired_core_id: "core-a",
+      tokens: { "core-a": "late-token-a" },
+    });
+    expect(JSON.parse(await fsp.readFile(tokenPath, "utf-8"))).toEqual({
+      tokens: { "core-b": "token-b" },
+      retained: "value",
+      songr_ever_paired: true,
+    });
+
+    capturedOptions.core_paired(pairedCore("core-b"));
+    expect(client.getCoreStatus()).toBe("paired");
+    expect(client.getCoreInfo()?.id).toBe("core-b");
+  });
+
+  it("leaves the working connection intact when the strict persisted-state write fails", async () => {
+    const tokenPath = await makeTokenPath();
+    const persisted = {
+      paired_core_id: "core-a",
+      tokens: { "core-a": "token-a" },
+    };
+    await fsp.writeFile(tokenPath, JSON.stringify(persisted), "utf-8");
+    const client = new RoonClient({ tokenPath, logger: stubLogger });
+    client.start();
+    const firstApi = mockRoonInstances[0];
+    capturedOptions.core_paired(
+      pairedCore("core-a", {
+        RoonApiTransport: { transport: true },
+        RoonApiBrowse: { browse: true },
+      })
+    );
+    const rename = jest.spyOn(fs, "renameSync").mockImplementationOnce(() => {
+      throw new Error("disk is read-only");
+    });
+
+    expect(() => client.switchCore()).toThrow("disk is read-only");
+
+    rename.mockRestore();
+    expect(client.getCoreStatus()).toBe("paired");
+    expect(client.getCoreInfo()?.id).toBe("core-a");
+    expect(client.getTransport()).not.toBeNull();
+    expect(firstApi.stop_discovery).not.toHaveBeenCalled();
+    expect(firstApi.disconnect_all).not.toHaveBeenCalled();
+    expect(mockRoonInstances[1].start_discovery).not.toHaveBeenCalled();
+    expect(fs.existsSync(`${tokenPath}.tmp`)).toBe(false);
+    expect(JSON.parse(await fsp.readFile(tokenPath, "utf-8"))).toEqual(persisted);
+  });
+
+  it("treats repeated confirmation as idempotent while discovery is pending", async () => {
+    const tokenPath = await makeTokenPath();
+    await fsp.writeFile(
+      tokenPath,
+      JSON.stringify({ paired_core_id: "core-a", tokens: { "core-a": "token-a" } }),
+      "utf-8"
+    );
+    const client = new RoonClient({ tokenPath, logger: stubLogger });
+    client.start();
+    capturedOptions.core_paired(pairedCore("core-a"));
+
+    expect(client.switchCore()).toBe(true);
+    expect(client.switchCore()).toBe(false);
+
+    expect(mockRoonInstances).toHaveLength(2);
+    expect(mockRoonInstances[0].disconnect_all).toHaveBeenCalledTimes(1);
+    expect(mockRoonInstances[1].start_discovery).toHaveBeenCalledTimes(1);
   });
 });
 

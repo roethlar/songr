@@ -10,6 +10,7 @@ const RoonApi = require("node-roon-api");
 const RoonApiTransport = require("node-roon-api-transport");
 const RoonApiBrowse = require("node-roon-api-browse");
 const RoonApiImage = require("node-roon-api-image");
+const SONGR_EVER_PAIRED_KEY = "songr_ever_paired";
 
 export interface RoonClientOptions {
   tokenPath: string;
@@ -48,7 +49,9 @@ export declare interface RoonClient {
 
 export class RoonClient extends EventEmitter {
   private readonly options: RoonClientOptions;
-  private roon!: any;
+  private roon: any | null = null;
+  private apiGeneration = 0;
+  private switchPending = false;
   private transport: any | null = null;
   private browse: any | null = null;
   private image: any | null = null;
@@ -71,7 +74,17 @@ export class RoonClient extends EventEmitter {
     // location and remove the cwd copy.
     this.migrateLegacyConfigJson();
 
-    this.roon = new RoonApi({
+    const generation = this.apiGeneration + 1;
+    const roon = this.createApi(generation);
+    this.apiGeneration = generation;
+    this.roon = roon;
+    this.coreStatus = "discovering";
+    this.emit("core-status", { coreStatus: "discovering" });
+    roon.start_discovery();
+  }
+
+  private createApi(generation: number): any {
+    const roon = new RoonApi({
       // The product's own vendor id. The historical
       // "com.roonlabs.webcontroller" both squatted Roon Labs' namespace and
       // collided across every install of this codebase's ancestors; Roon
@@ -94,23 +107,26 @@ export class RoonClient extends EventEmitter {
       // calls its own default save_config (which writes config.json
       // in cwd, NOT at our configured path).
       get_persisted_state: () => this.loadPersistedState(),
-      set_persisted_state: (state: unknown) => this.savePersistedState(state),
+      set_persisted_state: (state: unknown) => {
+        if (generation !== this.apiGeneration) return;
+        this.savePersistedState(state);
+      },
       core_paired: (core: any) => {
+        if (generation !== this.apiGeneration) return;
         this.onCorePaired(core);
       },
       core_unpaired: () => {
+        if (generation !== this.apiGeneration) return;
         this.onCoreUnpaired();
       },
     });
 
-    this.roon.init_services({
+    roon.init_services({
       required_services: [RoonApiTransport, RoonApiBrowse],
       optional_services: [RoonApiImage],
       provided_services: [],
     });
-
-    this.emit("core-status", { coreStatus: "discovering" });
-    this.roon.start_discovery();
+    return roon;
   }
 
   public getTransport(): any | null {
@@ -159,6 +175,7 @@ export class RoonClient extends EventEmitter {
   public hasEverPaired(): boolean {
     if (this.coreStatus === "paired") return true;
     const state = this.loadPersistedState();
+    if (state[SONGR_EVER_PAIRED_KEY] === true) return true;
     const pairedCoreId = state.paired_core_id;
     if (typeof pairedCoreId === "string" && pairedCoreId.length > 0) {
       return true;
@@ -168,6 +185,71 @@ export class RoonClient extends EventEmitter {
       return Object.keys(tokens as Record<string, unknown>).length > 0;
     }
     return false;
+  }
+
+  /**
+   * Forget the currently selected Core and restart discovery with a fresh
+   * node-roon-api instance. The library keeps pairing identity and live
+   * connections in memory, so editing its persisted state alone is not a
+   * switch. Returns false when an earlier confirmed switch is already waiting
+   * for authorization; repeated confirmation is deliberately idempotent.
+   */
+  public switchCore(): boolean {
+    if (this.switchPending) return false;
+    if (!this.roon) throw new Error("Roon client has not started");
+
+    const persisted = this.loadPersistedState();
+    const persistedCoreId = persisted.paired_core_id;
+    const currentCoreId =
+      this.pairedCore?.id ??
+      (typeof persistedCoreId === "string" && persistedCoreId.length > 0
+        ? persistedCoreId
+        : null);
+    const nextPersisted: Record<string, unknown> = {
+      ...persisted,
+      [SONGR_EVER_PAIRED_KEY]: true,
+    };
+    delete nextPersisted.paired_core_id;
+    if (
+      currentCoreId &&
+      nextPersisted.tokens &&
+      typeof nextPersisted.tokens === "object" &&
+      !Array.isArray(nextPersisted.tokens)
+    ) {
+      const tokens = { ...(nextPersisted.tokens as Record<string, unknown>) };
+      delete tokens[currentCoreId];
+      nextPersisted.tokens = tokens;
+    }
+
+    // Build first: a constructor/init failure must leave the working client
+    // and its persisted authorization untouched.
+    const nextGeneration = this.apiGeneration + 1;
+    const nextRoon = this.createApi(nextGeneration);
+    // Strict write before disconnect. Unlike the library callback wrapper,
+    // this error must escape so the HTTP request cannot report acceptance.
+    this.writePersistedState(nextPersisted);
+
+    const previousRoon = this.roon;
+    this.switchPending = true;
+    this.apiGeneration = nextGeneration;
+    this.clearCoreState("Switching to a different Roon core");
+
+    try {
+      previousRoon.stop_discovery?.();
+    } catch (error) {
+      this.options.logger.warn({ err: error }, "Failed to stop retired Roon discovery");
+    }
+    try {
+      previousRoon.disconnect_all?.();
+    } catch (error) {
+      this.options.logger.warn({ err: error }, "Failed to disconnect retired Roon sockets");
+    }
+
+    this.roon = nextRoon;
+    this.coreStatus = "discovering";
+    this.emit("core-status", { coreStatus: "discovering" });
+    nextRoon.start_discovery();
+    return true;
   }
 
   private onCorePaired(core: any): void {
@@ -180,6 +262,7 @@ export class RoonClient extends EventEmitter {
     );
 
     this.coreStatus = "paired";
+    this.switchPending = false;
     this.pairedCore = {
       id: core.core_id,
       displayName: core.display_name,
@@ -209,7 +292,11 @@ export class RoonClient extends EventEmitter {
   }
 
   private onCoreUnpaired(): void {
-    this.options.logger.warn("Roon core unpaired");
+    this.clearCoreState("Roon core unpaired");
+  }
+
+  private clearCoreState(message: string): void {
+    this.options.logger.warn(message);
     this.coreStatus = "unpaired";
     this.transport = null;
     this.browse = null;
@@ -255,17 +342,8 @@ export class RoonClient extends EventEmitter {
    */
   private savePersistedState(state: unknown): void {
     try {
+      this.writePersistedState(this.withEverPairedMarker(state));
       const filePath = path.resolve(this.options.tokenPath);
-      const dir = path.dirname(filePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      }
-      const tmp = `${filePath}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(state, null, 2), {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-      fs.renameSync(tmp, filePath);
       this.options.logger.debug(
         { filePath },
         "Persisted Roon pairing state"
@@ -275,6 +353,44 @@ export class RoonClient extends EventEmitter {
         { err: error },
         "Failed to save Roon pairing state"
       );
+    }
+  }
+
+  private withEverPairedMarker(state: unknown): unknown {
+    if (!state || typeof state !== "object" || Array.isArray(state)) return state;
+    const record = state as Record<string, unknown>;
+    const pairedCoreId = record.paired_core_id;
+    const tokens = record.tokens;
+    const paired = typeof pairedCoreId === "string" && pairedCoreId.length > 0;
+    const hasToken =
+      !!tokens &&
+      typeof tokens === "object" &&
+      !Array.isArray(tokens) &&
+      Object.keys(tokens as Record<string, unknown>).length > 0;
+    return paired || hasToken ? { ...record, [SONGR_EVER_PAIRED_KEY]: true } : record;
+  }
+
+  /** Strict atomic writer used by both the library callback and Core switch. */
+  private writePersistedState(state: unknown): void {
+    const filePath = path.resolve(this.options.tokenPath);
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+    const tmp = `${filePath}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(state, null, 2), {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+      fs.renameSync(tmp, filePath);
+    } catch (error) {
+      try {
+        if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+      } catch {
+        // Preserve the original persistence failure; cleanup is best effort.
+      }
+      throw error;
     }
   }
 
@@ -345,4 +461,3 @@ export class RoonClient extends EventEmitter {
     }
   }
 }
-

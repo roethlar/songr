@@ -7,7 +7,7 @@ import {
 	type CatalogPartialDate,
 	type CatalogResolutionStatus,
 	type CatalogStatus
-} from '@shared/timelineCatalogContracts';
+} from '@shared/catalogContracts';
 import type { BrowseItem } from '@shared/types';
 import { fetchCatalogIndex, withClassicBrowseRoleTransaction } from '../api/client';
 import {
@@ -87,6 +87,10 @@ export interface LibraryAlbumEntry {
 	id: string;
 	title: string;
 	artist: string;
+	/** Number of exact title/artist versions represented by this group. */
+	versionCount?: number;
+	/** Current catalog members; none of them is selected action authority. */
+	memberLocalIds?: readonly string[];
 	/**
 	 * Precomputed normalized search/sort key: article-stripped title followed
 	 * by artist, so title ordering and artist-name palette matches coexist.
@@ -288,8 +292,51 @@ export function compareLibrarySearchKeys(left: string, right: string): number {
 	);
 }
 
-function albumIdentityKey(title: string, artist: string): string {
+export function albumIdentityKey(title: string, artist: string): string {
 	return `${normalizeCatalogText(title)}\u0000${normalizeCatalogText(artist)}`;
+}
+
+/**
+ * Builds the cheap current-index album-group view. The stable catalog member
+ * with the lexically smallest local id is the display/navigation anchor;
+ * artwork never participates in grouping or anchor selection.
+ */
+export function groupLibraryAlbums(
+	albums: readonly LibraryAlbumEntry[]
+): LibraryAlbumEntry[] {
+	const groups = new Map<string, LibraryAlbumEntry[]>();
+	for (const album of albums) {
+		const key = albumIdentityKey(album.title, album.artist);
+		const members = groups.get(key);
+		if (members) members.push(album);
+		else groups.set(key, [album]);
+	}
+
+	return [...groups.values()].map((members) => {
+		const anchor = members.reduce((left, right) => {
+			const leftId = left.catalogLocalId ?? left.id;
+			const rightId = right.catalogLocalId ?? right.id;
+			return leftId.localeCompare(rightId, 'en-US') <= 0 ? left : right;
+		});
+		const memberLocalIds = [
+			...new Set(
+				members.flatMap((member) =>
+					member.memberLocalIds ??
+					(member.catalogLocalId !== undefined ? [member.catalogLocalId] : [])
+				)
+			)
+		].sort((left, right) => left.localeCompare(right, 'en-US'));
+		const versionCount = Math.max(
+			members.length,
+			memberLocalIds.length,
+			...members.map((member) => member.versionCount ?? 1)
+		);
+		return {
+			...anchor,
+			versionCount,
+			...(memberLocalIds.length > 0 ? { memberLocalIds } : {})
+		};
+	});
 }
 
 /**
@@ -302,7 +349,7 @@ export function reconcileBrowseAlbumsToCatalog(
 	catalogAlbums: readonly LibraryAlbumEntry[]
 ): LibraryAlbumEntry[] {
 	const candidatesByIdentity = new Map<string, LibraryAlbumEntry[]>();
-	for (const candidate of catalogAlbums) {
+	for (const candidate of groupLibraryAlbums(catalogAlbums)) {
 		if (!candidate.catalogLocalId) continue;
 		const key = albumIdentityKey(candidate.title, candidate.artist);
 		const candidates = candidatesByIdentity.get(key);
@@ -310,34 +357,28 @@ export function reconcileBrowseAlbumsToCatalog(
 		else candidatesByIdentity.set(key, [candidate]);
 	}
 
-	return browseAlbums.map((album, index) => {
+	return groupLibraryAlbums(browseAlbums.map((album, index) => {
 		const candidates =
 			candidatesByIdentity.get(albumIdentityKey(album.title, album.artist)) ?? [];
-		const imageMatches = album.imageKey
-			? candidates.filter((candidate) => candidate.imageKey === album.imageKey)
-			: [];
-		const match =
-			imageMatches.length === 1
-				? imageMatches[0]
-				: candidates.length === 1
-					? candidates[0]
-					: undefined;
+		const match = candidates.length === 1 ? candidates[0] : undefined;
 		const imageKey = album.imageKey ?? match?.imageKey;
 		return {
 			id: match?.id ?? `drill:${index}:${album.title}`,
 			title: album.title,
 			artist: album.artist,
+			versionCount: match?.versionCount ?? 1,
 			searchKey: `${librarySortKey(album.title)} ${normalizeCatalogText(album.artist)}`,
 			...(imageKey ? { imageKey } : {}),
 			...(match?.artistId ? { artistId: match.artistId } : {}),
 			...(match?.catalogLocalId ? { catalogLocalId: match.catalogLocalId } : {}),
+			...(match?.memberLocalIds ? { memberLocalIds: match.memberLocalIds } : {}),
 			...(match?.resolutionStatus ? { resolutionStatus: match.resolutionStatus } : {}),
 			...(match?.originalReleaseDate
 				? { originalReleaseDate: match.originalReleaseDate }
 				: {}),
 			...(match?.releaseDate ? { releaseDate: match.releaseDate } : {})
 		};
-	});
+	}));
 }
 
 function sortBySearchKey<T extends { searchKey: string }>(entries: T[]): T[] {
@@ -420,11 +461,13 @@ function prepareCatalogIndex(
 		)
 	);
 	const albums = sortBySearchKey(
-		index.albums.map(
+		groupLibraryAlbums(index.albums.map(
 			(album): LibraryAlbumEntry => ({
 				id: album.localId,
 				title: album.title,
 				artist: album.artist,
+				versionCount: 1,
+				memberLocalIds: [album.localId],
 				searchKey: `${librarySortKey(album.title)} ${normalizeCatalogText(album.artist)}`,
 				...(album.artistLocalId !== undefined ? { artistId: album.artistLocalId } : {}),
 				...(album.imageKeyHint !== undefined ? { imageKey: album.imageKeyHint } : {}),
@@ -438,7 +481,7 @@ function prepareCatalogIndex(
 					: {}),
 				...(album.importDate !== undefined ? { importDate: album.importDate } : {})
 			})
-		)
+		))
 	);
 	const artistCountsComplete = artistCountRows
 		? !artistCountRows.truncated &&
@@ -508,15 +551,16 @@ function prepareBrowseFallback(
 		)
 	);
 	const albums = sortBySearchKey(
-		albumItems.map(
+		groupLibraryAlbums(albumItems.map(
 			(item, index): LibraryAlbumEntry => ({
 				id: `browse:album:${index}`,
 				title: item.title,
 				artist: item.subtitle ?? '',
+				versionCount: 1,
 				searchKey: `${librarySortKey(item.title)} ${normalizeCatalogText(item.subtitle ?? '')}`,
 				...(item.imageKey !== undefined ? { imageKey: item.imageKey } : {})
 			})
-		)
+		))
 	);
 	return {
 		artists,

@@ -76,5 +76,7 @@ export const libraryScopeSlots: ResolvedLibraryScopeSlots = {
 	loadPlaylists: resolved,
 	openPlaylist: resolved,
 	closePlaylist: noop,
-	resetPlaylists: noop
+	resetPlaylists: noop,
+	/** No workspaces in this build: nothing rendered, nothing disabled. */
+	workspaceLinks: []
 };

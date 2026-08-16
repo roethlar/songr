@@ -7,7 +7,7 @@ import {
   normalizeMostPlayedResponse,
 } from "../mostPlayedContracts";
 import { PUBLIC_SONG_UNAVAILABLE_MESSAGES } from "../publicSongResolverContracts";
-import type { CatalogStatus } from "../timelineCatalogContracts";
+import type { CatalogStatus } from "../catalogContracts";
 
 const STATUS: CatalogStatus = {
   coreId: "core-a",

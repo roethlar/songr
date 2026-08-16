@@ -19,8 +19,8 @@ import {
 import type { BrowseResult, SearchResult } from '@shared/types';
 import { getSocket } from '$lib/socket/client';
 import { emitWithAck } from '$lib/socket/emit';
-import { getTimelineTabId } from '$lib/timeline/tabId';
-import { createSecureTimelineOpaqueId } from '$lib/timeline/secureOpaqueId';
+import { getTabId } from '$lib/tabId';
+import { createSecureOpaqueId } from '$lib/secureOpaqueId';
 
 export type ClassicBrowseSessionPhase = 'none' | 'acquiring' | 'live';
 export type ClassicBrowseSessionOwner =
@@ -429,7 +429,7 @@ export function createClassicBrowseSessionClient(
 
 export const classicBrowseSessionClient = createClassicBrowseSessionClient({
 	getSocket,
-	getTabId: getTimelineTabId,
-	createRequestId: createSecureTimelineOpaqueId,
+	getTabId: getTabId,
+	createRequestId: createSecureOpaqueId,
 	emit: emitWithAck
 });

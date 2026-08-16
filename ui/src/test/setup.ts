@@ -19,8 +19,7 @@ function safeClear(storage: Storage | undefined) {
 
 // jsdom has no ResizeObserver; Svelte's bind:clientWidth/clientHeight
 // requires one. A no-op observer keeps components mountable — tests
-// that need real measurements stub their own (see TimelineLibraryMode's
-// TrackingResizeObserver, which overrides this via vi.stubGlobal).
+// that need real measurements stub their own via vi.stubGlobal.
 if (typeof globalThis.ResizeObserver === 'undefined') {
 	class NoopResizeObserver {
 		observe(): void {}

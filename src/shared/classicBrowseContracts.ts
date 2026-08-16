@@ -15,6 +15,10 @@ export const CLASSIC_BROWSE_ROLES = [
   "classic-browse",
   "classic-search",
   "classic-explore",
+  // The composition surface owns its own Roon-side hierarchy state: its
+  // full composers walk must never share a list cursor with the palette's
+  // named-counts drain on classic-explore (ri8-3).
+  "classic-composition",
 ] as const;
 export type ClassicBrowseRole = (typeof CLASSIC_BROWSE_ROLES)[number];
 

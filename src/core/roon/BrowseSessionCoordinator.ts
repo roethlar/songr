@@ -14,13 +14,12 @@ export const CLASSIC_SESSION_ROLES = [
   "classic-browse",
   "classic-search",
   "classic-explore",
+  // Isolated channel for the composition surface's composers walk (ri8-3).
+  "classic-composition",
 ] as const;
-export const TIMELINE_SESSION_ROLES = ["timeline-interactive"] as const;
-
 export type ClassicSessionRole = (typeof CLASSIC_SESSION_ROLES)[number];
-export type TimelineSessionRole = (typeof TIMELINE_SESSION_ROLES)[number];
-export type ModeSessionRole = ClassicSessionRole | TimelineSessionRole;
-export type BrowseMode = "classic" | "timeline";
+export type ModeSessionRole = ClassicSessionRole;
+export type BrowseMode = "classic";
 
 export interface BrowseSessionLimits {
   maxTabsPerCore: number;
@@ -33,7 +32,9 @@ export interface BrowseSessionLimits {
   retiredHandleLimit: number;
 }
 
-const DEFAULT_ACTIVE_SESSION_CAPACITY = 8 * 4 + 1 + 4;
+// Derived so a new classic role cannot silently under-provision the cap:
+// per-tab classic channels, plus the catalog channel, plus action leases.
+const DEFAULT_ACTIVE_SESSION_CAPACITY = 8 * CLASSIC_SESSION_ROLES.length + 1 + 4;
 
 /**
  * The physical cap includes one complete active-capacity generation of
@@ -149,7 +150,6 @@ export interface CoordinatedModeActionSession
 export interface BrowseSessionDiagnostics {
   activeTabs: number;
   classicTabs: number;
-  timelineTabs: number;
   actions: number;
   catalog: number;
   sessions: number;
@@ -379,7 +379,7 @@ class CoordinatedBrowseSessionImpl implements CoordinatedModeActionSession {
 }
 
 /**
- * Owns every new Timeline-era Roon browse session. The class deliberately has
+ * Owns every new coordinated Roon browse session. The class deliberately has
  * no Socket.IO or HTTP dependency: later integration slices can expose opaque
  * handles without ever exposing the raw multi_session_key.
  */
@@ -420,12 +420,11 @@ export class BrowseSessionCoordinator {
     this.assertIdentifier(input.coreId, "coreId");
     this.assertIdentifier(input.socketId, "socketId");
     this.assertIdentifier(input.tabId, "tabId");
-    if (input.mode !== "classic" && input.mode !== "timeline") {
+    if (input.mode !== "classic") {
       throw new BrowseSessionCoordinatorError("INVALID_ROLE", "Unknown browse mode");
     }
     const core = this.getCore(input.coreId);
-    const roles: readonly ModeSessionRole[] =
-      input.mode === "classic" ? CLASSIC_SESSION_ROLES : TIMELINE_SESSION_ROLES;
+    const roles: readonly ModeSessionRole[] = CLASSIC_SESSION_ROLES;
     const existing = core.tabs.get(input.tabId);
     if (existing) {
       const mayReplaceDisconnected =
@@ -489,8 +488,7 @@ export class BrowseSessionCoordinator {
     work: (session: CoordinatedBrowseSession) => Promise<T>
   ): Promise<T> {
     const lease = this.resolveMode(access);
-    const allowedRoles: readonly ModeSessionRole[] =
-      lease.mode === "classic" ? CLASSIC_SESSION_ROLES : TIMELINE_SESSION_ROLES;
+    const allowedRoles: readonly ModeSessionRole[] = CLASSIC_SESSION_ROLES;
     if (!allowedRoles.includes(role)) {
       throw new BrowseSessionCoordinatorError(
         "INVALID_ROLE",
@@ -938,7 +936,7 @@ export class BrowseSessionCoordinator {
   }
 
   /**
-   * Atomically reserve the execute winner while the owning Timeline
+   * Atomically reserve the execute winner while the owning browse
    * generation is still current. All pre-dispatch rechecks run after this
    * claim, so a later mode switch cannot convert the winner into a cancel.
    */
@@ -1105,7 +1103,6 @@ export class BrowseSessionCoordinator {
       return {
         activeTabs: 0,
         classicTabs: 0,
-        timelineTabs: 0,
         actions: 0,
         catalog: 0,
         sessions: 0,
@@ -1121,7 +1118,6 @@ export class BrowseSessionCoordinator {
     return {
       activeTabs: tabs.length,
       classicTabs: tabs.filter((lease) => lease.mode === "classic").length,
-      timelineTabs: tabs.filter((lease) => lease.mode === "timeline").length,
       actions: [...core.actions.values()].filter(
         (lease) => lease.state !== "closed"
       ).length,

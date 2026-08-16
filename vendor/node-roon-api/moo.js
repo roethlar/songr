@@ -203,7 +203,10 @@ Moo.prototype.handle_response = function(msg, body) {
 
 Moo.prototype.clean_up = function() {
     Object.keys(this.requests).forEach(e => {
-	let cb = this.requests[e].cb;
+	// A callback's side effects can delete other pending entries while
+	// this snapshot is iterated; a vanished entry must be skipped, not
+	// crash the process on transport close.
+	let cb = this.requests[e] && this.requests[e].cb;
 	if (cb) cb();
     });
     this.requests = {};

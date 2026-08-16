@@ -4,14 +4,14 @@ import type {
   CatalogPartialDate,
   CatalogResolutionStatus,
   CatalogStatus,
-} from "./timelineCatalogContracts";
+} from "./catalogContracts";
 import {
   CATALOG_DISPLAY_TEXT_MAX_LENGTH,
   CATALOG_OPAQUE_TEXT_MAX_LENGTH,
   CATALOG_RESOLUTION_STATUSES,
   isCatalogLocalId,
   normalizeCatalogStatus,
-} from "./timelineCatalogContracts";
+} from "./catalogContracts";
 
 /**
  * Bulk library index served by GET /api/catalog/index — a read view over

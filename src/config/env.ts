@@ -206,8 +206,10 @@ export const loadConfig = (): AppConfig => {
     process.env.RECENTLY_PLAYED_CAP
   );
   const favoritesPath = parseFavoritesPath(process.env.FAVORITES_PATH, dataDir);
+  // CATALOG_PATH is the key; TIMELINE_CATALOG_PATH is honored as a fallback
+  // because deployed .env files predate Timeline's removal (2026-08-09).
   const catalogPath = parseCatalogPath(
-    process.env.TIMELINE_CATALOG_PATH,
+    process.env.CATALOG_PATH ?? process.env.TIMELINE_CATALOG_PATH,
     dataDir
   );
   return {

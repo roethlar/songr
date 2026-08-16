@@ -35,6 +35,13 @@ let historyIndex = 0;
 let nextRouteGeneration = 1;
 let navigationLog: TestNavigationLogEntry[] = [];
 let initialNavigationType: AfterNavigate['type'] = 'enter';
+let routerInitialized = true;
+
+function requireRouterInitialized(operation: 'pushState' | 'replaceState'): void {
+	if (!routerInitialized) {
+		throw new Error(`Cannot call ${operation}(...) before router is initialized`);
+	}
+}
 
 function cloneState(state: App.PageState): App.PageState {
 	if (typeof structuredClone === 'function') {
@@ -115,6 +122,7 @@ export function afterNavigate(callback: (navigation: AfterNavigate) => void): vo
 	afterNavigateCallbacks.add(callback);
 	queueMicrotask(() => {
 		if (!afterNavigateCallbacks.has(callback)) return;
+		routerInitialized = true;
 		callback({
 			from: null,
 			to: {
@@ -130,6 +138,7 @@ export function afterNavigate(callback: (navigation: AfterNavigate) => void): vo
 }
 
 export function pushState(url: string | URL, state: App.PageState): void {
+	requireRouterInitialized('pushState');
 	const entry: InternalHistoryEntry = {
 		url: resolveUrl(url).href,
 		state: cloneState(state),
@@ -142,6 +151,7 @@ export function pushState(url: string | URL, state: App.PageState): void {
 }
 
 export function replaceState(url: string | URL, state: App.PageState): void {
+	requireRouterInitialized('replaceState');
 	const entry: InternalHistoryEntry = {
 		url: resolveUrl(url).href,
 		state: cloneState(state),
@@ -208,6 +218,10 @@ export function __setInitialNavigationType(type: AfterNavigate['type']): void {
 	initialNavigationType = type;
 }
 
+export function __setRouterInitialized(initialized: boolean): void {
+	routerInitialized = initialized;
+}
+
 export function __resetNavigation(
 	url: string | URL = 'http://localhost/',
 	state: App.PageState = {}
@@ -218,5 +232,6 @@ export function __resetNavigation(
 	nextRouteGeneration = 1;
 	navigationLog = [];
 	initialNavigationType = 'enter';
+	routerInitialized = true;
 	afterNavigateCallbacks.clear();
 }

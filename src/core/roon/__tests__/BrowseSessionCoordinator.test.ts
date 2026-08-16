@@ -85,12 +85,12 @@ describe("BrowseSessionCoordinator", () => {
     };
   }
 
-  async function timelineHandle(): Promise<ModeSessionHandle> {
+  async function classicHandle(): Promise<ModeSessionHandle> {
     return coordinator.acquireMode({
       coreId: "core-1",
       socketId: "socket-1",
       tabId: "tab-1",
-      mode: "timeline",
+      mode: "classic",
     });
   }
 
@@ -103,18 +103,18 @@ describe("BrowseSessionCoordinator", () => {
     };
   }
 
-  it("allocates only opaque handles and the exact Classic/Timeline channel counts", async () => {
+  it("allocates only opaque handles and the exact Classic channel counts", async () => {
     const classic = await coordinator.acquireMode({
       coreId: "core-1",
       socketId: "socket-1",
       tabId: "classic-tab",
       mode: "classic",
     });
-    const timeline = await coordinator.acquireMode({
+    const second = await coordinator.acquireMode({
       coreId: "core-1",
       socketId: "socket-2",
-      tabId: "timeline-tab",
-      mode: "timeline",
+      tabId: "second-tab",
+      mode: "classic",
     });
 
     expect(Object.keys(classic).sort()).toEqual([
@@ -123,15 +123,34 @@ describe("BrowseSessionCoordinator", () => {
       "kind",
       "mode",
     ]);
-    expect(JSON.stringify([classic, timeline])).not.toMatch(
-      /multi_session|sessionName|classic-browse|timeline-interactive/
+    expect(JSON.stringify([classic, second])).not.toMatch(
+      /multi_session|sessionName|classic-browse/
     );
     expect(coordinator.diagnostics("core-1")).toMatchObject({
       activeTabs: 2,
-      classicTabs: 1,
-      timelineTabs: 1,
-      sessions: 4,
-      activeSessions: 4,
+      classicTabs: 2,
+      sessions: 8,
+      activeSessions: 8,
+    });
+  });
+
+  it("rejects the retired timeline mode as an unknown browse mode", () => {
+    expect(() =>
+      coordinator.acquireMode({
+        coreId: "core-1",
+        socketId: "socket-1",
+        tabId: "tab-1",
+        mode: "timeline" as never,
+      })
+    ).toThrow(
+      expect.objectContaining({
+        code: "INVALID_ROLE",
+        message: "Unknown browse mode",
+      })
+    );
+    expect(coordinator.diagnostics("core-1")).toMatchObject({
+      activeTabs: 0,
+      sessions: 0,
     });
   });
 
@@ -258,6 +277,7 @@ describe("BrowseSessionCoordinator", () => {
       "classic-browse",
       "classic-search",
       "classic-explore",
+      "classic-composition",
     ]);
     const handle = coordinator.acquireMode({
       coreId: "core-1",
@@ -621,7 +641,7 @@ describe("BrowseSessionCoordinator", () => {
         coreId: "core-1",
         socketId: "socket-9",
         tabId: "tab-9",
-        mode: "timeline",
+        mode: "classic",
       })
     ).toThrow(expect.objectContaining({ code: "BACKPRESSURE" }));
     expect(coordinator.diagnostics("core-1")).toEqual(before);
@@ -641,7 +661,7 @@ describe("BrowseSessionCoordinator", () => {
           coreId: "core-1",
           socketId: `socket-${index}`,
           tabId: `tab-${index}`,
-          mode: "timeline",
+          mode: "classic",
         })
       );
       actions.push(
@@ -718,26 +738,26 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("keeps a rejected channel task from poisoning its queue", async () => {
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     const access = modeAccess(handle);
     await expect(
-      coordinator.runMode(access, "timeline-interactive", async () => {
+      coordinator.runMode(access, "classic-browse", async () => {
         throw new Error("expected failure");
       })
     ).rejects.toThrow("expected failure");
     await expect(
-      coordinator.runMode(access, "timeline-interactive", async () => "next")
+      coordinator.runMode(access, "classic-browse", async () => "next")
     ).resolves.toBe("next");
   });
 
   it("serializes concurrent facade calls inside one coordinated task", async () => {
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     const gate = deferred<typeof EMPTY_RESULT>();
     service.browse.mockReturnValueOnce(gate.promise);
 
     const run = coordinator.runMode(
       modeAccess(handle),
-      "timeline-interactive",
+      "classic-browse",
       async (session) => {
         const browse = session.browse({ hierarchy: "browse" });
         const load = session.load({ hierarchy: "browse" });
@@ -753,64 +773,64 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("rejects cross-owner, cross-Core, stale generation, and wrong-role access", async () => {
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     expect(() =>
       coordinator.runMode(
         modeAccess(handle, { socketId: "other-socket" }),
-        "timeline-interactive",
+        "classic-browse",
         async () => undefined
       )
     ).toThrow(expect.objectContaining({ code: "OWNER_MISMATCH" }));
     expect(() =>
       coordinator.runMode(
         modeAccess(handle, { coreId: "other-core" }),
-        "timeline-interactive",
+        "classic-browse",
         async () => undefined
       )
     ).toThrow(expect.objectContaining({ code: "OWNER_MISMATCH" }));
     expect(() =>
       coordinator.runMode(
         modeAccess({ ...handle, generation: handle.generation + 1 }),
-        "timeline-interactive",
+        "classic-browse",
         async () => undefined
       )
     ).toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
     expect(() =>
-      coordinator.runMode(modeAccess(handle), "classic-browse", async () => undefined)
+      coordinator.runMode(modeAccess(handle), "catalog" as never, async () => undefined)
     ).toThrow(expect.objectContaining({ code: "INVALID_ROLE" }));
   });
 
   it("rejects duplicate ownership of one active tab", async () => {
-    await timelineHandle();
+    await classicHandle();
     expect(() =>
       coordinator.acquireMode({
         coreId: "core-1",
         socketId: "other-socket",
         tabId: "tab-1",
-        mode: "timeline",
+        mode: "classic",
       })
     ).toThrow(expect.objectContaining({ code: "OWNER_MISMATCH" }));
     expect(coordinator.diagnostics("core-1")).toMatchObject({
       activeTabs: 1,
-      sessions: 1,
+      sessions: 4,
     });
   });
 
   it("never starts queued work or publishes an in-flight result after release", async () => {
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     const access = modeAccess(handle);
     const gate = deferred<string>();
     const queuedWork = jest.fn(async () => "queued");
     const inFlight = coordinator.runMode(
       access,
-      "timeline-interactive",
+      "classic-browse",
       async () => gate.promise
     );
     const inFlightAssertion = expect(inFlight).rejects.toMatchObject({
       code: "STALE_GENERATION",
     });
     await flushPromises();
-    const queued = coordinator.runMode(access, "timeline-interactive", queuedWork);
+    const queued = coordinator.runMode(access, "classic-browse", queuedWork);
     const queuedAssertion = expect(queued).rejects.toMatchObject({
       code: "STALE_GENERATION",
     });
@@ -824,11 +844,11 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("acquires and uses a fresh generation while abandoned work is still running", async () => {
-    const abandoned = await timelineHandle();
+    const abandoned = await classicHandle();
     const gate = deferred<string>();
     const oldRun = coordinator.runMode(
       modeAccess(abandoned),
-      "timeline-interactive",
+      "classic-browse",
       async () => gate.promise
     );
     const oldAssertion = expect(oldRun).rejects.toMatchObject({
@@ -840,12 +860,12 @@ describe("BrowseSessionCoordinator", () => {
       coreId: "core-1",
       socketId: "socket-1",
       tabId: "tab-1",
-      mode: "timeline",
+      mode: "classic",
     });
     await expect(
       coordinator.runMode(
         modeAccess(fresh),
-        "timeline-interactive",
+        "classic-browse",
         async () => "fresh result"
       )
     ).resolves.toBe("fresh result");
@@ -855,13 +875,13 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("rejects a stale Roon result before callback code can consume it", async () => {
-    const oldHandle = await timelineHandle();
+    const oldHandle = await classicHandle();
     const roonResult = deferred<typeof EMPTY_RESULT>();
     service.browse.mockReturnValueOnce(roonResult.promise);
     let consumed = false;
     const oldRun = coordinator.runMode(
       modeAccess(oldHandle),
-      "timeline-interactive",
+      "classic-browse",
       async (session) => {
         await session.browse({ hierarchy: "browse" });
         consumed = true;
@@ -877,7 +897,7 @@ describe("BrowseSessionCoordinator", () => {
       coreId: "core-1",
       socketId: "socket-1",
       tabId: "tab-1",
-      mode: "timeline",
+      mode: "classic",
     });
     roonResult.resolve(EMPTY_RESULT);
     await oldAssertion;
@@ -885,19 +905,19 @@ describe("BrowseSessionCoordinator", () => {
     await expect(
       coordinator.runMode(
         modeAccess(fresh),
-        "timeline-interactive",
+        "classic-browse",
         async () => "fresh"
       )
     ).resolves.toBe("fresh");
   });
 
   it("drains an unawaited browse call before release cleanup can re-root", async () => {
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     const browseGate = deferred<typeof EMPTY_RESULT>();
     service.browse.mockReturnValueOnce(browseGate.promise);
     const run = coordinator.runMode(
       modeAccess(handle),
-      "timeline-interactive",
+      "classic-browse",
       async (session) => {
         void session.browse({ hierarchy: "browse" });
         throw new Error("primary callback failure");
@@ -923,10 +943,10 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("mints fresh private names on replacement and rejects the old handle", async () => {
-    const first = await timelineHandle();
+    const first = await classicHandle();
     await coordinator.runMode(
       modeAccess(first),
-      "timeline-interactive",
+      "classic-browse",
       (session) => session.browse({ hierarchy: "browse" })
     );
     const firstName = service.browse.mock.calls[0][0].multiSessionKey;
@@ -935,11 +955,11 @@ describe("BrowseSessionCoordinator", () => {
       coreId: "core-1",
       socketId: "socket-1",
       tabId: "tab-1",
-      mode: "timeline",
+      mode: "classic",
     });
     await coordinator.runMode(
       modeAccess(second),
-      "timeline-interactive",
+      "classic-browse",
       (session) => session.browse({ hierarchy: "browse" })
     );
     const secondName = service.browse.mock.calls[1][0].multiSessionKey;
@@ -949,18 +969,18 @@ describe("BrowseSessionCoordinator", () => {
     expect(() =>
       coordinator.runMode(
         modeAccess(first),
-        "timeline-interactive",
+        "classic-browse",
         async () => undefined
       )
     ).toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
   });
 
   it("invalidates old results on Core loss and permits fresh reacquisition", async () => {
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     const gate = deferred<string>();
     const inFlight = coordinator.runMode(
       modeAccess(handle),
-      "timeline-interactive",
+      "classic-browse",
       async () => gate.promise
     );
     const assertion = expect(inFlight).rejects.toMatchObject({
@@ -975,26 +995,26 @@ describe("BrowseSessionCoordinator", () => {
     expect(() =>
       coordinator.runMode(
         modeAccess(handle),
-        "timeline-interactive",
+        "classic-browse",
         async () => undefined
       )
     ).toThrow(expect.objectContaining({ code: "SESSION_LOST" }));
-    const fresh = await timelineHandle();
+    const fresh = await classicHandle();
     await expect(
       coordinator.runMode(
         modeAccess(fresh),
-        "timeline-interactive",
+        "classic-browse",
         async () => "fresh"
       )
     ).resolves.toBe("fresh");
   });
 
   it("gives Core loss precedence over a release already waiting on work", async () => {
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     const gate = deferred<string>();
     const run = coordinator.runMode(
       modeAccess(handle),
-      "timeline-interactive",
+      "classic-browse",
       async () => gate.promise
     );
     const runAssertion = expect(run).rejects.toMatchObject({
@@ -1011,7 +1031,7 @@ describe("BrowseSessionCoordinator", () => {
     expect(() =>
       coordinator.runMode(
         modeAccess(handle),
-        "timeline-interactive",
+        "classic-browse",
         async () => undefined
       )
     ).toThrow(expect.objectContaining({ code: "SESSION_LOST" }));
@@ -1019,26 +1039,26 @@ describe("BrowseSessionCoordinator", () => {
 
   it("quarantines a timeout until late fulfillment and never reuses its name", async () => {
     coordinator.shutdown();
-    coordinator = makeCoordinator({ maxPhysicalSessionsPerCore: 2 });
+    coordinator = makeCoordinator({ maxPhysicalSessionsPerCore: 8 });
     const late = deferred<void>();
     service.browse.mockImplementationOnce((_options, lifecycle) => {
       lifecycle.onTimeout(late.promise);
       return Promise.reject(new RoonTimeoutError("browse.browse", 15_000));
     });
-    const first = await timelineHandle();
+    const first = await classicHandle();
     const run = coordinator.runMode(
       modeAccess(first),
-      "timeline-interactive",
+      "classic-browse",
       (session) => session.browse({ hierarchy: "browse" })
     );
     await expect(run).rejects.toBeInstanceOf(RoonTimeoutError);
     const abandonedName = service.browse.mock.calls[0][0].multiSessionKey;
     expect(coordinator.diagnostics("core-1").quarantinedSessions).toBe(1);
 
-    const replacement = await timelineHandle();
+    const replacement = await classicHandle();
     await coordinator.runMode(
       modeAccess(replacement),
-      "timeline-interactive",
+      "classic-browse",
       (session) => session.browse({ hierarchy: "browse" })
     );
     const freshName = service.browse.mock.calls[1][0].multiSessionKey;
@@ -1048,7 +1068,7 @@ describe("BrowseSessionCoordinator", () => {
         coreId: "core-1",
         socketId: "socket-2",
         tabId: "tab-2",
-        mode: "timeline",
+        mode: "classic",
       })
     ).toThrow(expect.objectContaining({ code: "BACKPRESSURE" }));
 
@@ -1060,25 +1080,25 @@ describe("BrowseSessionCoordinator", () => {
         coreId: "core-1",
         socketId: "socket-2",
         tabId: "tab-2",
-        mode: "timeline",
+        mode: "classic",
       })
     ).toMatchObject({ kind: "mode" });
   });
 
   it("preserves the current generation when replacement has no physical capacity", async () => {
     coordinator.shutdown();
-    coordinator = makeCoordinator({ maxPhysicalSessionsPerCore: 2 });
+    coordinator = makeCoordinator({ maxPhysicalSessionsPerCore: 8 });
     const first = coordinator.acquireMode({
       coreId: "core-1",
       socketId: "socket-1",
       tabId: "tab-1",
-      mode: "timeline",
+      mode: "classic",
     });
     coordinator.acquireMode({
       coreId: "core-1",
       socketId: "socket-2",
       tabId: "tab-2",
-      mode: "timeline",
+      mode: "classic",
     });
 
     expect(() =>
@@ -1086,17 +1106,17 @@ describe("BrowseSessionCoordinator", () => {
         coreId: "core-1",
         socketId: "socket-1",
         tabId: "tab-1",
-        mode: "timeline",
+        mode: "classic",
       })
     ).toThrow(expect.objectContaining({ code: "BACKPRESSURE" }));
     expect(coordinator.diagnostics("core-1")).toMatchObject({
       activeTabs: 2,
-      sessions: 2,
+      sessions: 8,
     });
     await expect(
       coordinator.runMode(
         modeAccess(first),
-        "timeline-interactive",
+        "classic-browse",
         async () => "still current"
       )
     ).resolves.toBe("still current");
@@ -1111,11 +1131,11 @@ describe("BrowseSessionCoordinator", () => {
       lifecycle.onTimeout(lateReject.promise);
       return Promise.reject(new RoonTimeoutError("browse.browse", 15_000));
     });
-    const first = await timelineHandle();
+    const first = await classicHandle();
     await expect(
       coordinator.runMode(
         modeAccess(first),
-        "timeline-interactive",
+        "classic-browse",
         (session) => session.browse({ hierarchy: "browse" })
       )
     ).rejects.toBeInstanceOf(RoonTimeoutError);
@@ -1129,11 +1149,11 @@ describe("BrowseSessionCoordinator", () => {
       lifecycle.onTimeout(never.promise);
       return Promise.reject(new RoonTimeoutError("browse.browse", 15_000));
     });
-    const second = await timelineHandle();
+    const second = await classicHandle();
     await expect(
       coordinator.runMode(
         modeAccess(second),
-        "timeline-interactive",
+        "classic-browse",
         (session) => session.browse({ hierarchy: "browse" })
       )
     ).rejects.toBeInstanceOf(RoonTimeoutError);
@@ -1151,11 +1171,11 @@ describe("BrowseSessionCoordinator", () => {
       lifecycle.onTimeout(late.promise);
       return Promise.reject(new RoonTimeoutError("browse.browse", 15_000));
     });
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     await expect(
       coordinator.runMode(
         modeAccess(handle),
-        "timeline-interactive",
+        "classic-browse",
         (session) => session.browse({ hierarchy: "browse" })
       )
     ).rejects.toBeInstanceOf(RoonTimeoutError);
@@ -1168,10 +1188,10 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("re-roots every touched hierarchy once before clean release", async () => {
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     await coordinator.runMode(
       modeAccess(handle),
-      "timeline-interactive",
+      "classic-browse",
       async (session) => {
         await session.browse({ hierarchy: "browse" });
         await session.load({ hierarchy: "search" });
@@ -1189,10 +1209,10 @@ describe("BrowseSessionCoordinator", () => {
 
   it("quarantines a cleanup re-root that times out", async () => {
     const late = deferred<void>();
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     await coordinator.runMode(
       modeAccess(handle),
-      "timeline-interactive",
+      "classic-browse",
       (session) => session.browse({ hierarchy: "browse" })
     );
     service.reRoot.mockImplementationOnce((_hierarchy, _key, lifecycle) => {
@@ -1211,11 +1231,11 @@ describe("BrowseSessionCoordinator", () => {
     jest.useFakeTimers();
     coordinator.shutdown();
     coordinator = makeCoordinator({ modeIdleMs: 1_000 });
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     jest.advanceTimersByTime(999);
     await coordinator.runMode(
       modeAccess(handle),
-      "timeline-interactive",
+      "classic-browse",
       async () => "activity"
     );
     jest.advanceTimersByTime(999);
@@ -1230,11 +1250,11 @@ describe("BrowseSessionCoordinator", () => {
     jest.useFakeTimers();
     coordinator.shutdown();
     coordinator = makeCoordinator({ modeIdleMs: 100 });
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     const gate = deferred<void>();
     const run = coordinator.runMode(
       modeAccess(handle),
-      "timeline-interactive",
+      "classic-browse",
       async () => gate.promise
     );
     await flushPromises();
@@ -1255,7 +1275,7 @@ describe("BrowseSessionCoordinator", () => {
       disconnectGraceMs: 100,
       modeIdleMs: 10_000,
     });
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     coordinator.disconnectSocket("core-1", "socket-1");
     jest.advanceTimersByTime(99);
     const reconnected = coordinator.reconnectMode({
@@ -1270,14 +1290,14 @@ describe("BrowseSessionCoordinator", () => {
     await expect(
       coordinator.runMode(
         modeAccess(reconnected, { socketId: "socket-2" }),
-        "timeline-interactive",
+        "classic-browse",
         async () => "connected"
       )
     ).resolves.toBe("connected");
     expect(() =>
       coordinator.runMode(
         modeAccess(handle),
-        "timeline-interactive",
+        "classic-browse",
         async () => undefined
       )
     ).toThrow(expect.objectContaining({ code: "OWNER_MISMATCH" }));
@@ -1290,10 +1310,10 @@ describe("BrowseSessionCoordinator", () => {
       disconnectGraceMs: 100,
       modeIdleMs: 10_000,
     });
-    const abandoned = await timelineHandle();
+    const abandoned = await classicHandle();
     await coordinator.runMode(
       modeAccess(abandoned),
-      "timeline-interactive",
+      "classic-browse",
       (session) => session.browse({ hierarchy: "artists" })
     );
     const abandonedName = service.browse.mock.calls[0][0].multiSessionKey;
@@ -1303,12 +1323,12 @@ describe("BrowseSessionCoordinator", () => {
       coreId: "core-1",
       socketId: "socket-2",
       tabId: "tab-1",
-      mode: "timeline",
+      mode: "classic",
       replaceDisconnected: true,
     });
     await coordinator.runMode(
       modeAccess(fresh, { socketId: "socket-2" }),
-      "timeline-interactive",
+      "classic-browse",
       (session) => session.browse({ hierarchy: "artists" })
     );
     const freshName = service.browse.mock.calls[1][0].multiSessionKey;
@@ -1318,26 +1338,26 @@ describe("BrowseSessionCoordinator", () => {
     expect(() =>
       coordinator.runMode(
         modeAccess(abandoned),
-        "timeline-interactive",
+        "classic-browse",
         async () => undefined
       )
     ).toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
   });
 
   it("does not let a different socket replace an active same-tab lease", async () => {
-    await timelineHandle();
+    await classicHandle();
     expect(() =>
       coordinator.acquireMode({
         coreId: "core-1",
         socketId: "socket-2",
         tabId: "tab-1",
-        mode: "timeline",
+        mode: "classic",
         replaceDisconnected: true,
       })
     ).toThrow(expect.objectContaining({ code: "OWNER_MISMATCH" }));
   });
 
-  it("keeps disconnected replacement explicit and same-mode for Classic", async () => {
+  it("keeps disconnected replacement explicit for Classic", async () => {
     const handle = coordinator.acquireMode({
       coreId: "core-1",
       socketId: "socket-1",
@@ -1363,15 +1383,6 @@ describe("BrowseSessionCoordinator", () => {
       });
     expect(fresh.generation).toBeGreaterThan(handle.generation);
     expect(() =>
-      coordinator.acquireMode({
-        coreId: "core-1",
-        socketId: "socket-2",
-        tabId: "tab-1",
-        mode: "timeline",
-        replaceDisconnected: true,
-      })
-    ).toThrow(expect.objectContaining({ code: "OWNER_MISMATCH" }));
-    expect(() =>
       coordinator.runMode(
         modeAccess(handle),
         "classic-browse",
@@ -1382,8 +1393,8 @@ describe("BrowseSessionCoordinator", () => {
 
   it("does not bypass physical capacity when replacing a disconnected lease", async () => {
     coordinator.shutdown();
-    coordinator = makeCoordinator({ maxPhysicalSessionsPerCore: 1 });
-    const abandoned = await timelineHandle();
+    coordinator = makeCoordinator({ maxPhysicalSessionsPerCore: 4 });
+    const abandoned = await classicHandle();
     coordinator.disconnectSocket("core-1", "socket-1");
 
     expect(() =>
@@ -1391,7 +1402,7 @@ describe("BrowseSessionCoordinator", () => {
         coreId: "core-1",
         socketId: "socket-2",
         tabId: "tab-1",
-        mode: "timeline",
+        mode: "classic",
         replaceDisconnected: true,
       })
     ).toThrow(expect.objectContaining({ code: "BACKPRESSURE" }));
@@ -1406,11 +1417,11 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("isolates pending work when disconnected replacement mints a fresh session", async () => {
-    const abandoned = await timelineHandle();
+    const abandoned = await classicHandle();
     const gate = deferred<string>();
     const pending = coordinator.runMode(
       modeAccess(abandoned),
-      "timeline-interactive",
+      "classic-browse",
       async () => gate.promise
     );
     const pendingAssertion = expect(pending).rejects.toMatchObject({
@@ -1423,13 +1434,13 @@ describe("BrowseSessionCoordinator", () => {
       coreId: "core-1",
       socketId: "socket-2",
       tabId: "tab-1",
-      mode: "timeline",
+      mode: "classic",
       replaceDisconnected: true,
     });
     await expect(
       coordinator.runMode(
         modeAccess(fresh, { socketId: "socket-2" }),
-        "timeline-interactive",
+        "classic-browse",
         async () => "fresh"
       )
     ).resolves.toBe("fresh");
@@ -1445,11 +1456,11 @@ describe("BrowseSessionCoordinator", () => {
       disconnectGraceMs: 100,
       modeIdleMs: 10_000,
     });
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     const gate = deferred<void>();
     const inFlight = coordinator.runMode(
       modeAccess(handle),
-      "timeline-interactive",
+      "classic-browse",
       async (session) => {
         await gate.promise;
         await session.browse({ hierarchy: "browse" });
@@ -1479,7 +1490,7 @@ describe("BrowseSessionCoordinator", () => {
       disconnectGraceMs: 100,
       modeIdleMs: 10_000,
     });
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     coordinator.disconnectSocket("core-1", "socket-1");
     jest.advanceTimersByTime(100);
     await flushPromises();
@@ -1487,7 +1498,7 @@ describe("BrowseSessionCoordinator", () => {
     expect(() =>
       coordinator.runMode(
         modeAccess(handle),
-        "timeline-interactive",
+        "classic-browse",
         async () => undefined
       )
     ).toThrow(expect.objectContaining({ code: "SESSION_LOST" }));
@@ -1500,13 +1511,13 @@ describe("BrowseSessionCoordinator", () => {
       coreId: "core-1",
       socketId: "socket-1",
       tabId: "tab-1",
-      mode: "timeline",
+      mode: "classic",
     });
     const secondMode = coordinator.acquireMode({
       coreId: "core-1",
       socketId: "socket-2",
       tabId: "tab-2",
-      mode: "timeline",
+      mode: "classic",
     });
     const action = coordinator.acquireAction({
       coreId: "core-1",
@@ -1550,7 +1561,7 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("rejects an action lease outside its active tab generation", async () => {
-    const mode = await timelineHandle();
+    const mode = await classicHandle();
     expect(() =>
       coordinator.acquireAction({
         coreId: "core-1",
@@ -1574,7 +1585,7 @@ describe("BrowseSessionCoordinator", () => {
     expect(coordinator.diagnostics("core-1").actions).toBe(0);
   });
 
-  it("grants action leases to any mode generation, including Classic", async () => {
+  it("grants action leases to a Classic mode generation", async () => {
     const mode = coordinator.acquireMode({
       coreId: "core-1",
       socketId: "socket-1",
@@ -1597,7 +1608,7 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("supports zone-less read leases that can never execute", async () => {
-    const mode = await timelineHandle();
+    const mode = await classicHandle();
     const action = coordinator.acquireAction({
       coreId: "core-1",
       socketId: "socket-1",
@@ -1633,7 +1644,7 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("rejects an action result before consumption after its mode is replaced", async () => {
-    const mode = await timelineHandle();
+    const mode = await classicHandle();
     const action = coordinator.acquireAction({
       coreId: "core-1",
       socketId: "socket-1",
@@ -1657,7 +1668,7 @@ describe("BrowseSessionCoordinator", () => {
       coreId: "core-1",
       socketId: "socket-1",
       tabId: "tab-1",
-      mode: "timeline",
+      mode: "classic",
     });
     roonResult.resolve(EMPTY_RESULT);
     await assertion;
@@ -1669,7 +1680,7 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("leaves action-phase cancellation to its owner on socket disconnect", async () => {
-    const mode = await timelineHandle();
+    const mode = await classicHandle();
     const action = coordinator.acquireAction({
       coreId: "core-1",
       socketId: "socket-1",
@@ -1689,8 +1700,8 @@ describe("BrowseSessionCoordinator", () => {
     expect(coordinator.diagnostics("core-1").actions).toBe(0);
   });
 
-  it("requires a drained current Timeline generation for the execute claim", async () => {
-    const mode = await timelineHandle();
+  it("requires a drained current mode generation for the execute claim", async () => {
+    const mode = await classicHandle();
     const action = coordinator.acquireAction({
       coreId: "core-1",
       socketId: "socket-1",
@@ -1710,7 +1721,7 @@ describe("BrowseSessionCoordinator", () => {
       coreId: "core-1",
       socketId: "socket-1",
       tabId: "tab-1",
-      mode: "timeline",
+      mode: "classic",
     });
     gate.resolve();
 
@@ -1723,7 +1734,7 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("keeps an issued execute server-owned across socket disconnect", async () => {
-    const mode = await timelineHandle();
+    const mode = await classicHandle();
     const action = coordinator.acquireAction({
       coreId: "core-1",
       socketId: "socket-1",
@@ -1759,7 +1770,7 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("enforces the original action zone through browse, execute, and cleanup", async () => {
-    const mode = await timelineHandle();
+    const mode = await classicHandle();
     const action = coordinator.acquireAction({
       coreId: "core-1",
       socketId: "socket-1",
@@ -1800,7 +1811,7 @@ describe("BrowseSessionCoordinator", () => {
   it("upgrades action quarantine to the underlying late Roon settlement", async () => {
     coordinator.shutdown();
     coordinator = makeCoordinator({ maxActionsPerCore: 1 });
-    const mode = await timelineHandle();
+    const mode = await classicHandle();
     const action = coordinator.acquireAction({
       coreId: "core-1",
       socketId: "socket-1",
@@ -1886,11 +1897,11 @@ describe("BrowseSessionCoordinator", () => {
   });
 
   it("rejects attempts to smuggle a raw session key into the facade", async () => {
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     await expect(
       coordinator.runMode(
         modeAccess(handle),
-        "timeline-interactive",
+        "classic-browse",
         (session) =>
           session.browse({
             hierarchy: "browse",
@@ -1903,7 +1914,7 @@ describe("BrowseSessionCoordinator", () => {
 
   it("clears idle, grace, and quarantine timers on shutdown", async () => {
     jest.useFakeTimers();
-    const handle = await timelineHandle();
+    const handle = await classicHandle();
     coordinator.disconnectSocket("core-1", "socket-1");
     expect(jest.getTimerCount()).toBeGreaterThan(0);
     coordinator.shutdown();
@@ -1911,7 +1922,7 @@ describe("BrowseSessionCoordinator", () => {
     expect(() =>
       coordinator.runMode(
         modeAccess(handle),
-        "timeline-interactive",
+        "classic-browse",
         async () => undefined
       )
     ).toThrow(BrowseSessionCoordinatorError);

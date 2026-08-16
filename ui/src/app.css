@@ -1,70 +1,176 @@
 @import '@fontsource/fira-mono';
 
 :root {
-	--font-ui: 'Avenir Next', 'Trebuchet MS', 'Gill Sans', sans-serif;
-	--font-display: 'Fira Mono', 'Courier New', monospace;
-	--font-mono: 'Fira Mono', 'Courier New', monospace;
-
-	--bg: #0f1116;
-	--bg-soft: #171a20;
-	--surface: #171a21;
-	--surface-2: #1d222b;
-	--surface-3: #252a35;
-	--border: #2a3040;
-	--text: #f4f6fb;
-	--text-soft: #b7bdcc;
-	--accent: #5f6df0;
-	--accent-2: #8a95ff;
-	--good: #6ee7a8;
-
-	--sidebar-bg: linear-gradient(190deg, #0d1016, #12161d);
-	--sidebar-text: #dbe0ea;
-	--sidebar-border: #1c2230;
-	--sidebar-card-bg: rgba(31, 36, 46, 0.82);
-	--sidebar-card-border: #31384a;
-	--sidebar-hover-bg: rgba(137, 149, 255, 0.12);
-	--sidebar-active-bg: rgba(95, 109, 240, 0.24);
-	--sidebar-active-border: rgba(138, 149, 255, 0.42);
-
-	--mini-player-bg: linear-gradient(98deg, #10131b, #1c2331);
-	--mini-player-border: #31384a;
-	--mini-player-text: #e9edf7;
-
-	--radius-sm: 8px;
-	--radius-md: 14px;
-	--radius-lg: 20px;
-	--shadow-soft: 0 10px 24px rgba(1, 3, 8, 0.35);
-	--shadow-strong: 0 22px 52px rgba(1, 3, 8, 0.44);
+	font-family: 'Avenir Next', 'Trebuchet MS', 'Gill Sans', sans-serif;
+	color-scheme: dark;
+	--songr-app-bg: #050505;
+	--songr-bg: #000;
+	--songr-header: #000;
+	--songr-rail: #000;
+	--songr-panel: #0b0b0b;
+	--songr-palette: #0d0d0d;
+	--songr-inset: #101010;
+	--songr-surface-11: #111;
+	--songr-control: #121212;
+	--songr-raise: #141414;
+	--songr-surface-16: #161616;
+	--songr-hover: #1c1c1c;
+	--songr-hover-subtle: #181818;
+	--songr-surface-19: #191919;
+	--songr-surface-1b: #1b1b1b;
+	--songr-surface-1d: #1d1d1d;
+	--songr-surface-20: #202020;
+	--songr-browse-hover: #11100b;
+	--songr-line: rgba(255, 255, 255, 0.09);
+	--songr-line-subtle: rgba(255, 255, 255, 0.06);
+	--songr-line-07: rgba(255, 255, 255, 0.07);
+	--songr-line-10: rgba(255, 255, 255, 0.1);
+	--songr-line-12: rgba(255, 255, 255, 0.12);
+	--songr-line-13: rgba(255, 255, 255, 0.13);
+	--songr-line-15: rgba(255, 255, 255, 0.15);
+	--songr-line-16: rgba(255, 255, 255, 0.16);
+	--songr-line-strong: rgba(255, 255, 255, 0.18);
+	--songr-line-20: rgba(255, 255, 255, 0.2);
+	--songr-line-22: rgba(255, 255, 255, 0.22);
+	--songr-keyline: #222;
+	--songr-text: #fff;
+	--songr-text-high: rgba(255, 255, 255, 0.92);
+	--songr-text-90: rgba(255, 255, 255, 0.9);
+	--songr-text-70: rgba(255, 255, 255, 0.7);
+	--songr-text-64: rgba(255, 255, 255, 0.64);
+	--songr-text-60: rgba(255, 255, 255, 0.6);
+	--songr-text-58: rgba(255, 255, 255, 0.58);
+	--songr-text-56: rgba(255, 255, 255, 0.56);
+	--songr-text-54: rgba(255, 255, 255, 0.54);
+	--songr-text-52: rgba(255, 255, 255, 0.52);
+	--songr-text-48: rgba(255, 255, 255, 0.48);
+	--songr-text-42: rgba(255, 255, 255, 0.42);
+	--songr-text-mid: #c4c4c4;
+	--songr-chip-text: #c9c9c9;
+	--songr-control-text: #d8d8d8;
+	--songr-list-text: #e2e2e2;
+	--songr-result-text: #eee;
+	--songr-copy: #ddd;
+	--songr-settings-copy: #cfcfcf;
+	--songr-kbd: #3c3c3c;
+	--songr-hint: #3f3f3f;
+	--songr-disabled: #2b2b2b;
+	--songr-queue-text: #f3f3f3;
+	--songr-queue-bg: #050505;
+	--songr-soft: #9a9a9a;
+	--songr-subtle: #7c7c7c;
+	--songr-dim: #5e5e5e;
+	--songr-accent: #c8a24a;
+	--songr-unified-accent: #d4af37;
+	--songr-accent-bright: #e6c674;
+	--songr-on-accent: #101010;
+	--songr-success: #6ee7a8;
+	--songr-success-strong: #28a745;
+	--songr-success-muted: #a8d5a2;
+	--songr-error: #ff8a80;
+	--songr-error-soft: #ffb4b4;
+	--songr-error-strong: #dc3545;
+	--songr-error-border: #d97777;
+	--songr-scrim: rgba(0, 0, 0, 0.7);
+	--songr-scrim-soft: rgba(0, 0, 0, 0.45);
+	--songr-scrim-72: rgba(0, 0, 0, 0.72);
+	--songr-scrim-74: rgba(0, 0, 0, 0.74);
+	--songr-scrim-75: rgba(0, 0, 0, 0.75);
+	--songr-scrim-78: rgba(0, 0, 0, 0.78);
+	--songr-scrim-88: rgba(0, 0, 0, 0.88);
+	--songr-scrollbar: #242424;
+	--songr-scrollbar-rail: #222;
+	--songr-queue-scrollbar: #292929;
+	--songr-notice-bg: transparent;
+	--songr-shadow: rgba(0, 0, 0, 0.62);
+	--songr-shadow-soft: rgba(0, 0, 0, 0.55);
+	color: var(--songr-text);
+	background: var(--songr-app-bg);
 }
 
-:root[data-theme='light'] {
-	--bg: #f4f5f8;
-	--bg-soft: #ebedf2;
-	--surface: #ffffff;
-	--surface-2: #f3f6fb;
-	--surface-3: #edf1f9;
-	--border: #d7ddeb;
-	--text: #171d2b;
-	--text-soft: #5e6780;
-	--accent: #4f5de6;
-	--accent-2: #6f7bff;
-	--good: #2f9865;
-
-	--sidebar-bg: linear-gradient(190deg, #f0f2f8, #e8ecf6);
-	--sidebar-text: #1f2738;
-	--sidebar-border: #d2d8e5;
-	--sidebar-card-bg: rgba(255, 255, 255, 0.86);
-	--sidebar-card-border: #d2d8e6;
-	--sidebar-hover-bg: rgba(95, 109, 240, 0.12);
-	--sidebar-active-bg: rgba(95, 109, 240, 0.18);
-	--sidebar-active-border: rgba(95, 109, 240, 0.35);
-
-	--mini-player-bg: linear-gradient(98deg, #f3f6fb, #e4e9f7);
-	--mini-player-border: #cfd8ea;
-	--mini-player-text: #131a2a;
-
-	--shadow-soft: 0 8px 22px rgba(17, 26, 48, 0.1);
-	--shadow-strong: 0 20px 45px rgba(17, 26, 48, 0.16);
+html[data-theme='light'] {
+	color-scheme: light;
+	--songr-app-bg: #f3eee5;
+	--songr-bg: #f3eee5;
+	--songr-header: #faf6ef;
+	--songr-rail: #eee6da;
+	--songr-panel: #faf6ef;
+	--songr-palette: #faf6ef;
+	--songr-inset: #e8dfd1;
+	--songr-surface-11: #e8dfd1;
+	--songr-control: #e8dfd1;
+	--songr-raise: #e8dfd1;
+	--songr-surface-16: #e2d7c7;
+	--songr-hover: #d9ccb9;
+	--songr-hover-subtle: #e2d7c7;
+	--songr-surface-19: #d9ccb9;
+	--songr-surface-1b: #d9ccb9;
+	--songr-surface-1d: #d9ccb9;
+	--songr-surface-20: #d9ccb9;
+	--songr-browse-hover: #e2d7c7;
+	--songr-line: #cbbda7;
+	--songr-line-subtle: #ded4c5;
+	--songr-line-07: #ded4c5;
+	--songr-line-10: #cbbda7;
+	--songr-line-12: #ccbea8;
+	--songr-line-13: #ccbea8;
+	--songr-line-15: #ccbea8;
+	--songr-line-16: #ccbea8;
+	--songr-line-strong: #ccbea8;
+	--songr-line-20: #ccbea8;
+	--songr-line-22: #ccbea8;
+	--songr-keyline: #ccbea8;
+	--songr-text: #292724;
+	--songr-text-high: #292724;
+	--songr-text-90: #292724;
+	--songr-text-70: #4b4741;
+	--songr-text-64: #655f56;
+	--songr-text-60: #655f56;
+	--songr-text-58: #6f685e;
+	--songr-text-56: #6f685e;
+	--songr-text-54: #827a6e;
+	--songr-text-52: #827a6e;
+	--songr-text-48: #827a6e;
+	--songr-text-42: #827a6e;
+	--songr-text-mid: #4b4741;
+	--songr-chip-text: #4b4741;
+	--songr-control-text: #4b4741;
+	--songr-list-text: #292724;
+	--songr-result-text: #292724;
+	--songr-copy: #4b4741;
+	--songr-settings-copy: #4b4741;
+	--songr-kbd: #827a6e;
+	--songr-hint: #827a6e;
+	--songr-disabled: #a79c8b;
+	--songr-queue-text: #292724;
+	--songr-queue-bg: #faf6ef;
+	--songr-soft: #655f56;
+	--songr-subtle: #6f685e;
+	--songr-dim: #827a6e;
+	--songr-accent: #b48732;
+	--songr-unified-accent: #b48732;
+	--songr-accent-bright: #87631f;
+	--songr-on-accent: #17130c;
+	--songr-success: #2f6f4c;
+	--songr-success-strong: #2f6f4c;
+	--songr-success-muted: #2f6f4c;
+	--songr-error: #a33a32;
+	--songr-error-soft: #8f312b;
+	--songr-error-strong: #a33a32;
+	--songr-error-border: #a33a32;
+	--songr-scrim: rgba(42, 35, 27, 0.48);
+	--songr-scrim-soft: rgba(42, 35, 27, 0.34);
+	--songr-scrim-72: rgba(42, 35, 27, 0.49);
+	--songr-scrim-74: rgba(42, 35, 27, 0.5);
+	--songr-scrim-75: rgba(42, 35, 27, 0.51);
+	--songr-scrim-78: rgba(42, 35, 27, 0.53);
+	--songr-scrim-88: rgba(42, 35, 27, 0.6);
+	--songr-scrollbar: #c9bba7;
+	--songr-scrollbar-rail: #c9bba7;
+	--songr-queue-scrollbar: #c9bba7;
+	--songr-notice-bg: #eee6da;
+	--songr-shadow: rgba(54, 45, 34, 0.24);
+	--songr-shadow-soft: rgba(54, 45, 34, 0.2);
 }
 
 * {
@@ -79,12 +185,9 @@ body {
 }
 
 body {
-	font-family: var(--font-ui);
-	color: var(--text);
-	background:
-		radial-gradient(circle at 20% 0%, rgba(111, 123, 255, 0.16), rgba(111, 123, 255, 0) 40%),
-		radial-gradient(circle at 88% 100%, rgba(95, 240, 216, 0.08), rgba(95, 240, 216, 0) 42%),
-		linear-gradient(165deg, var(--bg), var(--bg-soft));
+	font-family: 'Avenir Next', 'Trebuchet MS', 'Gill Sans', sans-serif;
+	color: var(--songr-text);
+	background: var(--songr-app-bg);
 	background-attachment: fixed;
 }
 
@@ -114,10 +217,10 @@ button {
 }
 
 .card {
-	background: var(--surface);
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	box-shadow: var(--shadow-soft);
+	background: var(--songr-panel);
+	border: 1px solid var(--songr-line);
+	border-radius: 14px;
+	box-shadow: 0 16px 42px var(--songr-shadow);
 }
 
 .badge {
@@ -130,13 +233,13 @@ button {
 	font-weight: 700;
 	letter-spacing: 0.04em;
 	text-transform: uppercase;
-	background: rgba(95, 109, 240, 0.2);
-	color: var(--accent-2);
+	background: color-mix(in srgb, var(--songr-accent) 20%, transparent);
+	color: var(--songr-accent-bright);
 }
 
 .badge.good {
-	background: rgba(110, 231, 168, 0.22);
-	color: var(--good);
+	background: color-mix(in srgb, var(--songr-success) 22%, transparent);
+	color: var(--songr-success);
 }
 
 .visually-hidden {

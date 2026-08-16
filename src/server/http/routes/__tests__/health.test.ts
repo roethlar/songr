@@ -3,7 +3,7 @@ import http from "http";
 import { AddressInfo } from "net";
 
 import type { CatalogService } from "../../../../core/catalog/CatalogService";
-import type { CatalogStatus } from "../../../../shared/timelineCatalogContracts";
+import type { CatalogStatus } from "../../../../shared/catalogContracts";
 import type { HealthResponse } from "../../../../shared/types";
 import { createHealthRouter } from "../health";
 

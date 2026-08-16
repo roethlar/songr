@@ -3,29 +3,20 @@ import { writable } from 'svelte/store';
 
 export type ThemeMode = 'dark' | 'light';
 
-// Storage key is also referenced by the inline script in app.html; keep them
-// in sync if you rename it.
-const STORAGE_KEY = 'roon-controller-theme';
+// app.html reads the same key before Svelte hydrates to prevent a theme flash.
+export const THEME_STORAGE_KEY = 'roon-controller-theme';
 
 function detectInitialTheme(): ThemeMode {
-	if (!browser) {
-		return 'dark';
-	}
+	if (!browser) return 'dark';
 
 	try {
-		const stored = localStorage.getItem(STORAGE_KEY);
-		if (stored === 'dark' || stored === 'light') {
-			return stored;
-		}
+		const stored = localStorage.getItem(THEME_STORAGE_KEY);
+		if (stored === 'dark' || stored === 'light') return stored;
 	} catch {
-		/* localStorage unavailable (private mode, blocked, etc.) */
+		/* localStorage can be unavailable in locked-down browser contexts. */
 	}
 
-	// Honor the OS preference when nothing is stored.
-	if (window.matchMedia?.('(prefers-color-scheme: light)').matches) {
-		return 'light';
-	}
-	return 'dark';
+	return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
 const internalStore = writable<ThemeMode>(detectInitialTheme());
@@ -35,15 +26,12 @@ export const themeStore = {
 };
 
 export function applyTheme(theme: ThemeMode): void {
-	if (!browser) {
-		return;
-	}
-
-	document.documentElement.setAttribute('data-theme', theme);
+	if (!browser) return;
+	document.documentElement.dataset.theme = theme;
 	try {
-		localStorage.setItem(STORAGE_KEY, theme);
+		localStorage.setItem(THEME_STORAGE_KEY, theme);
 	} catch {
-		/* localStorage unavailable */
+		/* Keep the live theme even when persistence is unavailable. */
 	}
 }
 
@@ -56,12 +44,4 @@ export function initializeTheme(): void {
 	const theme = detectInitialTheme();
 	applyTheme(theme);
 	internalStore.set(theme);
-}
-
-export function toggleTheme(): void {
-	internalStore.update((current) => {
-		const next: ThemeMode = current === 'dark' ? 'light' : 'dark';
-		applyTheme(next);
-		return next;
-	});
 }

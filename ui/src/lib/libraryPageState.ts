@@ -1,4 +1,3 @@
-import type { LibraryView } from '$lib/stores/libraryViewStore';
 import type { UnifiedLibraryDensity } from '$lib/stores/unifiedLibraryPrefsStore';
 
 export type LibraryViewActivationCause =
@@ -6,10 +5,6 @@ export type LibraryViewActivationCause =
 	| 'route-request'
 	| 'user-switch'
 	| 'history-pop';
-
-export const CLASSIC_LIBRARY_PAGE_STATE_VERSION = 1 as const;
-export const TIMELINE_LIBRARY_PAGE_STATE_VERSION = 1 as const;
-export const LIBRARY_VIEW_REQUEST_PAGE_STATE_VERSION = 1 as const;
 
 export interface BrowseBreadcrumb {
 	title: string;
@@ -26,74 +21,44 @@ export type BrowseHistoryContext =
 export interface BrowseHistoryStep {
 	hierarchy: 'browse' | 'search';
 	breadcrumb: BrowseBreadcrumb;
+	/** Number of rows visible when this semantic target was selected. */
+	restoreCount?: number;
 }
 
-export interface ClassicHistorySnapshot {
+export interface BrowseHistorySnapshot {
 	context: BrowseHistoryContext;
 	history: BrowseHistoryStep[];
 	forward: BrowseHistoryStep[];
 }
 
-export interface ClassicLibraryPageState {
-	libraryView: 'classic';
-	schemaVersion: typeof CLASSIC_LIBRARY_PAGE_STATE_VERSION;
-	snapshot: ClassicHistorySnapshot;
-}
-
-export const TIMELINE_ARTIST_QUERY_MAX_LENGTH = 256;
-export const TIMELINE_LOCAL_ID_MAX_LENGTH = 256;
-export const TIMELINE_SEMANTIC_PATH_MAX_LENGTH = 32;
-export const TIMELINE_CAMERA_MIN_SCALE = 0.125;
-export const TIMELINE_CAMERA_MAX_SCALE = 8;
-export const TIMELINE_DISPLAY_DEPTH_MAX = 8;
-
-export type TimelineSemanticKind = 'artist' | 'album' | 'auxiliary-artist';
-
-export interface TimelineSemanticRef {
-	kind: TimelineSemanticKind;
-	localId: string;
-}
-
-export interface TimelineCameraSnapshot {
-	x: number;
-	y: number;
-	scale: number;
-}
-
-export interface TimelineLibrarySnapshot {
-	artistQuery: string;
-	selectedArtistLocalId: string | null;
-	activeSemanticPath: TimelineSemanticRef[];
-	selectedNode: TimelineSemanticRef | null;
-	camera: TimelineCameraSnapshot;
-	displayDepth: number;
-}
-
-export interface TimelineLibraryPageState {
-	libraryView: 'timeline';
-	schemaVersion: typeof TIMELINE_LIBRARY_PAGE_STATE_VERSION;
-	snapshot: TimelineLibrarySnapshot;
-}
-
-export const UNIFIED_LIBRARY_PAGE_STATE_VERSION = 3 as const;
+export const UNIFIED_LIBRARY_PAGE_STATE_VERSION = 7 as const;
+const LEGACY_UNIFIED_LIBRARY_ITEM_SPLIT_VERSION = 6 as const;
+const LEGACY_UNIFIED_LIBRARY_DRILL_VERSION = 5 as const;
+const LEGACY_UNIFIED_LIBRARY_PAGE_STATE_VERSION = 4 as const;
+const LEGACY_UNIFIED_LIBRARY_PAGE_STATE_WITHOUT_BROWSE_VERSION = 3 as const;
 export const UNIFIED_LOCAL_ID_MAX_LENGTH = 256;
 export const UNIFIED_LABEL_MAX_LENGTH = 256;
 export const UNIFIED_FILTER_TEXT_MAX_LENGTH = 256;
+export const UNIFIED_BROWSE_RESTORE_COUNT_MAX = 100_000;
+/** Mirrors the editorial contract's zero-based track-anchor bound. */
+export const UNIFIED_TRACK_INDEX_MAX = 500;
 
 export type UnifiedLibraryScope =
 	| 'artists'
 	| 'albums'
 	| 'genres'
+	| 'favorites'
 	| 'recently-played'
 	| 'most-played'
 	| 'playlists'
 	| 'recently-added'
-	| 'surprise';
+	| 'surprise'
+	| 'browse';
 
 /**
- * Drill targets are semantic: artists and albums restore by catalog localId;
- * genres and composers restore by their normalized display label.
- * Restoration re-navigates and matches, never stores browse keys.
+ * Legacy (v5 and earlier) drill targets: one union carried both collection
+ * contexts and item destinations. Kept only to normalize old history
+ * entries forward; v6 splits collection drills from item targets.
  */
 export type UnifiedLibraryDrillTarget =
 	| { kind: 'artist'; localId: string }
@@ -101,14 +66,65 @@ export type UnifiedLibraryDrillTarget =
 	| { kind: 'genre'; label: string }
 	| { kind: 'composer'; label: string };
 
+/**
+ * Collection drills are album-list contexts, restored by their normalized
+ * display label. Restoration re-navigates and matches, never stores
+ * browse keys.
+ */
+export type UnifiedCollectionDrillTarget =
+	| { kind: 'genre'; label: string }
+	| { kind: 'composer'; label: string };
+
+/**
+ * Item targets are first-class entity pages, restored by catalog localId
+ * (reconstructible product semantics only; opaque live-session targets are
+ * never persisted here).
+ */
+export type UnifiedItemTarget =
+	| { kind: 'album'; localId: string }
+	| { kind: 'artist'; localId: string };
+
+/**
+ * A reconstructible child surface over an open item page (Slice 8): the
+ * exact-track view is the album's zero-based track index — pure product
+ * semantics. Opaque live-session destinations (followed performers,
+ * similar albums) are deliberately NOT representable here: they restore
+ * to the parent, which is the session-bound restoration rule.
+ */
+export type UnifiedItemDetailTarget = { kind: 'track'; trackIndex: number };
+
+/**
+ * The composition surface over a composer collection drill (Slice 8):
+ * restored by the composer context plus an exact composition title; a
+ * null title restores the composition list itself.
+ */
+export interface UnifiedCompositionSurface {
+	title: string | null;
+}
+
 export interface UnifiedLibrarySnapshot {
 	scope: UnifiedLibraryScope;
-	drill: UnifiedLibraryDrillTarget | null;
+	/** Optional genre/composer album-list context. */
+	collectionDrill: UnifiedCollectionDrillTarget | null;
+	/**
+	 * Optional item page over the scope/collection context. Both fields may
+	 * be present: an album opened from a genre drill restores its parent
+	 * context with it.
+	 */
+	itemTarget: UnifiedItemTarget | null;
+	/** Optional child surface over an ALBUM item page (v7). */
+	itemDetail: UnifiedItemDetailTarget | null;
+	/** Optional composition surface over a COMPOSER collection drill (v7). */
+	composition: UnifiedCompositionSurface | null;
 	filterText: string;
-	openAlbumLocalId: string | null;
 	surpriseSeed: number | null;
 	/** Null only for an untagged root; semantic entries capture the live density. */
 	density: UnifiedLibraryDensity | null;
+	/**
+	 * Keyless deep-Browse/search path. Every restoration re-resolves this
+	 * semantic path against the live browse-session generation.
+	 */
+	browseHistory: BrowseHistorySnapshot;
 }
 
 export interface UnifiedLibraryPageState {
@@ -117,52 +133,55 @@ export interface UnifiedLibraryPageState {
 	snapshot: UnifiedLibrarySnapshot;
 }
 
-export type LibraryPageState =
-	| ClassicLibraryPageState
-	| TimelineLibraryPageState
-	| UnifiedLibraryPageState;
-
-export interface LibraryViewRequestPageState {
-	libraryView: LibraryView;
-	schemaVersion: typeof LIBRARY_VIEW_REQUEST_PAGE_STATE_VERSION;
-}
+export type LibraryPageState = UnifiedLibraryPageState;
 
 /** SvelteKit requires App.PageState to remain an augmentable interface. */
 export interface LibraryPageStateEnvelope {
 	library?: LibraryPageState;
-	libraryRequest?: LibraryViewRequestPageState;
 }
 
 const BREADCRUMB_KEYS = ['title', 'subtitle', 'imageKey', 'itemType', 'searchCategory'] as const;
-const HISTORY_STEP_KEYS = ['hierarchy', 'breadcrumb'] as const;
-const CLASSIC_SNAPSHOT_KEYS = ['context', 'history', 'forward'] as const;
+const HISTORY_STEP_KEYS = ['hierarchy', 'breadcrumb', 'restoreCount'] as const;
+const BROWSE_SNAPSHOT_KEYS = ['context', 'history', 'forward'] as const;
 const LIBRARY_STATE_KEYS = ['libraryView', 'schemaVersion', 'snapshot'] as const;
-const LIBRARY_VIEW_REQUEST_STATE_KEYS = ['libraryView', 'schemaVersion'] as const;
-const TIMELINE_SNAPSHOT_KEYS = [
-	'artistQuery',
-	'selectedArtistLocalId',
-	'activeSemanticPath',
-	'selectedNode',
-	'camera',
-	'displayDepth'
-] as const;
 const UNIFIED_SNAPSHOT_KEYS = [
+	'scope',
+	'collectionDrill',
+	'itemTarget',
+	'itemDetail',
+	'composition',
+	'filterText',
+	'surpriseSeed',
+	'density',
+	'browseHistory'
+] as const;
+/** v6 predates the item-detail and composition surfaces. */
+const LEGACY_V6_UNIFIED_SNAPSHOT_KEYS = UNIFIED_SNAPSHOT_KEYS.filter(
+	(key) => key !== 'itemDetail' && key !== 'composition'
+);
+const LEGACY_UNIFIED_SNAPSHOT_KEYS = [
 	'scope',
 	'drill',
 	'filterText',
 	'openAlbumLocalId',
 	'surpriseSeed',
-	'density'
+	'density',
+	'browseHistory'
 ] as const;
+const LEGACY_UNIFIED_SNAPSHOT_WITHOUT_BROWSE_KEYS = LEGACY_UNIFIED_SNAPSHOT_KEYS.filter(
+	(key) => key !== 'browseHistory'
+);
 const UNIFIED_SCOPES: readonly UnifiedLibraryScope[] = [
 	'artists',
 	'albums',
 	'genres',
+	'favorites',
 	'recently-played',
 	'most-played',
 	'playlists',
 	'recently-added',
-	'surprise'
+	'surprise',
+	'browse'
 ] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -208,10 +227,25 @@ function normalizeBreadcrumb(value: unknown): BrowseBreadcrumb | null {
 }
 
 function normalizeHistoryStep(value: unknown): BrowseHistoryStep | null {
-	if (!isRecord(value) || !hasExactKeys(value, HISTORY_STEP_KEYS)) return null;
+	if (!isRecord(value) || !hasOnlyKeys(value, HISTORY_STEP_KEYS)) return null;
 	if (value.hierarchy !== 'browse' && value.hierarchy !== 'search') return null;
 	const breadcrumb = normalizeBreadcrumb(value.breadcrumb);
-	return breadcrumb ? { hierarchy: value.hierarchy, breadcrumb } : null;
+	if (!breadcrumb) return null;
+	if (
+		value.restoreCount !== undefined &&
+		(!Number.isSafeInteger(value.restoreCount) ||
+			(value.restoreCount as number) < 1 ||
+			(value.restoreCount as number) > UNIFIED_BROWSE_RESTORE_COUNT_MAX)
+	) {
+		return null;
+	}
+	return {
+		hierarchy: value.hierarchy,
+		breadcrumb,
+		...(value.restoreCount !== undefined
+			? { restoreCount: value.restoreCount as number }
+			: {})
+	};
 }
 
 function normalizeHistoryStack(value: unknown): BrowseHistoryStep[] | null {
@@ -238,9 +272,9 @@ function normalizeHistoryContext(value: unknown): BrowseHistoryContext | null {
 	return null;
 }
 
-export function normalizeClassicHistorySnapshot(value: unknown): ClassicHistorySnapshot | null {
+export function normalizeBrowseHistorySnapshot(value: unknown): BrowseHistorySnapshot | null {
 	try {
-		if (!isRecord(value) || !hasExactKeys(value, CLASSIC_SNAPSHOT_KEYS)) return null;
+		if (!isRecord(value) || !hasExactKeys(value, BROWSE_SNAPSHOT_KEYS)) return null;
 		const context = normalizeHistoryContext(value.context);
 		const history = normalizeHistoryStack(value.history);
 		const forward = normalizeHistoryStack(value.forward);
@@ -255,118 +289,6 @@ export function normalizeClassicHistorySnapshot(value: unknown): ClassicHistoryS
 	} catch {
 		return null;
 	}
-}
-
-function normalizeTimelineSemanticRef(value: unknown): TimelineSemanticRef | null {
-	if (!isRecord(value) || !hasExactKeys(value, ['kind', 'localId'])) return null;
-	if (
-		value.kind !== 'artist' &&
-		value.kind !== 'album' &&
-		value.kind !== 'auxiliary-artist'
-	) {
-		return null;
-	}
-	return isNonEmptyString(value.localId, TIMELINE_LOCAL_ID_MAX_LENGTH)
-		? { kind: value.kind, localId: value.localId }
-		: null;
-}
-
-function normalizeTimelineCamera(value: unknown): TimelineCameraSnapshot | null {
-	if (!isRecord(value) || !hasExactKeys(value, ['x', 'y', 'scale'])) return null;
-	if (
-		typeof value.x !== 'number' ||
-		!Number.isFinite(value.x) ||
-		typeof value.y !== 'number' ||
-		!Number.isFinite(value.y) ||
-		typeof value.scale !== 'number' ||
-		!Number.isFinite(value.scale) ||
-		value.scale < TIMELINE_CAMERA_MIN_SCALE ||
-		value.scale > TIMELINE_CAMERA_MAX_SCALE
-	) {
-		return null;
-	}
-	return { x: value.x, y: value.y, scale: value.scale };
-}
-
-function normalizeTimelineSnapshot(value: unknown): TimelineLibrarySnapshot | null {
-	if (!isRecord(value) || !hasExactKeys(value, TIMELINE_SNAPSHOT_KEYS)) return null;
-	if (
-		typeof value.artistQuery !== 'string' ||
-		value.artistQuery.length > TIMELINE_ARTIST_QUERY_MAX_LENGTH
-	) {
-		return null;
-	}
-	if (
-		value.selectedArtistLocalId !== null &&
-		!isNonEmptyString(value.selectedArtistLocalId, TIMELINE_LOCAL_ID_MAX_LENGTH)
-	) {
-		return null;
-	}
-	if (
-		!Array.isArray(value.activeSemanticPath) ||
-		value.activeSemanticPath.length > TIMELINE_SEMANTIC_PATH_MAX_LENGTH
-	) {
-		return null;
-	}
-	const activeSemanticPath: TimelineSemanticRef[] = [];
-	for (const rawRef of value.activeSemanticPath) {
-		const ref = normalizeTimelineSemanticRef(rawRef);
-		if (!ref) return null;
-		activeSemanticPath.push(ref);
-	}
-	const selectedNode =
-		value.selectedNode === null ? null : normalizeTimelineSemanticRef(value.selectedNode);
-	if (value.selectedNode !== null && !selectedNode) return null;
-	const camera = normalizeTimelineCamera(value.camera);
-	if (!camera) return null;
-	if (
-		typeof value.displayDepth !== 'number' ||
-		!Number.isInteger(value.displayDepth) ||
-		value.displayDepth < 0 ||
-		value.displayDepth > TIMELINE_DISPLAY_DEPTH_MAX
-	) {
-		return null;
-	}
-	if (value.selectedArtistLocalId === null) {
-		if (activeSemanticPath.length !== 0 || selectedNode !== null || value.displayDepth !== 0) {
-			return null;
-		}
-	} else {
-		const root = activeSemanticPath[0];
-		const tail = activeSemanticPath.at(-1);
-		if (
-			!root ||
-			root.kind !== 'artist' ||
-			root.localId !== value.selectedArtistLocalId ||
-			!tail ||
-			!selectedNode ||
-			selectedNode.kind !== tail.kind ||
-			selectedNode.localId !== tail.localId
-		) {
-			return null;
-		}
-		const supportedShape =
-			(activeSemanticPath.length === 1 &&
-				root.kind === 'artist' &&
-				value.displayDepth === 0) ||
-			(activeSemanticPath.length === 2 &&
-				(activeSemanticPath[1].kind === 'album' ||
-					activeSemanticPath[1].kind === 'auxiliary-artist') &&
-				value.displayDepth === 1) ||
-			(activeSemanticPath.length === 3 &&
-				activeSemanticPath[1].kind === 'auxiliary-artist' &&
-				activeSemanticPath[2].kind === 'album' &&
-				value.displayDepth === 2);
-		if (!supportedShape) return null;
-	}
-	return {
-		artistQuery: value.artistQuery,
-		selectedArtistLocalId: value.selectedArtistLocalId,
-		activeSemanticPath,
-		selectedNode,
-		camera,
-		displayDepth: value.displayDepth
-	};
 }
 
 function isUnifiedScope(value: unknown): value is UnifiedLibraryScope {
@@ -396,20 +318,63 @@ function normalizeUnifiedDrillTarget(value: unknown): UnifiedLibraryDrillTarget 
 	return null;
 }
 
-function normalizeUnifiedSnapshot(value: unknown): UnifiedLibrarySnapshot | null {
-	if (!isRecord(value) || !hasExactKeys(value, UNIFIED_SNAPSHOT_KEYS)) return null;
-	if (!isUnifiedScope(value.scope)) return null;
-	const drill = value.drill === null ? null : normalizeUnifiedDrillTarget(value.drill);
-	if (value.drill !== null && !drill) return null;
+function emptyBrowseHistory(): BrowseHistorySnapshot {
+	return { context: { hierarchy: 'browse' }, history: [], forward: [] };
+}
+
+function normalizeCollectionDrillTarget(
+	value: unknown
+): UnifiedCollectionDrillTarget | null {
+	if (!isRecord(value)) return null;
+	if (value.kind === 'genre' || value.kind === 'composer') {
+		return hasExactKeys(value, ['kind', 'label']) &&
+			isNonEmptyString(value.label, UNIFIED_LABEL_MAX_LENGTH)
+			? { kind: value.kind, label: value.label }
+			: null;
+	}
+	return null;
+}
+
+function normalizeItemTarget(value: unknown): UnifiedItemTarget | null {
+	if (!isRecord(value)) return null;
+	if (value.kind === 'album' || value.kind === 'artist') {
+		return hasExactKeys(value, ['kind', 'localId']) &&
+			isNonEmptyString(value.localId, UNIFIED_LOCAL_ID_MAX_LENGTH)
+			? { kind: value.kind, localId: value.localId }
+			: null;
+	}
+	return null;
+}
+
+function normalizeItemDetail(value: unknown): UnifiedItemDetailTarget | null {
+	if (!isRecord(value)) return null;
+	if (value.kind !== 'track') return null;
+	return hasExactKeys(value, ['kind', 'trackIndex']) &&
+		Number.isSafeInteger(value.trackIndex) &&
+		(value.trackIndex as number) >= 0 &&
+		(value.trackIndex as number) < UNIFIED_TRACK_INDEX_MAX
+		? { kind: 'track', trackIndex: value.trackIndex as number }
+		: null;
+}
+
+function normalizeCompositionSurface(
+	value: unknown
+): UnifiedCompositionSurface | null {
+	if (!isRecord(value) || !hasExactKeys(value, ['title'])) return null;
+	if (value.title === null) return { title: null };
+	return isNonEmptyString(value.title, UNIFIED_LABEL_MAX_LENGTH)
+		? { title: value.title }
+		: null;
+}
+
+function normalizeSharedSnapshotFields(value: Record<string, unknown>): {
+	filterText: string;
+	surpriseSeed: number | null;
+	density: UnifiedLibraryDensity | null;
+} | null {
 	if (
 		typeof value.filterText !== 'string' ||
 		value.filterText.length > UNIFIED_FILTER_TEXT_MAX_LENGTH
-	) {
-		return null;
-	}
-	if (
-		value.openAlbumLocalId !== null &&
-		!isNonEmptyString(value.openAlbumLocalId, UNIFIED_LOCAL_ID_MAX_LENGTH)
 	) {
 		return null;
 	}
@@ -423,12 +388,109 @@ function normalizeUnifiedSnapshot(value: unknown): UnifiedLibrarySnapshot | null
 	}
 	if (value.density !== null && !isUnifiedDensity(value.density)) return null;
 	return {
-		scope: value.scope,
-		drill,
 		filterText: value.filterText,
-		openAlbumLocalId: value.openAlbumLocalId,
-		surpriseSeed: value.surpriseSeed,
-		density: value.density
+		surpriseSeed: value.surpriseSeed as number | null,
+		density: value.density as UnifiedLibraryDensity | null
+	};
+}
+
+function normalizeUnifiedSnapshot(
+	value: unknown,
+	legacyV6 = false
+): UnifiedLibrarySnapshot | null {
+	const keys = legacyV6 ? LEGACY_V6_UNIFIED_SNAPSHOT_KEYS : UNIFIED_SNAPSHOT_KEYS;
+	if (!isRecord(value) || !hasExactKeys(value, keys)) return null;
+	if (!isUnifiedScope(value.scope)) return null;
+	const collectionDrill =
+		value.collectionDrill === null
+			? null
+			: normalizeCollectionDrillTarget(value.collectionDrill);
+	if (value.collectionDrill !== null && !collectionDrill) return null;
+	const itemTarget =
+		value.itemTarget === null ? null : normalizeItemTarget(value.itemTarget);
+	if (value.itemTarget !== null && !itemTarget) return null;
+	let itemDetail: UnifiedItemDetailTarget | null = null;
+	let composition: UnifiedCompositionSurface | null = null;
+	if (!legacyV6) {
+		itemDetail =
+			value.itemDetail === null ? null : normalizeItemDetail(value.itemDetail);
+		if (value.itemDetail !== null && !itemDetail) return null;
+		// A child surface without its exact parent context is not
+		// reconstructible: reject rather than restore something else.
+		if (itemDetail !== null && itemTarget?.kind !== 'album') return null;
+		composition =
+			value.composition === null
+				? null
+				: normalizeCompositionSurface(value.composition);
+		if (value.composition !== null && !composition) return null;
+		if (composition !== null && collectionDrill?.kind !== 'composer') return null;
+	}
+	const shared = normalizeSharedSnapshotFields(value);
+	if (!shared) return null;
+	const browseHistory = normalizeBrowseHistorySnapshot(value.browseHistory);
+	if (!browseHistory) return null;
+	return {
+		scope: value.scope,
+		collectionDrill,
+		itemTarget,
+		itemDetail,
+		composition,
+		...shared,
+		browseHistory
+	};
+}
+
+/**
+ * v5-and-earlier snapshots carried one `drill` union plus a redundant
+ * `openAlbumLocalId`. They normalize forward: artist/album drills become
+ * item targets, genre/composer drills become collection drills, and a
+ * dangling `openAlbumLocalId` without an album drill still restores its
+ * album page.
+ */
+function normalizeLegacyUnifiedSnapshot(
+	value: unknown,
+	withoutBrowse = false
+): UnifiedLibrarySnapshot | null {
+	const expectedKeys = withoutBrowse
+		? LEGACY_UNIFIED_SNAPSHOT_WITHOUT_BROWSE_KEYS
+		: LEGACY_UNIFIED_SNAPSHOT_KEYS;
+	if (!isRecord(value) || !hasExactKeys(value, expectedKeys)) return null;
+	if (!isUnifiedScope(value.scope)) return null;
+	const drill = value.drill === null ? null : normalizeUnifiedDrillTarget(value.drill);
+	if (value.drill !== null && !drill) return null;
+	if (
+		value.openAlbumLocalId !== null &&
+		!isNonEmptyString(value.openAlbumLocalId, UNIFIED_LOCAL_ID_MAX_LENGTH)
+	) {
+		return null;
+	}
+	const shared = normalizeSharedSnapshotFields(value);
+	if (!shared) return null;
+	const browseHistory = withoutBrowse
+		? emptyBrowseHistory()
+		: normalizeBrowseHistorySnapshot(value.browseHistory);
+	if (!browseHistory) return null;
+
+	let collectionDrill: UnifiedCollectionDrillTarget | null = null;
+	let itemTarget: UnifiedItemTarget | null = null;
+	if (drill) {
+		if (drill.kind === 'artist' || drill.kind === 'album') {
+			itemTarget = { kind: drill.kind, localId: drill.localId };
+		} else {
+			collectionDrill = { kind: drill.kind, label: drill.label };
+		}
+	}
+	if (itemTarget === null && value.openAlbumLocalId !== null) {
+		itemTarget = { kind: 'album', localId: value.openAlbumLocalId as string };
+	}
+	return {
+		scope: value.scope,
+		collectionDrill,
+		itemTarget,
+		itemDetail: null,
+		composition: null,
+		...shared,
+		browseHistory
 	};
 }
 
@@ -436,36 +498,50 @@ export function normalizeLibraryPageState(value: unknown): LibraryPageState | nu
 	try {
 		if (!isRecord(value) || !hasExactKeys(value, LIBRARY_STATE_KEYS)) return null;
 		if (
-			value.libraryView === 'classic' &&
-			value.schemaVersion === CLASSIC_LIBRARY_PAGE_STATE_VERSION
+			value.libraryView === 'unified' &&
+			value.schemaVersion === UNIFIED_LIBRARY_PAGE_STATE_VERSION
 		) {
-			const snapshot = normalizeClassicHistorySnapshot(value.snapshot);
+			const snapshot = normalizeUnifiedSnapshot(value.snapshot);
 			return snapshot
 				? {
-						libraryView: 'classic',
-						schemaVersion: CLASSIC_LIBRARY_PAGE_STATE_VERSION,
-						snapshot
-					}
-				: null;
-		}
-		if (
-			value.libraryView === 'timeline' &&
-			value.schemaVersion === TIMELINE_LIBRARY_PAGE_STATE_VERSION
-		) {
-			const snapshot = normalizeTimelineSnapshot(value.snapshot);
-			return snapshot
-				? {
-						libraryView: 'timeline',
-						schemaVersion: TIMELINE_LIBRARY_PAGE_STATE_VERSION,
+						libraryView: 'unified',
+						schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
 						snapshot
 					}
 				: null;
 		}
 		if (
 			value.libraryView === 'unified' &&
-			value.schemaVersion === UNIFIED_LIBRARY_PAGE_STATE_VERSION
+			value.schemaVersion === LEGACY_UNIFIED_LIBRARY_ITEM_SPLIT_VERSION
 		) {
-			const snapshot = normalizeUnifiedSnapshot(value.snapshot);
+			const snapshot = normalizeUnifiedSnapshot(value.snapshot, true);
+			return snapshot
+				? {
+						libraryView: 'unified',
+						schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+						snapshot
+					}
+				: null;
+		}
+		if (
+			value.libraryView === 'unified' &&
+			(value.schemaVersion === LEGACY_UNIFIED_LIBRARY_DRILL_VERSION ||
+				value.schemaVersion === LEGACY_UNIFIED_LIBRARY_PAGE_STATE_VERSION)
+		) {
+			const snapshot = normalizeLegacyUnifiedSnapshot(value.snapshot);
+			return snapshot
+				? {
+						libraryView: 'unified',
+						schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+						snapshot
+					}
+				: null;
+		}
+		if (
+			value.libraryView === 'unified' &&
+			value.schemaVersion === LEGACY_UNIFIED_LIBRARY_PAGE_STATE_WITHOUT_BROWSE_VERSION
+		) {
+			const snapshot = normalizeLegacyUnifiedSnapshot(value.snapshot, true);
 			return snapshot
 				? {
 						libraryView: 'unified',
@@ -489,89 +565,33 @@ export function normalizeLibraryPageStateEnvelope(value: unknown): LibraryPageSt
 	}
 }
 
-export function normalizeLibraryViewRequestPageState(
-	value: unknown
-): LibraryViewRequestPageState | null {
-	try {
-		if (!isRecord(value) || !hasExactKeys(value, LIBRARY_VIEW_REQUEST_STATE_KEYS)) return null;
-		if (
-			(value.libraryView !== 'classic' &&
-				value.libraryView !== 'timeline' &&
-				value.libraryView !== 'unified') ||
-			value.schemaVersion !== LIBRARY_VIEW_REQUEST_PAGE_STATE_VERSION
-		) return null;
-		return {
-			libraryView: value.libraryView,
-			schemaVersion: LIBRARY_VIEW_REQUEST_PAGE_STATE_VERSION
-		};
-	} catch {
-		return null;
-	}
-}
-
-export function normalizeLibraryViewRequestPageStateEnvelope(
-	value: unknown
-): LibraryViewRequestPageState | null {
-	try {
-		if (!isRecord(value) || !hasExactKeys(value, ['libraryRequest'])) return null;
-		return normalizeLibraryViewRequestPageState(value.libraryRequest);
-	} catch {
-		return null;
-	}
-}
-
 function requireLibraryPageState(value: unknown): LibraryPageState {
 	const normalized = normalizeLibraryPageState(value);
 	if (!normalized) throw new TypeError('Invalid Library page state');
 	return normalized;
 }
 
-export function buildClassicLibraryPageState(
-	snapshot: ClassicHistorySnapshot
-): ClassicLibraryPageState {
-	return requireLibraryPageState({
-		libraryView: 'classic',
-		schemaVersion: CLASSIC_LIBRARY_PAGE_STATE_VERSION,
-		snapshot
-	}) as ClassicLibraryPageState;
-}
-
-export function buildClassicRootPageState(
-	context: BrowseHistoryContext = { hierarchy: 'browse' }
-): ClassicLibraryPageState {
-	return buildClassicLibraryPageState({ context, history: [], forward: [] });
-}
-
-export function buildTimelineLibraryPageState(
-	snapshot: TimelineLibrarySnapshot
-): TimelineLibraryPageState {
-	return requireLibraryPageState({
-		libraryView: 'timeline',
-		schemaVersion: TIMELINE_LIBRARY_PAGE_STATE_VERSION,
-		snapshot
-	}) as TimelineLibraryPageState;
-}
-
-export function buildTimelineRootPageState(): TimelineLibraryPageState {
-	return buildTimelineLibraryPageState({
-		artistQuery: '',
-		selectedArtistLocalId: null,
-		activeSemanticPath: [],
-		selectedNode: null,
-		camera: { x: 0, y: 0, scale: 1 },
-		displayDepth: 0
-	});
-}
-
 export function buildUnifiedLibraryPageState(
-	snapshot: Omit<UnifiedLibrarySnapshot, 'density'> & {
+	snapshot: Omit<
+		UnifiedLibrarySnapshot,
+		'density' | 'browseHistory' | 'itemDetail' | 'composition'
+	> & {
 		readonly density?: UnifiedLibraryDensity | null;
+		readonly browseHistory?: BrowseHistorySnapshot;
+		readonly itemDetail?: UnifiedItemDetailTarget | null;
+		readonly composition?: UnifiedCompositionSurface | null;
 	}
 ): UnifiedLibraryPageState {
 	return requireLibraryPageState({
 		libraryView: 'unified',
 		schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
-		snapshot: { density: null, ...snapshot }
+		snapshot: {
+			density: null,
+			browseHistory: emptyBrowseHistory(),
+			itemDetail: null,
+			composition: null,
+			...snapshot
+		}
 	}) as UnifiedLibraryPageState;
 }
 
@@ -580,11 +600,12 @@ export function buildUnifiedRootPageState(
 ): UnifiedLibraryPageState {
 	return buildUnifiedLibraryPageState({
 		scope,
-		drill: null,
+		collectionDrill: null,
+		itemTarget: null,
 		filterText: '',
-		openAlbumLocalId: null,
 		surpriseSeed: null,
-		density: null
+		density: null,
+		browseHistory: emptyBrowseHistory()
 	});
 }
 
@@ -592,26 +613,4 @@ export function buildLibraryPageStateEnvelope<State extends LibraryPageState>(
 	state: State
 ): { library: State } {
 	return { library: requireLibraryPageState(state) as State };
-}
-
-export function buildLibraryViewRequestPageStateEnvelope(
-	libraryView: LibraryView
-): { libraryRequest: LibraryViewRequestPageState } {
-	const request = normalizeLibraryViewRequestPageState({
-		libraryView,
-		schemaVersion: LIBRARY_VIEW_REQUEST_PAGE_STATE_VERSION
-	});
-	if (!request) throw new TypeError('Invalid Library view request page state');
-	return { libraryRequest: request };
-}
-
-export function pageStateForLibraryView(
-	libraryView: LibraryView,
-	classicSnapshot?: ClassicHistorySnapshot
-): LibraryPageState {
-	if (libraryView === 'timeline') return buildTimelineRootPageState();
-	if (libraryView === 'unified') return buildUnifiedRootPageState();
-	return classicSnapshot
-		? buildClassicLibraryPageState(classicSnapshot)
-		: buildClassicRootPageState();
 }

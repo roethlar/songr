@@ -17,7 +17,8 @@ import {
 const REQUEST_ID = "request-01";
 const OPERATION_ID = "operation-01";
 const ACTION_ID = "action-01";
-const ALBUM_ID = "018f0f64-3f31-7a9b-8c2d-8f572cb18a12";
+const PAGE_ID = "page-01";
+const VERSION_ID = "version-01";
 const RESOLVING_DEADLINE = 1_752_550_000_000;
 const CHOOSING_DEADLINE = RESOLVING_DEADLINE + 30_000;
 
@@ -42,7 +43,8 @@ describe("album action begin contracts", () => {
   it("normalizes the exact keyless begin request into a defensive copy", () => {
     const source = {
       requestId: REQUEST_ID,
-      albumLocalId: ALBUM_ID,
+      pageId: PAGE_ID,
+      versionId: VERSION_ID,
       zoneId: "zone-01",
       tabId: "tab-01",
       generation: 4,
@@ -55,7 +57,8 @@ describe("album action begin contracts", () => {
   it("normalizes a begin request carrying a track selector", () => {
     const source = {
       requestId: REQUEST_ID,
-      albumLocalId: ALBUM_ID,
+      pageId: PAGE_ID,
+      versionId: VERSION_ID,
       zoneId: "zone-01",
       tabId: "tab-01",
       generation: 4,
@@ -78,7 +81,8 @@ describe("album action begin contracts", () => {
     expect(
       normalizeAlbumActionBeginRequest({
         requestId: REQUEST_ID,
-        albumLocalId: ALBUM_ID,
+        pageId: PAGE_ID,
+        versionId: VERSION_ID,
         zoneId: "zone-01",
         tabId: "tab-01",
         generation: 4,
@@ -147,7 +151,8 @@ describe("album action begin contracts", () => {
   it.each([
     ["empty request ID", { requestId: "" }],
     ["path-like request ID", { requestId: "/tmp/request" }],
-    ["malformed album UUID", { albumLocalId: "album-1" }],
+    ["path-like page ID", { pageId: "/tmp/page" }],
+    ["path-like version ID", { versionId: "/tmp/version" }],
     ["negative generation", { generation: -1 }],
     ["fractional generation", { generation: 1.5 }],
     ["unsafe generation", { generation: Number.MAX_SAFE_INTEGER + 1 }],
@@ -157,7 +162,8 @@ describe("album action begin contracts", () => {
     expect(
       normalizeAlbumActionBeginRequest({
         requestId: REQUEST_ID,
-        albumLocalId: ALBUM_ID,
+        pageId: PAGE_ID,
+        versionId: VERSION_ID,
         zoneId: "zone-01",
         tabId: "tab-01",
         generation: 4,
@@ -303,7 +309,7 @@ describe("album action claim and execution contracts", () => {
     for (const extra of [
       { label: "Play Now" },
       { zoneId: "zone-01" },
-      { albumLocalId: ALBUM_ID },
+      { albumLocalId: "legacy-album-id" },
       { itemKey: "roon-key" },
       { multiSessionKey: "session" },
       { filesystemPath: "/tmp/action" },

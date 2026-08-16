@@ -4,7 +4,6 @@ export { interpolatedSeekStore } from './interpolatedSeekStore';
 export { nowPlayingStore, nowPlayingList, setNowPlaying, removeNowPlaying, resetNowPlaying } from './nowPlayingStore';
 export { queueStore, setQueueSnapshot, clearQueue, resetQueue } from './queueStore';
 export { selectedZoneStore, setSelectedZone } from './selectedZoneStore';
-export { themeStore, initializeTheme, setTheme, toggleTheme } from './themeStore';
 export {
 	browseStore,
 	setBrowseResult,
@@ -32,35 +31,7 @@ export {
 	resetLibraryIntentStore,
 	type PendingLibraryIntent
 } from './libraryIntentStore';
-export { browseNavStore } from './browseNavStore';
 export { socketStatusStore, setSocketStatus, type SocketStatus } from './socketStatusStore';
-export {
-	browseHistoryStore,
-	getClassicHistorySnapshot,
-	pushHistory,
-	popHistory,
-	popForward,
-	resetHistory,
-	replaceHistory,
-	type BrowseBreadcrumb,
-	type BrowseHistoryContext,
-	type BrowseHistoryStep,
-	type ClassicHistorySnapshot
-} from './browseHistoryStore';
-export {
-	exploreRailStore,
-	resolveExploreRail,
-	invalidateExploreRail,
-	type ExploreRailEntry,
-	type ExploreRailState
-} from './exploreRailStore';
-export {
-	welcomeStatsStore,
-	loadWelcomeStats,
-	invalidateWelcomeStats,
-	type WelcomeStats,
-	type WelcomeStatsState
-} from './welcomeStatsStore';
 export {
 	recentlyPlayedStore,
 	loadRecentlyPlayed,

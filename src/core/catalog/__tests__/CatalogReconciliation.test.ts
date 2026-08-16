@@ -2,9 +2,9 @@ import {
   AlbumRef,
   ArtistRef,
   CATALOG_RELEASE_EVIDENCE_SOURCE_CONTRACT,
-  deriveCatalogTimelinePlacement,
+  deriveCatalogChronologyPlacement,
   normalizeCatalogText,
-} from "../../../shared/timelineCatalogContracts";
+} from "../../../shared/catalogContracts";
 import {
   CATALOG_SELECTED_ARTIST_OBSERVATION_SOURCE_CONTRACT,
   CatalogReconciliationError,
@@ -396,7 +396,7 @@ describe("Catalog selected-artist reconciliation", () => {
 
     expect(result.albums[0].originalReleaseYear).toBeUndefined();
     expect(result.albums[0].editionReleaseYear).toBeUndefined();
-    expect(deriveCatalogTimelinePlacement(result.albums[0], 0)?.kind).toBe(
+    expect(deriveCatalogChronologyPlacement(result.albums[0], 0)?.kind).toBe(
       "undated"
     );
   });

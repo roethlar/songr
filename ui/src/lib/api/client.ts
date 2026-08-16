@@ -1,6 +1,8 @@
 import type {
 	AddFavoriteRequest,
 	BrowseResult,
+	CoreSwitchRequest,
+	CoreSwitchResponse,
 	CoreStatusResponse,
 	ErrorResponse,
 	FavoritesResponse,
@@ -37,7 +39,7 @@ import {
 	type CatalogArtistSearchResponse,
 	type CatalogRefreshAcceptedResponse,
 	type CatalogStatus
-} from '@shared/timelineCatalogContracts';
+} from '@shared/catalogContracts';
 import {
 	normalizeCatalogIndexResponse,
 	type CatalogIndexResponse
@@ -136,6 +138,14 @@ function catalogArtistQuery(value: string): string {
 
 export function fetchCoreStatus(fetchFn: FetchLike): Promise<CoreStatusResponse> {
 	return request<CoreStatusResponse>(fetchFn, '/api/core');
+}
+
+export function switchCore(fetchFn: FetchLike): Promise<CoreSwitchResponse> {
+	const body: CoreSwitchRequest = { confirmed: true };
+	return request<CoreSwitchResponse>(fetchFn, '/api/core/switch', {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
 }
 
 /**

@@ -4,13 +4,13 @@
  * authority, or action authority ever cross this boundary.
  */
 
-import { TIMELINE_ALBUM_DETAIL_MAX_TRACKS } from "./timelineBrowseContracts";
+export const ALBUM_DETAIL_MAX_TRACKS = 500;
 
 export const LIBRARY_ALBUM_ID_MAX_LENGTH = 128;
 export const LIBRARY_ALBUM_TEXT_MAX_LENGTH = 256;
 export const LIBRARY_ALBUM_ERROR_MAX_LENGTH = 1024;
-export const LIBRARY_ALBUM_MAX_TRACKS = TIMELINE_ALBUM_DETAIL_MAX_TRACKS;
-export const LIBRARY_ALBUM_MAX_CANDIDATES = 32;
+export const LIBRARY_ALBUM_MAX_TRACKS = ALBUM_DETAIL_MAX_TRACKS;
+export const LIBRARY_ALBUM_MAX_VERSIONS = 32;
 
 export const LIBRARY_ALBUM_OPEN_ERROR_CODES = [
   "INVALID_REQUEST",
@@ -36,15 +36,27 @@ export const LIBRARY_ALBUM_FAILURE_CODES = [
 export type LibraryAlbumFailureCode =
   (typeof LIBRARY_ALBUM_FAILURE_CODES)[number];
 
-/**
- * One distinguishable live album edition. A chooser retry echoes the chosen
- * candidate verbatim; the server re-verifies it against a fresh observation.
- */
-export interface LibraryAlbumCandidate {
-  title: string;
-  artist: string;
-  /** Live edition qualifier; empty when the live row shows none. */
+/** One page-scoped live version; versionId is opaque outside the server. */
+export interface LibraryAlbumVersionSummary {
+  versionId: string;
+  /** Live edition qualifier; empty when Roon exposes none. */
   editionText: string;
+  /** Display-only artwork hint; never version identity. */
+  imageKeyHint?: string;
+  /** Product-facing source label when the page has exact version evidence. */
+  sourceLabel?: string;
+  /** Bounded display date (`YYYY`, `YYYY-MM`, or `YYYY-MM-DD`). */
+  releaseDate?: string;
+  /** Detail-derived fields are absent until an exact listing has been read. */
+  trackCount?: number;
+  durationSeconds?: number;
+  available?: boolean;
+  /** Optional selected-profile metadata from an installed feature layer. */
+  playCount?: number;
+  lastPlayedAt?: string;
+  isFavorite?: boolean;
+  isListenLater?: boolean;
+  isBanned?: boolean;
 }
 
 export interface LibraryAlbumOpenRequest {
@@ -52,8 +64,6 @@ export interface LibraryAlbumOpenRequest {
   tabId: string;
   albumLocalId: string;
   generation: number;
-  /** Chooser retry: resolve exactly this previously offered candidate. */
-  candidate?: LibraryAlbumCandidate;
 }
 
 export interface LibraryAlbumOpenAcceptedData {
@@ -66,10 +76,34 @@ export type LibraryAlbumOpenAck =
   | { success: true; data: LibraryAlbumOpenAcceptedData }
   | { success: false; error: string; code: LibraryAlbumOpenErrorCode };
 
+export interface LibraryAlbumSelectRequest {
+  operationId: string;
+  versionId: string;
+}
+
+export interface LibraryAlbumSelectAcceptedData {
+  operationId: string;
+  versionId: string;
+  resolvingDeadlineAt: number;
+}
+
+export type LibraryAlbumSelectAck =
+  | { success: true; data: LibraryAlbumSelectAcceptedData }
+  | {
+      success: false;
+      error: string;
+      code: "INVALID_REQUEST" | "BACKPRESSURE" | "SESSION_LOST";
+    };
+
 export interface LibraryAlbumTrack {
   /** Zero-based, contiguous position in the album's play order. */
   index: number;
   title: string;
+  /** Exact version metadata when the installed feature layer supplied it. */
+  trackNumber?: number;
+  mediaNumber?: number;
+  lengthSeconds?: number | null;
+  available?: boolean;
 }
 
 export interface LibraryAlbumCorrelation {
@@ -79,14 +113,26 @@ export interface LibraryAlbumCorrelation {
   resolvingDeadlineAt: number;
 }
 
-export interface LibraryAlbumResolvedEvent {
+export interface LibraryAlbumVersionsEvent {
   requestId: string;
   operationId: string;
   generation: number;
   artist: string;
   title: string;
+  versions: readonly LibraryAlbumVersionSummary[];
+}
+
+export interface LibraryAlbumResolvedEvent {
+  requestId: string;
+  operationId: string;
+  generation: number;
+  versionId: string;
+  artist: string;
+  title: string;
   /** True only when public Browse authority can back album/track actions. */
   actionsAvailable: boolean;
+  /** Updated selected-version summary. */
+  versionSummary: LibraryAlbumVersionSummary;
   orderedTracks: readonly LibraryAlbumTrack[];
 }
 
@@ -97,8 +143,10 @@ export interface LibraryAlbumFailedEvent {
   resolvingDeadlineAt: number;
   error: string;
   code: LibraryAlbumFailureCode;
-  /** Present only with ALBUM_AMBIGUOUS; the chooser's complete option set. */
-  candidates?: readonly LibraryAlbumCandidate[];
+}
+
+export interface LibraryAlbumVersionFailedEvent extends LibraryAlbumFailedEvent {
+  versionId: string;
 }
 
 export type LibraryAlbumCancelRequest =
@@ -136,6 +184,22 @@ function hasExactKeys(
   return (
     ownKeys.length === keys.length &&
     ownKeys.every((key) => typeof key === "string" && keys.includes(key))
+  );
+}
+
+function hasOnlyKeys(
+  record: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[]
+): boolean {
+  const ownKeys = Reflect.ownKeys(record);
+  return (
+    required.every((key) => ownKeys.includes(key)) &&
+    ownKeys.every(
+      (key) =>
+        typeof key === "string" &&
+        (required.includes(key) || optional.includes(key))
+    )
   );
 }
 
@@ -177,6 +241,41 @@ function isBoundedOptionalText(value: unknown, maxLength: number): value is stri
   );
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isBoundedCount(value: unknown): value is number {
+  return (
+    Number.isSafeInteger(value) &&
+    (value as number) > 0 &&
+    (value as number) <= LIBRARY_ALBUM_MAX_TRACKS
+  );
+}
+
+function isBoundedDuration(value: unknown): value is number {
+  return Number.isFinite(value) && (value as number) >= 0 && (value as number) <= 31_536_000;
+}
+
+function isReleaseDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}(?:-\d{2}(?:-\d{2})?)?$/u.test(value)) {
+    return false;
+  }
+  const [year, month, day] = value.split("-").map(Number);
+  return (
+    year >= 1 &&
+    year <= 9999 &&
+    (month === undefined || (month >= 1 && month <= 12)) &&
+    (day === undefined || (day >= 1 && day <= 31))
+  );
+}
+
+function isCanonicalTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+
 function includes<T extends string>(
   values: readonly T[],
   value: unknown
@@ -193,22 +292,85 @@ function isCorrelation(value: LibraryAlbumCorrelation): boolean {
   );
 }
 
-export function normalizeLibraryAlbumCandidate(
+export function normalizeLibraryAlbumVersionSummary(
   value: unknown
-): LibraryAlbumCandidate | null {
+): LibraryAlbumVersionSummary | null {
   try {
     const record = plainDataRecord(value);
-    return record &&
-      hasExactKeys(record, ["title", "artist", "editionText"]) &&
-      isBoundedText(record.title, LIBRARY_ALBUM_TEXT_MAX_LENGTH) &&
-      isBoundedText(record.artist, LIBRARY_ALBUM_TEXT_MAX_LENGTH) &&
-      isBoundedOptionalText(record.editionText, LIBRARY_ALBUM_TEXT_MAX_LENGTH)
-      ? {
-          title: record.title,
-          artist: record.artist,
-          editionText: record.editionText,
-        }
-      : null;
+    const optionalKeys = [
+      "imageKeyHint",
+      "sourceLabel",
+      "releaseDate",
+      "trackCount",
+      "durationSeconds",
+      "available",
+      "playCount",
+      "lastPlayedAt",
+      "isFavorite",
+      "isListenLater",
+      "isBanned",
+    ] as const;
+    if (
+      !record ||
+      !hasOnlyKeys(record, ["versionId", "editionText"], optionalKeys) ||
+      !isOpaqueId(record.versionId) ||
+      !isBoundedOptionalText(record.editionText, LIBRARY_ALBUM_TEXT_MAX_LENGTH) ||
+      ("imageKeyHint" in record &&
+        !isBoundedText(record.imageKeyHint, LIBRARY_ALBUM_ID_MAX_LENGTH)) ||
+      ("sourceLabel" in record &&
+        !isBoundedText(record.sourceLabel, LIBRARY_ALBUM_TEXT_MAX_LENGTH)) ||
+      ("releaseDate" in record && !isReleaseDate(record.releaseDate)) ||
+      ("trackCount" in record && !isBoundedCount(record.trackCount)) ||
+      ("durationSeconds" in record &&
+        !isBoundedDuration(record.durationSeconds)) ||
+      ("available" in record && typeof record.available !== "boolean") ||
+      ("playCount" in record && !isNonNegativeInteger(record.playCount)) ||
+      ("lastPlayedAt" in record &&
+        !isCanonicalTimestamp(record.lastPlayedAt)) ||
+      ("isFavorite" in record && typeof record.isFavorite !== "boolean") ||
+      ("isListenLater" in record &&
+        typeof record.isListenLater !== "boolean") ||
+      ("isBanned" in record && typeof record.isBanned !== "boolean")
+    ) {
+      return null;
+    }
+    return {
+      versionId: record.versionId,
+      editionText: record.editionText,
+      ...("imageKeyHint" in record
+        ? { imageKeyHint: record.imageKeyHint as string }
+        : {}),
+      ...("sourceLabel" in record
+        ? { sourceLabel: record.sourceLabel as string }
+        : {}),
+      ...("releaseDate" in record
+        ? { releaseDate: record.releaseDate as string }
+        : {}),
+      ...("trackCount" in record
+        ? { trackCount: record.trackCount as number }
+        : {}),
+      ...("durationSeconds" in record
+        ? { durationSeconds: record.durationSeconds as number }
+        : {}),
+      ...("available" in record
+        ? { available: record.available as boolean }
+        : {}),
+      ...("playCount" in record
+        ? { playCount: record.playCount as number }
+        : {}),
+      ...("lastPlayedAt" in record
+        ? { lastPlayedAt: record.lastPlayedAt as string }
+        : {}),
+      ...("isFavorite" in record
+        ? { isFavorite: record.isFavorite as boolean }
+        : {}),
+      ...("isListenLater" in record
+        ? { isListenLater: record.isListenLater as boolean }
+        : {}),
+      ...("isBanned" in record
+        ? { isBanned: record.isBanned as boolean }
+        : {}),
+    };
   } catch {
     return null;
   }
@@ -226,13 +388,9 @@ export function normalizeLibraryAlbumOpenRequest(
 ): LibraryAlbumOpenRequest | null {
   try {
     const record = plainDataRecord(value);
-    if (!record) return null;
-    const withCandidate = hasExactKeys(record, [
-      ...LIBRARY_ALBUM_OPEN_KEYS,
-      "candidate",
-    ]);
     if (
-      (!withCandidate && !hasExactKeys(record, [...LIBRARY_ALBUM_OPEN_KEYS])) ||
+      !record ||
+      !hasExactKeys(record, [...LIBRARY_ALBUM_OPEN_KEYS]) ||
       !isOpaqueId(record.requestId) ||
       !isOpaqueId(record.tabId) ||
       !isLocalId(record.albumLocalId) ||
@@ -240,15 +398,12 @@ export function normalizeLibraryAlbumOpenRequest(
     ) {
       return null;
     }
-    const request: LibraryAlbumOpenRequest = {
+    return {
       requestId: record.requestId,
       tabId: record.tabId,
       albumLocalId: record.albumLocalId,
       generation: record.generation,
     };
-    if (!withCandidate) return request;
-    const candidate = normalizeLibraryAlbumCandidate(record.candidate);
-    return candidate ? { ...request, candidate } : null;
   } catch {
     return null;
   }
@@ -297,6 +452,68 @@ export function normalizeLibraryAlbumOpenAck(
   }
 }
 
+export function normalizeLibraryAlbumSelectRequest(
+  value: unknown
+): LibraryAlbumSelectRequest | null {
+  try {
+    const record = plainDataRecord(value);
+    return record &&
+      hasExactKeys(record, ["operationId", "versionId"]) &&
+      isOpaqueId(record.operationId) &&
+      isOpaqueId(record.versionId)
+      ? { operationId: record.operationId, versionId: record.versionId }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeLibraryAlbumSelectAck(
+  value: unknown,
+  expected: { operationId: string; versionId: string }
+): LibraryAlbumSelectAck | null {
+  try {
+    if (!isOpaqueId(expected.operationId) || !isOpaqueId(expected.versionId)) {
+      return null;
+    }
+    const record = plainDataRecord(value);
+    if (!record) return null;
+    if (record.success === true) {
+      if (!hasExactKeys(record, ["success", "data"])) return null;
+      const data = plainDataRecord(record.data);
+      return data &&
+        hasExactKeys(data, ["operationId", "versionId", "resolvingDeadlineAt"]) &&
+        data.operationId === expected.operationId &&
+        data.versionId === expected.versionId &&
+        isDeadline(data.resolvingDeadlineAt)
+        ? {
+            success: true,
+            data: {
+              operationId: expected.operationId,
+              versionId: expected.versionId,
+              resolvingDeadlineAt: data.resolvingDeadlineAt,
+            },
+          }
+        : null;
+    }
+    return record.success === false &&
+      hasExactKeys(record, ["success", "error", "code"]) &&
+      isBoundedText(record.error, LIBRARY_ALBUM_ERROR_MAX_LENGTH) &&
+      includes(
+        ["INVALID_REQUEST", "BACKPRESSURE", "SESSION_LOST"] as const,
+        record.code
+      )
+      ? {
+          success: false,
+          error: record.error,
+          code: record.code,
+        }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeOrderedTracks(value: unknown): LibraryAlbumTrack[] | null {
   if (
     !Array.isArray(value) ||
@@ -311,41 +528,102 @@ function normalizeOrderedTracks(value: unknown): LibraryAlbumTrack[] | null {
     const record = plainDataRecord(value[index]);
     if (
       !record ||
-      !hasExactKeys(record, ["index", "title"]) ||
+      !hasOnlyKeys(record, ["index", "title"], [
+        "trackNumber",
+        "mediaNumber",
+        "lengthSeconds",
+        "available",
+      ]) ||
       record.index !== index ||
-      !isBoundedText(record.title, LIBRARY_ALBUM_TEXT_MAX_LENGTH)
+      !isBoundedText(record.title, LIBRARY_ALBUM_TEXT_MAX_LENGTH) ||
+      ("trackNumber" in record && !isNonNegativeInteger(record.trackNumber)) ||
+      ("mediaNumber" in record && !isNonNegativeInteger(record.mediaNumber)) ||
+      ("lengthSeconds" in record &&
+        record.lengthSeconds !== null &&
+        !isBoundedDuration(record.lengthSeconds)) ||
+      ("available" in record && typeof record.available !== "boolean")
     ) {
       return null;
     }
-    tracks.push({ index, title: record.title });
+    tracks.push({
+      index,
+      title: record.title,
+      ...("trackNumber" in record
+        ? { trackNumber: record.trackNumber as number }
+        : {}),
+      ...("mediaNumber" in record
+        ? { mediaNumber: record.mediaNumber as number }
+        : {}),
+      ...("lengthSeconds" in record
+        ? { lengthSeconds: record.lengthSeconds as number | null }
+        : {}),
+      ...("available" in record
+        ? { available: record.available as boolean }
+        : {}),
+    });
   }
   return tracks;
 }
 
-function normalizeCandidates(value: unknown): LibraryAlbumCandidate[] | null {
+function normalizeVersions(value: unknown): LibraryAlbumVersionSummary[] | null {
   if (
     !Array.isArray(value) ||
     value.length === 0 ||
-    value.length > LIBRARY_ALBUM_MAX_CANDIDATES
+    value.length > LIBRARY_ALBUM_MAX_VERSIONS
   ) {
     return null;
   }
-  const candidates: LibraryAlbumCandidate[] = [];
+  const versions: LibraryAlbumVersionSummary[] = [];
   const seen = new Set<string>();
   for (let index = 0; index < value.length; index += 1) {
     if (!(index in value)) return null;
-    const candidate = normalizeLibraryAlbumCandidate(value[index]);
-    if (!candidate) return null;
-    const identity = JSON.stringify([
-      candidate.title,
-      candidate.artist,
-      candidate.editionText,
-    ]);
-    if (seen.has(identity)) return null;
-    seen.add(identity);
-    candidates.push(candidate);
+    const version = normalizeLibraryAlbumVersionSummary(value[index]);
+    if (!version || seen.has(version.versionId)) return null;
+    seen.add(version.versionId);
+    versions.push(version);
   }
-  return candidates;
+  return versions;
+}
+
+export function normalizeLibraryAlbumVersionsEvent(
+  value: unknown,
+  expected: LibraryAlbumCorrelation
+): LibraryAlbumVersionsEvent | null {
+  try {
+    if (!isCorrelation(expected)) return null;
+    const record = plainDataRecord(value);
+    if (
+      !record ||
+      !hasExactKeys(record, [
+        "requestId",
+        "operationId",
+        "generation",
+        "artist",
+        "title",
+        "versions",
+      ]) ||
+      record.requestId !== expected.requestId ||
+      record.operationId !== expected.operationId ||
+      record.generation !== expected.generation ||
+      !isBoundedText(record.artist, LIBRARY_ALBUM_TEXT_MAX_LENGTH) ||
+      !isBoundedText(record.title, LIBRARY_ALBUM_TEXT_MAX_LENGTH)
+    ) {
+      return null;
+    }
+    const versions = normalizeVersions(record.versions);
+    return versions
+      ? {
+          requestId: expected.requestId,
+          operationId: expected.operationId,
+          generation: expected.generation,
+          artist: record.artist,
+          title: record.title,
+          versions,
+        }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export function normalizeLibraryAlbumResolvedEvent(
@@ -361,14 +639,17 @@ export function normalizeLibraryAlbumResolvedEvent(
         "requestId",
         "operationId",
         "generation",
+        "versionId",
         "artist",
         "title",
         "actionsAvailable",
+        "versionSummary",
         "orderedTracks",
       ]) ||
       record.requestId !== expected.requestId ||
       record.operationId !== expected.operationId ||
       record.generation !== expected.generation ||
+      !isOpaqueId(record.versionId) ||
       !isBoundedText(record.artist, LIBRARY_ALBUM_TEXT_MAX_LENGTH) ||
       !isBoundedText(record.title, LIBRARY_ALBUM_TEXT_MAX_LENGTH) ||
       typeof record.actionsAvailable !== "boolean"
@@ -376,14 +657,20 @@ export function normalizeLibraryAlbumResolvedEvent(
       return null;
     }
     const orderedTracks = normalizeOrderedTracks(record.orderedTracks);
+    const versionSummary = normalizeLibraryAlbumVersionSummary(record.versionSummary);
+    if (!versionSummary || versionSummary.versionId !== record.versionId) {
+      return null;
+    }
     return orderedTracks
       ? {
           requestId: expected.requestId,
           operationId: expected.operationId,
           generation: expected.generation,
+          versionId: record.versionId,
           artist: record.artist,
           title: record.title,
           actionsAvailable: record.actionsAvailable,
+          versionSummary,
           orderedTracks,
         }
       : null;
@@ -408,13 +695,9 @@ export function normalizeLibraryAlbumFailedEvent(
   try {
     if (!isCorrelation(expected)) return null;
     const record = plainDataRecord(value);
-    if (!record) return null;
-    const withCandidates = hasExactKeys(record, [
-      ...LIBRARY_ALBUM_FAILED_KEYS,
-      "candidates",
-    ]);
     if (
-      (!withCandidates && !hasExactKeys(record, [...LIBRARY_ALBUM_FAILED_KEYS])) ||
+      !record ||
+      !hasExactKeys(record, [...LIBRARY_ALBUM_FAILED_KEYS]) ||
       record.requestId !== expected.requestId ||
       record.operationId !== expected.operationId ||
       record.generation !== expected.generation ||
@@ -432,10 +715,28 @@ export function normalizeLibraryAlbumFailedEvent(
       error: record.error,
       code: record.code,
     };
-    if (!withCandidates) return failed;
-    if (record.code !== "ALBUM_AMBIGUOUS") return null;
-    const candidates = normalizeCandidates(record.candidates);
-    return candidates ? { ...failed, candidates } : null;
+    return failed;
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeLibraryAlbumVersionFailedEvent(
+  value: unknown,
+  expected: LibraryAlbumCorrelation & { versionId: string }
+): LibraryAlbumVersionFailedEvent | null {
+  try {
+    if (!isCorrelation(expected) || !isOpaqueId(expected.versionId)) return null;
+    const record = plainDataRecord(value);
+    if (!record || !hasExactKeys(record, [...LIBRARY_ALBUM_FAILED_KEYS, "versionId"])) {
+      return null;
+    }
+    const base = { ...record } as Record<string, unknown>;
+    delete base.versionId;
+    const failed = normalizeLibraryAlbumFailedEvent(base, expected);
+    return failed && record.versionId === expected.versionId
+      ? { ...failed, versionId: expected.versionId }
+      : null;
   } catch {
     return null;
   }

@@ -7,7 +7,7 @@ import type {
   AlbumRef,
   ArtistRef,
   CatalogStatus,
-} from "../timelineCatalogContracts";
+} from "../catalogContracts";
 
 const ARTIST_ID = "10000000-0000-4000-8000-000000000001";
 const ARTIST_ID_2 = "10000000-0000-4000-8000-000000000002";

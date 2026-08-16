@@ -15,11 +15,6 @@ export interface AlbumActionLifecycleService {
   shutdown(): void;
 }
 
-export interface TimelineBrowseLifecycleService {
-  invalidateCore(coreId: string): void;
-  shutdown(): void;
-}
-
 export interface LibraryAlbumLifecycleService {
   invalidateCore(coreId: string): void;
   shutdown(): void;
@@ -48,9 +43,9 @@ export class CatalogLifecycle {
     private readonly coordinator: CatalogLifecycleCoordinator,
     private readonly logger: Logger,
     private readonly albumActions?: AlbumActionLifecycleService,
-    private readonly timelineBrowse?: TimelineBrowseLifecycleService,
     private readonly libraryAlbums?: LibraryAlbumLifecycleService,
-    private readonly scheduledRefresh?: ScheduledCatalogRefresh
+    private readonly scheduledRefresh?: ScheduledCatalogRefresh,
+    private readonly editorialItems?: LibraryAlbumLifecycleService
   ) {}
 
   public corePaired(coreId: string): void {
@@ -103,11 +98,6 @@ export class CatalogLifecycle {
       );
     }
     try {
-      this.timelineBrowse?.shutdown();
-    } catch (error) {
-      this.logger.warn({ err: error }, "Timeline browse shutdown was rejected");
-    }
-    try {
       this.albumActions?.shutdown();
     } catch (error) {
       this.logger.warn({ err: error }, "Album action shutdown was rejected");
@@ -117,18 +107,15 @@ export class CatalogLifecycle {
     } catch (error) {
       this.logger.warn({ err: error }, "Library album shutdown was rejected");
     }
+    try {
+      this.editorialItems?.shutdown();
+    } catch (error) {
+      this.logger.warn({ err: error }, "Editorial item shutdown was rejected");
+    }
     this.coordinator.shutdown();
   }
 
   private disconnectCore(coreId: string): void {
-    try {
-      this.timelineBrowse?.invalidateCore(coreId);
-    } catch (error) {
-      this.logger.warn(
-        { err: error, coreId },
-        "Timeline browse Core invalidation was rejected"
-      );
-    }
     try {
       this.albumActions?.invalidateCore(coreId);
     } catch (error) {
@@ -143,6 +130,16 @@ export class CatalogLifecycle {
       this.logger.warn(
         { err: error, coreId },
         "Library album Core invalidation was rejected"
+      );
+    }
+    // Editorial sessions are Core-bound like album pages and retire before
+    // the coordinator invalidation for the same reason (plan §5.3).
+    try {
+      this.editorialItems?.invalidateCore(coreId);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, coreId },
+        "Editorial item Core invalidation was rejected"
       );
     }
     this.catalogService.markCoreDisconnected(coreId);

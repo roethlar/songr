@@ -4,6 +4,7 @@ import { CLASSIC_BROWSE_PAGE_SIZE_MAX } from '@shared/classicBrowseContracts';
 import {
 	DRILL_PAGE_SIZE,
 	drainDrillAlbums,
+	drainSemanticDrillAlbums,
 	type DrillTransaction
 } from '$lib/stores/unifiedDrillStore';
 
@@ -97,5 +98,43 @@ describe('drainDrillAlbums', () => {
 		};
 		const items = await drainDrillAlbums(transaction, 'genres', 'k:genre');
 		expect(items).toEqual([]);
+	});
+
+	it('re-resolves a semantic target and drills it in the same role transaction', async () => {
+		const named = Array.from({ length: 130 }, (_value, index) => ({
+			title: index === 115 ? 'Jazz' : `Genre ${index}`,
+			itemKey: index === 115 ? 'k:jazz' : `k:genre-${index}`,
+			isLoadable: true,
+			isPlayable: false
+		}));
+		const albumsChild: BrowseItem = {
+			title: 'Albums',
+			itemKey: 'k:jazz-albums',
+			isLoadable: true,
+			isPlayable: false
+		};
+		const log: string[] = [];
+		const transaction: DrillTransaction = {
+			browse: async ({ itemKey, pageSize }) => {
+				log.push(`browse:${itemKey ?? 'root'}`);
+				if (itemKey === 'k:jazz') {
+					return { totalCount: 1, count: 1, items: [albumsChild] };
+				}
+				if (itemKey === 'k:jazz-albums') {
+					return { totalCount: 1, count: 1, items: [album('Kind of Blue', 'Miles Davis')] };
+				}
+				const items = named.slice(0, pageSize);
+				return { totalCount: named.length, count: items.length, items };
+			},
+			browseLoad: async ({ offset, count }) => {
+				log.push(`load:${offset}`);
+				return { items: named.slice(offset, offset + count) };
+			}
+		};
+
+		const items = await drainSemanticDrillAlbums(transaction, 'genres', 'Jazz');
+
+		expect(items?.map((item) => item.title)).toEqual(['Kind of Blue']);
+		expect(log).toEqual(['browse:root', 'load:100', 'browse:k:jazz', 'browse:k:jazz-albums']);
 	});
 });

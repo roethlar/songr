@@ -1,9 +1,9 @@
 /**
- * Strict, keyless wire contracts for the two-phase Timeline album-action flow.
+ * Strict, keyless wire contracts for the two-phase album-action flow.
  * Labels are display data only. Only an opaque actionId can request execution.
  */
 
-import { TIMELINE_ALBUM_DETAIL_MAX_TRACKS } from "./timelineBrowseContracts";
+import { ALBUM_DETAIL_MAX_TRACKS } from "./libraryAlbumContracts";
 
 export const ALBUM_ACTION_MAX_CHOICES = 32;
 export const ALBUM_ACTION_ID_MAX_LENGTH = 128;
@@ -15,6 +15,7 @@ export const ALBUM_ACTION_BEGIN_ERROR_CODES = [
   "ZONE_NOT_FOUND",
   "BACKPRESSURE",
   "REQUEST_ID_CONFLICT",
+  "SESSION_LOST",
 ] as const;
 
 export type AlbumActionBeginErrorCode =
@@ -23,6 +24,7 @@ export type AlbumActionBeginErrorCode =
 export const ALBUM_ACTION_FAILURE_CODES = [
   "ALBUM_NOT_FOUND",
   "ALBUM_AMBIGUOUS",
+  "ALBUM_CHANGED",
   "TRACK_NOT_FOUND",
   "TRACK_MISMATCH",
   "ACTION_PATH_NOT_FOUND",
@@ -56,7 +58,10 @@ export interface AlbumActionTrackSelector {
 
 export interface AlbumActionBeginRequest {
   requestId: string;
-  albumLocalId: string;
+  /** Opaque retained album-page operation. */
+  pageId: string;
+  /** Opaque version selected within that page. */
+  versionId: string;
   zoneId: string;
   tabId: string;
   generation: number;
@@ -143,8 +148,6 @@ export type AlbumActionExecuteAck =
   | { success: true; data: AlbumActionExecuteResult }
   | { success: false; error: string; code: "INVALID_REQUEST" };
 
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 const CONTROL_CHARACTER = /\p{Cc}/u;
 
@@ -177,10 +180,6 @@ function isOpaqueId(value: unknown): value is string {
     value.length <= ALBUM_ACTION_ID_MAX_LENGTH &&
     OPAQUE_ID.test(value)
   );
-}
-
-function isLocalId(value: unknown): value is string {
-  return typeof value === "string" && UUID.test(value);
 }
 
 function isGeneration(value: unknown): value is number {
@@ -216,7 +215,8 @@ function isCorrelation(value: AlbumActionResolutionCorrelation): boolean {
 
 const ALBUM_ACTION_BEGIN_KEYS = [
   "requestId",
-  "albumLocalId",
+  "pageId",
+  "versionId",
   "zoneId",
   "tabId",
   "generation",
@@ -231,7 +231,7 @@ export function normalizeAlbumActionTrackSelector(
       hasExactKeys(record, ["index", "title"]) &&
       Number.isSafeInteger(record.index) &&
       (record.index as number) >= 0 &&
-      (record.index as number) < TIMELINE_ALBUM_DETAIL_MAX_TRACKS &&
+      (record.index as number) < ALBUM_DETAIL_MAX_TRACKS &&
       isBoundedText(record.title, ALBUM_ACTION_LABEL_MAX_LENGTH)
       ? { index: record.index as number, title: record.title }
       : null;
@@ -250,7 +250,8 @@ export function normalizeAlbumActionBeginRequest(
     if (
       (!withTrack && !hasExactKeys(record, [...ALBUM_ACTION_BEGIN_KEYS])) ||
       !isOpaqueId(record.requestId) ||
-      !isLocalId(record.albumLocalId) ||
+      !isOpaqueId(record.pageId) ||
+      !isOpaqueId(record.versionId) ||
       !isOpaqueId(record.zoneId) ||
       !isOpaqueId(record.tabId) ||
       !isGeneration(record.generation)
@@ -259,7 +260,8 @@ export function normalizeAlbumActionBeginRequest(
     }
     const request: AlbumActionBeginRequest = {
       requestId: record.requestId,
-      albumLocalId: record.albumLocalId,
+      pageId: record.pageId,
+      versionId: record.versionId,
       zoneId: record.zoneId,
       tabId: record.tabId,
       generation: record.generation,

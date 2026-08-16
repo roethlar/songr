@@ -28,7 +28,7 @@ import {
   CatalogArtistAlbumsResponse,
   CatalogArtistSearchResponse,
   CatalogStatus,
-} from "../../../../shared/timelineCatalogContracts";
+} from "../../../../shared/catalogContracts";
 import { createErrorHandler } from "../../middleware/errorHandler";
 import {
   CatalogHttpFocusPlaylists,

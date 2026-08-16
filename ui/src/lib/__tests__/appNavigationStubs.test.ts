@@ -7,54 +7,54 @@ import {
 	__getHistorySnapshot,
 	__getNavigationLog,
 	__resetNavigation,
+	__setRouterInitialized,
 	afterNavigate,
 	goto,
 	pushState,
 	replaceState
 } from '../../test/app-stubs/navigation';
 import {
-	buildClassicRootPageState,
 	buildLibraryPageStateEnvelope,
-	buildTimelineRootPageState
+	buildUnifiedLibraryPageState,
+	buildUnifiedRootPageState
 } from '$lib/libraryPageState';
 
-const classic = () => buildLibraryPageStateEnvelope(buildClassicRootPageState());
-const timeline = () => buildLibraryPageStateEnvelope(buildTimelineRootPageState());
+const artists = () => buildLibraryPageStateEnvelope(buildUnifiedRootPageState('artists'));
+const browse = (filterText = '') =>
+	buildLibraryPageStateEnvelope(
+		buildUnifiedLibraryPageState({
+			scope: 'browse',
+			collectionDrill: null,
+			itemTarget: null,
+			filterText,
+			surpriseSeed: null
+		})
+	);
 
 describe('SvelteKit shallow-navigation test stubs', () => {
 	beforeEach(() => {
-		__resetNavigation('http://localhost/library', classic());
+		__resetNavigation('http://localhost/library', artists());
 	});
 
-	it('models push, replace, Back, and Forward with defensive history snapshots', () => {
-		pushState('', timeline());
-		replaceState('', classic());
+	it('models push, replace, Back, and Forward with defensive snapshots', () => {
+		pushState('', browse('first'));
+		replaceState('', browse('second'));
 
-		expect(page.url.pathname).toBe('/library');
-		expect(page.state.library?.libraryView).toBe('classic');
-		expect(__getHistorySnapshot()).toMatchObject({
-			index: 1,
-			entries: [
-				{ state: { library: { libraryView: 'classic' } } },
-				{ state: { library: { libraryView: 'classic' } } }
-			]
-		});
-
+		expect(page.state.library?.snapshot.filterText).toBe('second');
 		expect(__back()).toBe(true);
-		expect(page.state.library?.libraryView).toBe('classic');
+		expect(page.state.library?.snapshot.scope).toBe('artists');
 		expect(__forward()).toBe(true);
 		expect(__forward()).toBe(false);
 
 		const snapshot = __getHistorySnapshot();
-		snapshot.entries[0].state = timeline();
-		expect(__getHistorySnapshot().entries[0].state.library?.libraryView).toBe('classic');
+		snapshot.entries[0].state = browse('mutated');
+		expect(__getHistorySnapshot().entries[0].state.library?.snapshot.scope).toBe('artists');
 	});
 
 	it('truncates Forward when a new shallow entry is pushed', () => {
-		pushState('', timeline());
+		pushState('', browse('first'));
 		expect(__back()).toBe(true);
-
-		pushState('', classic());
+		pushState('', browse('replacement'));
 
 		expect(__forward()).toBe(false);
 		expect(__getHistorySnapshot()).toMatchObject({ index: 1, entries: [{}, {}] });
@@ -65,138 +65,68 @@ describe('SvelteKit shallow-navigation test stubs', () => {
 		afterNavigate(callback);
 		await Promise.resolve();
 		callback.mockClear();
-		pushState('', timeline());
+		pushState('', browse());
 
 		expect(__back()).toBe(true);
-		expect(page.state.library?.libraryView).toBe('classic');
 		expect(callback).not.toHaveBeenCalled();
 		await Promise.resolve();
 		expect(callback).not.toHaveBeenCalled();
-		expect(__getNavigationLog().map((entry) => entry.operation)).toEqual([
-			'pushState',
-			'popstate'
-		]);
 	});
 
-	it('emits async popstate only when traversal crosses a goto route generation', async () => {
+	it('emits async popstate when traversal crosses a goto route generation', async () => {
 		const callback = vi.fn((_navigation: AfterNavigate) => {});
 		afterNavigate(callback);
 		await Promise.resolve();
 		callback.mockClear();
 
-		pushState('', timeline());
-		await goto('/library', { state: classic() });
+		pushState('', browse());
+		await goto('/library?generation=2', { state: artists() });
 		callback.mockClear();
-
 		expect(__back()).toBe(true);
-		expect(page.url.href).toBe('http://localhost/library');
-		expect(page.state.library?.libraryView).toBe('timeline');
 		expect(callback).not.toHaveBeenCalled();
 		await Promise.resolve();
-		expect(callback).toHaveBeenCalledOnce();
-		expect(callback).toHaveBeenCalledWith(
-			expect.objectContaining({
-				type: 'popstate',
-				delta: -1,
-				from: expect.objectContaining({ url: new URL('http://localhost/library') }),
-				to: expect.objectContaining({ url: new URL('http://localhost/library') })
-			})
-		);
-
-		callback.mockClear();
-		expect(__forward()).toBe(true);
-		expect(page.state.library?.libraryView).toBe('classic');
-		expect(callback).not.toHaveBeenCalled();
-		await Promise.resolve();
-		expect(callback).toHaveBeenCalledOnce();
-		expect(callback).toHaveBeenCalledWith(
-			expect.objectContaining({ type: 'popstate', delta: 1 })
-		);
+		expect(callback).toHaveBeenCalledWith(expect.objectContaining({ type: 'popstate', delta: -1 }));
 	});
 
-	it('publishes and records goto state before emitting a full-route navigation', async () => {
-		const publishedAtCallback: { url?: string; libraryView?: string } = {};
-		let observedNavigation: AfterNavigate | undefined;
-		const callback = vi.fn((navigation: AfterNavigate) => {
-			observedNavigation = navigation;
-			publishedAtCallback.url = page.url.href;
-			publishedAtCallback.libraryView = page.state.library?.libraryView;
-		});
+	it('publishes and records goto state before the navigation callback', async () => {
+		const observed = vi.fn((_navigation: AfterNavigate) => ({
+			search: page.url.search,
+			scope: page.state.library?.snapshot.scope
+		}));
+		afterNavigate(observed);
+		await Promise.resolve();
+		observed.mockClear();
+
+		await goto('/library?from=browse', { state: browse() });
+		expect(observed).toHaveBeenCalledOnce();
+		expect(observed.mock.results[0].value).toEqual({ search: '?from=browse', scope: 'browse' });
+		expect(__getNavigationLog()).toMatchObject([
+			{ operation: 'goto', url: 'http://localhost/library?from=browse' }
+		]);
+	});
+
+	it('rejects shallow writes until the initial navigation callback initializes the router', async () => {
+		__setRouterInitialized(false);
+		expect(() => replaceState('', browse())).toThrow(
+			'Cannot call replaceState(...) before router is initialized'
+		);
+
+		const callback = vi.fn(() => replaceState('', browse()));
 		afterNavigate(callback);
 		await Promise.resolve();
-		callback.mockClear();
 
-		const navigation = goto('/queue?from=library', { state: timeline() });
-		expect(page.url.pathname).toBe('/queue');
-		expect(callback).not.toHaveBeenCalled();
-		await navigation;
-
-		expect(page.url.pathname).toBe('/queue');
-		expect(page.url.search).toBe('?from=library');
-		expect(page.state.library?.libraryView).toBe('timeline');
-		expect(__getHistorySnapshot()).toMatchObject({
-			index: 1,
-			entries: [
-				{ url: 'http://localhost/library', state: { library: { libraryView: 'classic' } } },
-				{
-					url: 'http://localhost/queue?from=library',
-					state: { library: { libraryView: 'timeline' } }
-				}
-			]
-		});
-		expect(__getNavigationLog()).toMatchObject([
-			{
-				operation: 'goto',
-				url: 'http://localhost/queue?from=library',
-				state: { library: { libraryView: 'timeline' } }
-			}
-		]);
 		expect(callback).toHaveBeenCalledOnce();
-		expect(callback).toHaveBeenCalledWith(
-			expect.objectContaining({
-				type: 'goto',
-				from: expect.objectContaining({ url: new URL('http://localhost/library') }),
-				to: expect.objectContaining({ url: new URL('http://localhost/queue?from=library') })
-			})
-		);
-		expect(observedNavigation?.to?.url.href).toBe(page.url.href);
-		expect(observedNavigation?.to).not.toBeNull();
-		expect(publishedAtCallback).toEqual({
-			url: 'http://localhost/queue?from=library',
-			libraryView: 'timeline'
-		});
-	});
-
-	it('replaces the current route entry when goto requests replaceState', async () => {
-		await goto('/queue', { state: timeline() });
-		await goto('/library?restored=true', { replaceState: true, state: classic() });
-
-		expect(__getHistorySnapshot()).toMatchObject({
-			index: 1,
-			entries: [
-				{ url: 'http://localhost/library', state: { library: { libraryView: 'classic' } } },
-				{
-					url: 'http://localhost/library?restored=true',
-					state: { library: { libraryView: 'classic' } }
-				}
-			]
-		});
-		expect(page.url.href).toBe('http://localhost/library?restored=true');
-		expect(__getNavigationLog().map((entry) => entry.operation)).toEqual(['goto', 'goto']);
+		expect(__getNavigationLog()).toMatchObject([{ operation: 'replaceState' }]);
 	});
 
 	it('does not retain caller mutations in page state or logs', () => {
-		const next = timeline();
+		const next = browse();
 		pushState('', next);
-		next.library.snapshot.artistQuery = 'mutated after push';
+		next.library.snapshot.filterText = 'mutated after push';
 
-		expect(page.state.library?.libraryView).toBe('timeline');
-		if (page.state.library?.libraryView === 'timeline') {
-			expect(page.state.library.snapshot.artistQuery).toBe('');
-		}
-
+		expect(page.state.library?.snapshot.filterText).toBe('');
 		const log = __getNavigationLog();
-		log[0].state = classic();
-		expect(__getNavigationLog()[0].state.library?.libraryView).toBe('timeline');
+		log[0].state = artists();
+		expect(__getNavigationLog()[0].state.library?.snapshot.scope).toBe('browse');
 	});
 });

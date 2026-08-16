@@ -5,7 +5,7 @@ import type {
   PublicSongUnavailableCode,
 } from "../../shared/publicSongResolverContracts";
 import { PUBLIC_SONG_UNAVAILABLE_MESSAGES } from "../../shared/publicSongResolverContracts";
-import { normalizeCatalogText } from "../../shared/timelineCatalogContracts";
+import { normalizeCatalogText } from "../../shared/catalogContracts";
 import {
   UNIFIED_SONG_SEARCH_RESULT_MAX,
   UnifiedSongActionSemantic,

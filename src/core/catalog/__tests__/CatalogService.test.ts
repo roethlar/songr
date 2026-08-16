@@ -11,7 +11,7 @@ import {
   normalizeCatalogArtistAlbumsResponse,
   normalizeCatalogArtistSearchResponse,
   normalizeCatalogText,
-} from "../../../shared/timelineCatalogContracts";
+} from "../../../shared/catalogContracts";
 import { BrowseItem, BrowseResult } from "../../../shared/types";
 import {
   CatalogAuxiliaryArtistResolver,

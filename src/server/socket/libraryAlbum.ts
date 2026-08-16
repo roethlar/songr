@@ -6,16 +6,23 @@ import {
   LibraryAlbumFailedEvent,
   LibraryAlbumOpenAck,
   LibraryAlbumResolvedEvent,
+  LibraryAlbumSelectAck,
+  LibraryAlbumVersionFailedEvent,
+  LibraryAlbumVersionsEvent,
   normalizeLibraryAlbumCancelRequest,
   normalizeLibraryAlbumOpenRequest,
+  normalizeLibraryAlbumSelectRequest,
 } from "../../shared/libraryAlbumContracts";
 import {
   LibraryAlbumEventSink,
   LibraryAlbumOpenReservation,
   LibraryAlbumOrigin,
+  LibraryAlbumSelectReservation,
 } from "../../core/roon/LibraryAlbumService";
 
-type LibraryAlbumAck = (response: LibraryAlbumOpenAck | LibraryAlbumCancelAck) => void;
+type LibraryAlbumAck = (
+  response: LibraryAlbumOpenAck | LibraryAlbumSelectAck | LibraryAlbumCancelAck
+) => void;
 
 export interface LibraryAlbumSocketService {
   open(
@@ -23,6 +30,7 @@ export interface LibraryAlbumSocketService {
     value: unknown,
     sink: LibraryAlbumEventSink
   ): LibraryAlbumOpenReservation;
+  select(origin: LibraryAlbumOrigin, value: unknown): LibraryAlbumSelectReservation;
   cancel(origin: LibraryAlbumOrigin, value: unknown): LibraryAlbumCancelAck;
   disconnectSocket(socketId: string): void;
 }
@@ -33,7 +41,7 @@ export interface LibraryAlbumSocketDependencies {
   logger: Logger;
 }
 
-/** Registers the origin-bound single-phase library-album read protocol. */
+/** Registers the origin-bound retained library-album page protocol. */
 export function registerLibraryAlbumSocket(
   socket: Socket,
   dependencies: LibraryAlbumSocketDependencies
@@ -52,7 +60,7 @@ export function registerLibraryAlbumSocket(
 
   const acknowledge = (
     ack: LibraryAlbumAck,
-    response: LibraryAlbumOpenAck | LibraryAlbumCancelAck
+    response: LibraryAlbumOpenAck | LibraryAlbumSelectAck | LibraryAlbumCancelAck
   ): boolean => {
     try {
       ack(response);
@@ -73,6 +81,11 @@ export function registerLibraryAlbumSocket(
     code: "INVALID_REQUEST",
     error: "Invalid library album cancel request",
   });
+  const invalidSelect = (): LibraryAlbumSelectAck => ({
+    success: false,
+    code: "INVALID_REQUEST",
+    error: "Invalid library album version request",
+  });
 
   socket.on("library-album:open", (value: unknown, ack?: LibraryAlbumAck) => {
     // Acceptance creates a lease, so a missing acknowledgment callback must
@@ -85,8 +98,14 @@ export function registerLibraryAlbumSocket(
       return;
     }
     const sink: LibraryAlbumEventSink = {
+      versions: (event: LibraryAlbumVersionsEvent) => {
+        socket.emit("library-album:versions", event);
+      },
       resolved: (event: LibraryAlbumResolvedEvent) => {
         socket.emit("library-album:resolved", event);
+      },
+      versionFailed: (event: LibraryAlbumVersionFailedEvent) => {
+        socket.emit("library-album:version-failed", event);
       },
       failed: (event: LibraryAlbumFailedEvent) => {
         socket.emit("library-album:failed", event);
@@ -101,6 +120,19 @@ export function registerLibraryAlbumSocket(
       }
       return;
     }
+    reservation.start?.();
+  });
+
+  socket.on("library-album:select", (value: unknown, ack?: LibraryAlbumAck) => {
+    if (typeof ack !== "function") return;
+    const request = normalizeLibraryAlbumSelectRequest(value);
+    const requestOrigin = origin();
+    if (!request || !requestOrigin) {
+      acknowledge(ack, invalidSelect());
+      return;
+    }
+    const reservation = libraryAlbumService.select(requestOrigin, request);
+    if (!acknowledge(ack, reservation.ack)) return;
     reservation.start?.();
   });
 

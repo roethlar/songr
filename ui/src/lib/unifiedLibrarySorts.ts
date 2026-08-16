@@ -12,7 +12,7 @@ import type {
 	UnifiedArtistsSort,
 	UnifiedGenresSort
 } from '$lib/stores/unifiedLibraryPrefsStore';
-import type { CatalogPartialDate } from '@shared/timelineCatalogContracts';
+import type { CatalogPartialDate } from '@shared/catalogContracts';
 
 /**
  * Pure sorting/menu logic for the Unified Library scope views (plan §4

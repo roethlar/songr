@@ -27,7 +27,8 @@ async function flush(): Promise<void> {
 function request(): AlbumActionBeginRequest {
   return {
     requestId: "request-1",
-    albumLocalId: "018f0f64-3f31-7a9b-8c2d-8f572cb18a12",
+    pageId: "page-1",
+    versionId: "version-1",
     zoneId: "zone-1",
     tabId: "tab-1",
     generation: 7,

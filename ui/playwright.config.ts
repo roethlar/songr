@@ -27,11 +27,11 @@ export default defineConfig({
 	webServer: {
 		command: `npm exec -- vite --config browser-tests/vite.config.ts --host 127.0.0.1 --port ${port}`,
 		// The readiness probe must name a page that exists in every checkout, so
-		// it points at the public Classic fixture rather than a walled one. A
+		// it points at the public media-session fixture rather than a walled one. A
 		// walled page here would make the server look unhealthy in a tree without
 		// the extended-feature layer, and the suite would fail to start rather
 		// than run its public spec.
-		url: `${baseURL}/fixtures/classic-item-grid.html`,
+		url: `${baseURL}/fixtures/media-session.html`,
 		reuseExistingServer: true,
 		timeout: 120_000
 	}

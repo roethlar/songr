@@ -1,18 +1,19 @@
 import { Logger } from "pino";
 
 import { createCatalogTrackTitleFingerprint } from "../../catalog/CatalogReconciliation";
-import { CatalogSnapshot } from "../../catalog/CatalogService";
 import {
-  AlbumActionCatalogPort,
   AlbumActionCoordinatorPort,
   AlbumActionEventSink,
   AlbumActionOrigin,
+  AlbumActionPageAuthority,
+  AlbumActionPagePort,
   AlbumActionService,
   AlbumActionZonePort,
 } from "../AlbumActionService";
 import {
   AlbumActionResolutionError,
   AlbumActionResolverPort,
+  AlbumActionVersionSource,
   ResolvedAlbumActions,
 } from "../AlbumActionResolver";
 import {
@@ -27,7 +28,7 @@ import {
   AlbumActionFailedEvent,
   AlbumActionResolvedEvent,
 } from "../../../shared/albumActionContracts";
-import { AlbumRef } from "../../../shared/timelineCatalogContracts";
+import { AlbumRef, ArtistRef } from "../../../shared/catalogContracts";
 import { BrowseOptions, BrowseResult, Zone } from "../../../shared/types";
 
 interface Deferred<T> {
@@ -75,14 +76,15 @@ function album(patch: Partial<AlbumRef> = {}): AlbumRef {
   } as AlbumRef;
 }
 
-function snapshot(albumValue: AlbumRef = album()): CatalogSnapshot {
+function artist(): ArtistRef {
   return {
+    localId: "018f0f64-3f31-7a9b-8c2d-8f572cb18a13",
     coreId: "core-1",
-    revision: 1,
-    updatedAt: "2026-07-14T00:00:00.000Z",
-    lastCompleteScanAt: "2026-07-14T00:00:00.000Z",
-    artists: [],
-    albums: [albumValue],
+    exactName: "Artist",
+    normalizedName: "artist",
+    firstSeenAt: "2026-07-14T00:00:00.000Z",
+    lastSeenAt: "2026-07-14T00:00:00.000Z",
+    resolutionStatus: "resolved",
   };
 }
 
@@ -122,12 +124,69 @@ const otherOrigin: AlbumActionOrigin = {
 function request(patch: Partial<AlbumActionBeginRequest> = {}): AlbumActionBeginRequest {
   return {
     requestId: "request-1",
-    albumLocalId: album().localId,
+    pageId: "page-1",
+    versionId: "version-1",
     zoneId: "zone-1",
     tabId: "tab-1",
     generation: 7,
     ...patch,
   };
+}
+
+function versionSource(): AlbumActionVersionSource {
+  return {
+    album: album(),
+    artist: artist(),
+    detailDigest: "detail-digest",
+    versionCount: 2,
+  };
+}
+
+class FakePages implements AlbumActionPagePort {
+  public current = true;
+  public claimCalls = 0;
+  public currentChecks = 0;
+  public invalidateAtCheck: number | null = null;
+  public readonly authority: AlbumActionPageAuthority = {
+    pageId: "page-1",
+    versionId: "version-1",
+    coreId: "core-1",
+    socketId: "socket-1",
+    tabId: "tab-1",
+    generation: 7,
+    albumSignature: "album-signature",
+    retainedItemKey: "retained-version-row",
+    source: versionSource(),
+  };
+
+  public claimSelectedVersionAction(
+    actionOrigin: AlbumActionOrigin,
+    input: {
+      pageId: string;
+      versionId: string;
+      tabId: string;
+      generation: number;
+    }
+  ): Readonly<AlbumActionPageAuthority> | null {
+    this.claimCalls += 1;
+    return this.current &&
+      actionOrigin.coreId === this.authority.coreId &&
+      actionOrigin.socketId === this.authority.socketId &&
+      input.pageId === this.authority.pageId &&
+      input.versionId === this.authority.versionId &&
+      input.tabId === this.authority.tabId &&
+      input.generation === this.authority.generation
+      ? this.authority
+      : null;
+  }
+
+  public isSelectedVersionActionCurrent(
+    authority: Readonly<AlbumActionPageAuthority>
+  ): boolean {
+    this.currentChecks += 1;
+    if (this.currentChecks === this.invalidateAtCheck) this.current = false;
+    return this.current && authority === this.authority;
+  }
 }
 
 class FakeCoordinator implements AlbumActionCoordinatorPort {
@@ -227,14 +286,17 @@ class FakeCoordinator implements AlbumActionCoordinatorPort {
 
 describe("AlbumActionService", () => {
   let coordinator: FakeCoordinator;
-  let catalogSnapshot: CatalogSnapshot | null;
+  let pages: FakePages;
   let currentZone: Zone | undefined;
   let resolverImpl: (
     session: CoordinatedBrowseSession,
-    albumValue: Readonly<AlbumRef>,
+    source: Readonly<AlbumActionVersionSource>,
     zoneId: string
   ) => Promise<ResolvedAlbumActions>;
-  let resolverCalls: Array<{ album: Readonly<AlbumRef>; zoneId: string }>;
+  let resolverCalls: Array<{
+    source: Readonly<AlbumActionVersionSource>;
+    zoneId: string;
+  }>;
   let service: AlbumActionService;
   let resolvedEvents: AlbumActionResolvedEvent[];
   let failedEvents: AlbumActionFailedEvent[];
@@ -246,18 +308,18 @@ describe("AlbumActionService", () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
     coordinator = new FakeCoordinator();
-    catalogSnapshot = snapshot();
+    pages = new FakePages();
     currentZone = zone();
     resolverCalls = [];
     resolverImpl = () => Promise.resolve(resolvedActions());
     const resolver: AlbumActionResolverPort = {
-      resolve: (session, albumValue, zoneId) => {
-        resolverCalls.push({ album: albumValue, zoneId });
-        return resolverImpl(session, albumValue, zoneId);
+      resolve: () => {
+        throw new Error("Legacy catalog resolution must not be used");
       },
-    };
-    const catalog: AlbumActionCatalogPort = {
-      getSnapshot: () => catalogSnapshot,
+      resolveSelectedVersion: (session, source, zoneId) => {
+        resolverCalls.push({ source, zoneId });
+        return resolverImpl(session, source, zoneId);
+      },
     };
     const zones: AlbumActionZonePort = { getZone: () => currentZone };
     resolvedEvents = [];
@@ -270,7 +332,7 @@ describe("AlbumActionService", () => {
     loggerError = jest.fn();
     service = new AlbumActionService(
       coordinator,
-      catalog,
+      pages,
       zones,
       resolver,
       {
@@ -405,18 +467,14 @@ describe("AlbumActionService", () => {
     expect(coordinator.releaseCalls).toBe(1);
   });
 
-  it("keeps request replay conflicts socket-scoped", () => {
+  it("rejects a page token presented by a different socket", () => {
     const first = service.begin(origin, request(), sink);
     const second = service.begin(otherOrigin, request(), sink);
 
     expect(first.ack.success).toBe(true);
-    expect(second.ack.success).toBe(true);
-    expect(coordinator.acquireCalls).toBe(2);
+    expect(second.ack).toMatchObject({ success: false, code: "SESSION_LOST" });
+    expect(coordinator.acquireCalls).toBe(1);
     expect(service.cancel(origin, { requestId: "request-1" })).toEqual({
-      success: true,
-      data: { claimed: true },
-    });
-    expect(service.cancel(otherOrigin, { requestId: "request-1" })).toEqual({
       success: true,
       data: { claimed: true },
     });
@@ -514,19 +572,19 @@ describe("AlbumActionService", () => {
     expect(coordinator.releaseCalls).toBe(1);
   });
 
-  it("rechecks catalog authority immediately before publishing choices", async () => {
+  it("rechecks selected-version authority immediately before publishing choices", async () => {
     const resolution = deferred<ResolvedAlbumActions>();
     resolverImpl = () => resolution.promise;
     const reservation = service.begin(origin, request(), sink);
     reservation.start?.();
     await flush();
-    catalogSnapshot = snapshot(album({ exactTitle: "Changed Album" }));
+    pages.current = false;
 
     resolution.resolve(resolvedActions());
     await flush();
 
     expect(resolvedEvents).toHaveLength(0);
-    expect(failedEvents[0].code).toBe("ALBUM_NOT_FOUND");
+    expect(failedEvents[0].code).toBe("SESSION_LOST");
     expect(coordinator.releaseCalls).toBe(1);
   });
 
@@ -818,11 +876,9 @@ describe("AlbumActionService", () => {
     expect(failedEvents).toHaveLength(0);
   });
 
-  it("rejects a changed catalog identity after claiming and sends zero execute calls", async () => {
+  it("rejects a retired selected version before claiming execute", async () => {
     const event = await resolveRequest();
-    catalogSnapshot = snapshot(
-      album({ trackTitleFingerprint: "f".repeat(64) })
-    );
+    pages.current = false;
 
     await expect(
       service.execute(origin, { actionId: event.actions[0].actionId })
@@ -830,38 +886,30 @@ describe("AlbumActionService", () => {
       success: true,
       data: { claimed: true, outcome: "rejected", code: "ALBUM_UNRESOLVED" },
     });
+    expect(coordinator.claimCalls).toBe(0);
     expect(coordinator.executeCalls).toHaveLength(0);
     expect(coordinator.releaseCalls).toBe(1);
   });
 
-  it.each([
-    ["exact title", { exactTitle: "Changed Album" }],
-    ["exact artist", { exactArtist: "Changed Artist" }],
-    ["edition text", { editionText: "Deluxe Edition" }],
-    [
-      "artist binding",
-      { artistLocalId: "018f0f64-3f31-7a9b-8c2d-8f572cb18aff" },
-    ],
-  ] as const)(
-    "rejects a changed %s in the album authority signature",
-    async (_label, patch) => {
-      const event = await resolveRequest();
-      catalogSnapshot = snapshot(album(patch));
+  it("rechecks selected-version authority after claiming and before dispatch", async () => {
+    const event = await resolveRequest();
+    pages.currentChecks = 0;
+    pages.invalidateAtCheck = 2;
 
-      await expect(
-        service.execute(origin, { actionId: event.actions[0].actionId })
-      ).resolves.toMatchObject({
-        success: true,
-        data: {
-          claimed: true,
-          outcome: "rejected",
-          code: "ALBUM_UNRESOLVED",
-        },
-      });
-      expect(coordinator.executeCalls).toHaveLength(0);
-      expect(coordinator.releaseCalls).toBe(1);
-    }
-  );
+    await expect(
+      service.execute(origin, { actionId: event.actions[0].actionId })
+    ).resolves.toMatchObject({
+      success: true,
+      data: {
+        claimed: true,
+        outcome: "rejected",
+        code: "ALBUM_UNRESOLVED",
+      },
+    });
+    expect(coordinator.claimCalls).toBe(1);
+    expect(coordinator.executeCalls).toHaveLength(0);
+    expect(coordinator.releaseCalls).toBe(1);
+  });
 
   it("reports a pre-dispatch failure as rejected with clean release", async () => {
     const event = await resolveRequest();

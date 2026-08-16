@@ -36,11 +36,19 @@ import type {
 	LibraryAlbumController,
 	LibraryAlbumState
 } from '$lib/library/LibraryAlbumController';
+import type { EditorialItemController } from '$lib/library/EditorialItemController';
+import type { CompositionBrowseController } from '$lib/library/CompositionBrowseController';
 import { UnifiedSongActionController } from '$lib/library/UnifiedSongActionController';
 import { PublicSongActionController } from '$lib/library/PublicSongActionController';
+import type {
+	UnifiedBrowseActionController,
+	UnifiedBrowseController
+} from '$lib/library/UnifiedBrowseController';
+import type { AddFavoriteRequest } from '@shared/types';
+import type { FavoritesState } from '$lib/stores/favoritesStore';
 import type { PublicSongResolverClient } from '$lib/publicSongResolverClient';
 import type { UnifiedSearchClient } from '$lib/unifiedSearchClient';
-import type { TimelineAlbumActionController } from '$lib/timeline/TimelineAlbumActionController';
+import type { AlbumActionController } from '$lib/library/AlbumActionController';
 import { clearPendingLibraryPageStateWrite } from '$lib/libraryPageNavigation';
 import {
 	__back,
@@ -235,7 +243,7 @@ export function fakeDrillStore(albums: DrillAlbum[]) {
 		error: null as string | null
 	};
 	const store = writable(empty);
-	const load = vi.fn(async (_claim: unknown, _hierarchy: string, _itemKey: string) => {
+	const load = vi.fn(async (_claim: unknown, _hierarchy: string, _label: string) => {
 		store.set({ albums, totalCount: albums.length, loading: false, loaded: true, error: null });
 	});
 	const reset = vi.fn(() => {
@@ -352,9 +360,17 @@ export interface Harness {
 	playlistActionController?: PublicSongActionController;
 	drillStore?: ReturnType<typeof fakeDrillStore>;
 	albumController?: LibraryAlbumController;
+	editorialController?: EditorialItemController;
+	compositionController?: CompositionBrowseController;
 	songActionController?: UnifiedSongActionController;
+	browseController?: UnifiedBrowseController;
+	browseActionController?: UnifiedBrowseActionController;
+	addFavoriteData?: (fetchFn: typeof fetch, payload: AddFavoriteRequest) => Promise<void>;
+	favoritesStore?: Writable<FavoritesState>;
+	loadFavoritesData?: (fetchFn: typeof fetch) => Promise<void>;
+	removeFavoriteData?: (fetchFn: typeof fetch, id: string) => Promise<void>;
 	songRelationshipClient?: Pick<UnifiedSearchClient, 'relationship'>;
-	albumActionController?: TimelineAlbumActionController;
+	albumActionController?: AlbumActionController;
 	hydrateArtistAlbums?: ReturnType<typeof vi.fn>;
 	getSocketClient?: () => ReturnType<typeof fakeConnectionSocket>;
 }
@@ -410,6 +426,9 @@ export function mountMode(options: Harness = {}) {
 				composerLabels: []
 			})
 		} satisfies Pick<UnifiedSearchClient, 'relationship'>);
+	const favoritesStore =
+		options.favoritesStore ??
+		writable<FavoritesState>({ entries: [], loading: false, loaded: true });
 	const props = {
 		sessionClient: options.sessionClient ?? session.client,
 		indexStore: indexStore as unknown as IndexStore,
@@ -423,6 +442,9 @@ export function mountMode(options: Harness = {}) {
 		clearPaletteSearchData: clearPaletteSearchData as never,
 		resetPaletteSearchData: resetPaletteSearchData as never,
 		recentStore: options.recentStore as unknown as typeof recentlyPlayedStore,
+		favoritesDataStore: favoritesStore as never,
+		loadFavoritesData: (options.loadFavoritesData ?? vi.fn(async () => {})) as never,
+		removeFavoriteData: (options.removeFavoriteData ?? vi.fn(async () => {})) as never,
 		mostPlayedStore: options.mostPlayedStore as unknown as ResolvedLibraryScopeSlots['mostPlayedStore'],
 		loadMostPlayedData: (options.loadMostPlayedData ?? vi.fn(async () => {})) as never,
 		mostPlayedReset: (options.mostPlayedReset ?? vi.fn()) as never,
@@ -445,9 +467,20 @@ export function mountMode(options: Harness = {}) {
 			? { hydrateArtistAlbums: options.hydrateArtistAlbums as never }
 			: {}),
 		...(options.albumController ? { albumController: options.albumController } : {}),
+		...(options.editorialController
+			? { editorialController: options.editorialController }
+			: {}),
+		...(options.compositionController
+			? { compositionController: options.compositionController }
+			: {}),
 		...(options.songActionController
 			? { songActionController: options.songActionController }
 			: {}),
+		...(options.browseController ? { browseController: options.browseController } : {}),
+		...(options.browseActionController
+			? { browseActionController: options.browseActionController }
+			: {}),
+		...(options.addFavoriteData ? { addFavoriteData: options.addFavoriteData } : {}),
 		songRelationshipClient,
 		...(options.albumActionController
 			? { albumActionController: options.albumActionController }
@@ -463,7 +496,6 @@ export function mountMode(options: Harness = {}) {
 						[
 							LIBRARY_MODE_ACTIVATION_CONTEXT,
 							{
-								classicTruncationHistoryPolicy: () => 'preserve' as const,
 								committedActivation: () => committed,
 								registerLifecycle: (
 									mode: LibraryView,
@@ -497,6 +529,7 @@ export function mountMode(options: Harness = {}) {
 		paletteSearchStore,
 		clearPaletteSearchData,
 		resetPaletteSearchData,
+		favoritesStore,
 		songRelationshipClient,
 		registered,
 		setCommitted: (value: CommittedLibraryModeActivation | null) => {
@@ -518,9 +551,11 @@ export function albumEntry(id: string, title: string, artistId: string): Library
 export function fakeModeAlbumController(): {
 	controller: LibraryAlbumController;
 	open: ReturnType<typeof vi.fn>;
+	store: Writable<LibraryAlbumState>;
 } {
 	const store = writable({
-		phase: 'resolving',
+		phase: 'opening',
+		activeTab: 'details',
 		albumLocalId: 'alb-1',
 		generation: 1,
 		requestId: 'r-1',
@@ -528,9 +563,10 @@ export function fakeModeAlbumController(): {
 		resolvingDeadlineAt: null,
 		artist: null,
 		title: null,
+		versions: [],
+		selectedVersionId: null,
 		actionsAvailable: false,
 		orderedTracks: [],
-		candidates: [],
 		code: null,
 		error: null,
 		transitionedAt: 1
@@ -540,20 +576,25 @@ export function fakeModeAlbumController(): {
 		controller: {
 			subscribe: store.subscribe,
 			open,
+			select: vi.fn(),
+			showVersions: vi.fn(),
+			showDetails: vi.fn(),
 			cancel: vi.fn(),
 			reset: vi.fn()
 		} as unknown as LibraryAlbumController,
-		open
+		open,
+		store
 	};
 }
 
-export function fakeModeActionController(): TimelineAlbumActionController {
+export function fakeModeActionController(): AlbumActionController {
 	const store = writable({ phase: 'idle', actions: [], error: null });
 	return {
 		subscribe: store.subscribe,
 		begin: vi.fn(),
-		cancel: vi.fn()
-	} as unknown as TimelineAlbumActionController;
+		cancel: vi.fn(),
+		reset: vi.fn()
+	} as unknown as AlbumActionController;
 }
 
 export function fakePublicSongActionController(): PublicSongActionController {

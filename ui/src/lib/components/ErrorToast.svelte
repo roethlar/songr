@@ -79,11 +79,11 @@
 
 	.toast {
 		max-width: 400px;
-		background: var(--surface);
-		color: var(--text);
-		border: 1px solid var(--border);
+		background: var(--songr-panel);
+		color: var(--songr-text);
+		border: 1px solid var(--songr-line-12);
 		border-radius: 8px;
-		box-shadow: var(--shadow-soft);
+		box-shadow: 0 16px 42px var(--songr-shadow);
 		padding: 1rem;
 		display: flex;
 		gap: 1rem;
@@ -102,15 +102,15 @@
 	}
 
 	.error-toast {
-		border-left: 4px solid #dc3545;
+		border-left: 4px solid var(--songr-error-strong);
 	}
 
 	.success-toast {
-		border-left: 4px solid #28a745;
+		border-left: 4px solid var(--songr-success-strong);
 	}
 
 	.success-toast .toast-header strong {
-		color: #28a745;
+		color: var(--songr-success-strong);
 	}
 
 	.toast-content {
@@ -129,18 +129,18 @@
 	}
 
 	.toast-header strong {
-		color: #dc3545;
+		color: var(--songr-error-strong);
 	}
 
 	.toast-message {
 		margin: 0.5rem 0;
-		color: var(--text);
+		color: var(--songr-text);
 	}
 
 	.toast-command {
 		margin: 0.25rem 0 0 0;
 		font-size: 0.85rem;
-		color: var(--text-soft);
+		color: var(--songr-soft);
 		font-family: monospace;
 	}
 
@@ -148,13 +148,13 @@
 		background: none;
 		border: none;
 		font-size: 1.5rem;
-		color: var(--text-soft);
+		color: var(--songr-soft);
 		cursor: pointer;
 		padding: 0;
 		line-height: 1;
 	}
 
 	.toast-dismiss:hover {
-		color: var(--text);
+		color: var(--songr-text);
 	}
 </style>

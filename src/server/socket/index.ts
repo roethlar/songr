@@ -15,16 +15,17 @@ import { TransportService } from "../../core/roon/TransportService";
 import { BrowseService } from "../../core/roon/BrowseService";
 import { AlbumActionService } from "../../core/roon/AlbumActionService";
 import { LibraryAlbumService } from "../../core/roon/LibraryAlbumService";
-import { TimelineBrowseService } from "../../core/roon/TimelineBrowseService";
 import { BrowseSessionCoordinator } from "../../core/roon/BrowseSessionCoordinator";
 import { PublicSongResolverService } from "../../core/roon/PublicSongResolverService";
 import { RoonClient } from "../../core/roon/RoonClient";
+import type { EditorialItemSessionService } from "../../core/roon/EditorialItemSessionService";
 import type { SongRelationshipFeaturePort } from "../libraryFeatures";
 import { errorMessage } from "../util";
 import { registerAlbumActionSocket } from "./albumActions";
 import { registerLibraryAlbumSocket } from "./libraryAlbum";
-import { registerTimelineBrowseSocket } from "./timelineBrowse";
+import { registerEditorialItemSocket } from "./editorialItem";
 import { registerClassicBrowseSocket } from "./classicBrowse";
+import type { WorkspaceFeatureLayer } from "../workspaceFeatures";
 import { registerUnifiedSearchSocket } from "./unifiedSearch";
 import { registerPublicSongResolverSocket } from "./publicSongResolver";
 
@@ -40,10 +41,11 @@ interface SocketDependencies {
   browseService: BrowseService;
   albumActionService: AlbumActionService;
   libraryAlbumService: LibraryAlbumService;
-  timelineBrowseService: TimelineBrowseService;
+  editorialItemService: EditorialItemSessionService;
   browseSessionCoordinator: BrowseSessionCoordinator;
   publicSongResolverService: PublicSongResolverService;
   songRelationships: SongRelationshipFeaturePort;
+  workspaceFeatures: WorkspaceFeatureLayer;
   logger: Logger;
 }
 
@@ -87,10 +89,11 @@ export const attachSocketServer = (
     browseService,
     albumActionService,
     libraryAlbumService,
-    timelineBrowseService,
+    editorialItemService,
     browseSessionCoordinator,
     publicSongResolverService,
     songRelationships,
+    workspaceFeatures,
     logger,
   } = deps;
 
@@ -150,11 +153,9 @@ export const attachSocketServer = (
 
   io.on("connection", (socket) => {
     logger.info({ clientId: socket.id }, "WebSocket client connected");
-    registerTimelineBrowseSocket(socket, {
-      timelineBrowseService,
-      getCoreId: () => roonClient.getCoreInfo()?.id ?? null,
-      logger,
-    });
+    // The optional workspace layer attaches whatever handlers this build
+    // carries; an absent build attaches nothing.
+    workspaceFeatures.attachSocket(socket);
     registerAlbumActionSocket(socket, {
       actionService: albumActionService,
       coordinator: browseSessionCoordinator,
@@ -182,6 +183,11 @@ export const attachSocketServer = (
     });
     registerLibraryAlbumSocket(socket, {
       libraryAlbumService,
+      getCoreId: () => roonClient.getCoreInfo()?.id ?? null,
+      logger,
+    });
+    registerEditorialItemSocket(socket, {
+      editorialItemService,
       getCoreId: () => roonClient.getCoreInfo()?.id ?? null,
       logger,
     });
@@ -629,6 +635,7 @@ export const attachSocketServer = (
 
     socket.on("disconnect", (reason) => {
       logger.info({ clientId: socket.id, reason }, "WebSocket client disconnected");
+      workspaceFeatures.retireSocket(socket.id);
     });
   });
 

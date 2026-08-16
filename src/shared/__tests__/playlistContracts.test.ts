@@ -3,7 +3,7 @@
  * both playlist endpoints, opaque on-demand row authority, and an honest
  * truncated marker only below the Core-reported total.
  */
-import { CatalogStatus } from "../timelineCatalogContracts";
+import { CatalogStatus } from "../catalogContracts";
 import {
   normalizePlaylistContentsResponse,
   normalizePlaylistsResponse,

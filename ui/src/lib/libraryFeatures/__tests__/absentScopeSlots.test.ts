@@ -44,6 +44,13 @@ describe('absent library scope slots', () => {
 		await expect(libraryScopeSlots.openPlaylist(fetch, 'any-playlist')).resolves.toBeUndefined();
 	});
 
+	it('offers no workspace links: nothing rendered, nothing disabled', () => {
+		// The negative absence control for workspace links: a build with no
+		// workspaces provides an empty list, so the library renders no link,
+		// no placeholder, and no disabled entry.
+		expect(libraryScopeSlots.workspaceLinks).toEqual([]);
+	});
+
 	it('leaves the inert stores unchanged when the surface resets or closes', () => {
 		expect(() => {
 			libraryScopeSlots.resetMostPlayed();

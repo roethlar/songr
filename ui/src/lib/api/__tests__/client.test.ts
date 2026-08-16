@@ -6,14 +6,15 @@ import type {
 	CatalogArtistSearchResponse,
 	CatalogRefreshAcceptedResponse,
 	CatalogStatus
-} from '@shared/timelineCatalogContracts';
+} from '@shared/catalogContracts';
 import {
 	addFavorite,
 	fetchCatalogArtistAlbums,
 	fetchCatalogStatus,
 	loadCatalogArtistAlbums,
 	refreshCatalog,
-	searchCatalogArtists
+	searchCatalogArtists,
+	switchCore
 } from '../client';
 
 const ARTIST_ID = '10000000-0000-4000-8000-000000000001';
@@ -108,6 +109,23 @@ function jsonFetch(body: unknown, statusCode = 200): ReturnType<typeof vi.fn<typ
 		})
 	);
 }
+
+describe('Core API client', () => {
+	it('sends the exact destructive confirmation to switch Core', async () => {
+		const fetchFn = jsonFetch({ accepted: true, status: 'discovering' }, 202);
+
+		await expect(switchCore(fetchFn)).resolves.toEqual({
+			accepted: true,
+			status: 'discovering'
+		});
+		expect(fetchFn).toHaveBeenCalledWith('/api/core/switch', {
+			credentials: 'include',
+			method: 'POST',
+			body: JSON.stringify({ confirmed: true }),
+			headers: { 'Content-Type': 'application/json' }
+		});
+	});
+});
 
 describe('catalog API client', () => {
 	it('strictly loads catalog status', async () => {

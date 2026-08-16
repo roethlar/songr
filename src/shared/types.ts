@@ -8,7 +8,7 @@
  * - Frontend (SvelteKit)
  */
 
-import type { CatalogStatus } from './timelineCatalogContracts';
+import type { CatalogStatus } from './catalogContracts';
 
 // ========================================
 // Transport Types (A.2 - Claude)
@@ -641,6 +641,16 @@ export interface CoreStatusResponse {
   };
 }
 
+/** Explicit destructive confirmation for `POST /api/core/switch`. */
+export interface CoreSwitchRequest {
+  confirmed: true;
+}
+
+export interface CoreSwitchResponse {
+  accepted: true;
+  status: 'discovering';
+}
+
 /**
  * The product name Roon shows in Settings → Extensions. Each running
  * instance appends its host machine's name — "Songr (living-room-pi)" —
@@ -693,8 +703,9 @@ export interface QueueResponse {
 /**
  * /api/health per-subsystem diagnostics. `recently_played` and
  * `favorites` report critical degraded persistence (unreadable/unwritable
- * state files), while `catalog` is a non-critical diagnostic until Timeline
- * ships. The endpoint answers 503 with this same body when a critical
+ * state files), while `catalog` is a non-critical diagnostic: the Library
+ * serves through browse fallback while the catalog is still building.
+ * The endpoint answers 503 with this same body when a critical
  * subsystem is degraded, so clients must read the payload on both 200 and 503.
  */
 export interface RecentlyPlayedHealth {

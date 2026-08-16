@@ -13,6 +13,14 @@ export const UNIFIED_LIBRARY_PREFS_VERSION = 3;
 export const UNIFIED_LIBRARY_PREFS_STORAGE_KEY = 'roon-controller-unified-library-prefs';
 
 export type UnifiedLibraryDensity = 'compact' | 'normal' | 'pi';
+export const UNIFIED_LIBRARY_DENSITY_OPTIONS: readonly {
+	readonly id: UnifiedLibraryDensity;
+	readonly label: string;
+}[] = Object.freeze([
+	{ id: 'compact', label: 'Compact' },
+	{ id: 'normal', label: 'Normal' },
+	{ id: 'pi', label: 'Touch' }
+]);
 export type UnifiedArtistsSort = 'az' | 'za' | 'most-albums' | 'fewest-albums';
 export type UnifiedAlbumsSort = 'az' | 'za' | 'by-artist' | 'shuffle' | 'year-asc' | 'year-desc';
 export type UnifiedGenresSort = 'az' | 'za' | 'most-albums';
@@ -34,7 +42,7 @@ export interface UnifiedLibraryPrefs {
 	readonly sorts: UnifiedLibrarySorts;
 }
 
-const DENSITIES: readonly string[] = ['compact', 'normal', 'pi'];
+const DENSITIES: readonly string[] = UNIFIED_LIBRARY_DENSITY_OPTIONS.map(({ id }) => id);
 const SORT_VALUES: Readonly<Record<SortableUnifiedScope, readonly string[]>> = Object.freeze({
 	artists: ['az', 'za', 'most-albums', 'fewest-albums'],
 	albums: ['az', 'za', 'by-artist', 'shuffle', 'year-asc', 'year-desc'],
@@ -194,3 +202,24 @@ export function createUnifiedLibraryPrefsStore({
 }
 
 export const unifiedLibraryPrefsStore = createUnifiedLibraryPrefsStore({ isBrowser: browser });
+
+type UnifiedLibraryDensityRequestHandler = (value: UnifiedLibraryDensity) => boolean;
+let densityRequestHandler: UnifiedLibraryDensityRequestHandler | null = null;
+
+/**
+ * Controller-settings lives at layout level, while Unified owns the semantic
+ * page-state history that must accompany an explicit density change. Register
+ * that owner here so moving the controls cannot silently drop Back/Forward.
+ */
+export function registerUnifiedLibraryDensityRequestHandler(
+	handler: UnifiedLibraryDensityRequestHandler
+): () => void {
+	densityRequestHandler = handler;
+	return () => {
+		if (densityRequestHandler === handler) densityRequestHandler = null;
+	};
+}
+
+export function requestUnifiedLibraryDensity(value: UnifiedLibraryDensity): boolean {
+	return densityRequestHandler?.(value) ?? unifiedLibraryPrefsStore.setDensity(value);
+}

@@ -1,15 +1,19 @@
 import {
   LIBRARY_ALBUM_FAILURE_CODES,
-  LIBRARY_ALBUM_MAX_CANDIDATES,
+  LIBRARY_ALBUM_MAX_VERSIONS,
   LIBRARY_ALBUM_MAX_TRACKS,
   LIBRARY_ALBUM_OPEN_ERROR_CODES,
   normalizeLibraryAlbumCancelAck,
   normalizeLibraryAlbumCancelRequest,
-  normalizeLibraryAlbumCandidate,
   normalizeLibraryAlbumFailedEvent,
   normalizeLibraryAlbumOpenAck,
   normalizeLibraryAlbumOpenRequest,
   normalizeLibraryAlbumResolvedEvent,
+  normalizeLibraryAlbumSelectAck,
+  normalizeLibraryAlbumSelectRequest,
+  normalizeLibraryAlbumVersionFailedEvent,
+  normalizeLibraryAlbumVersionSummary,
+  normalizeLibraryAlbumVersionsEvent,
   type LibraryAlbumCorrelation,
 } from "../libraryAlbumContracts";
 
@@ -27,8 +31,8 @@ function correlation(): LibraryAlbumCorrelation {
   };
 }
 
-function candidate(editionText = "2011 Remaster") {
-  return { title: "Album", artist: "Artist", editionText };
+function version(versionId: string, editionText = "") {
+  return { versionId, editionText };
 }
 
 function resolvedEvent() {
@@ -36,9 +40,11 @@ function resolvedEvent() {
     requestId: REQUEST_ID,
     operationId: OPERATION_ID,
     generation: 4,
+    versionId: "version-01",
     artist: "Artist",
     title: "Album",
     actionsAvailable: true,
+    versionSummary: version("version-01"),
     orderedTracks: [
       { index: 0, title: "First" },
       { index: 1, title: "Second" },
@@ -71,27 +77,14 @@ describe("library album open contracts", () => {
     expect(normalized).not.toBe(source);
   });
 
-  it("normalizes an open request carrying a chooser candidate", () => {
-    const source = {
+  it("rejects the retired chooser-candidate request shape", () => {
+    expect(normalizeLibraryAlbumOpenRequest({
       requestId: REQUEST_ID,
       tabId: "tab-01",
       albumLocalId: ALBUM_ID,
       generation: 4,
-      candidate: candidate(),
-    };
-    const normalized = normalizeLibraryAlbumOpenRequest(source);
-    expect(normalized).toEqual(source);
-    expect(normalized?.candidate).not.toBe(source.candidate);
-  });
-
-  it("accepts an empty edition text and rejects other blank fields", () => {
-    expect(normalizeLibraryAlbumCandidate(candidate(""))).toEqual(candidate(""));
-    expect(
-      normalizeLibraryAlbumCandidate({ ...candidate(), title: "" })
-    ).toBeNull();
-    expect(
-      normalizeLibraryAlbumCandidate({ ...candidate(), artist: " padded " })
-    ).toBeNull();
+      candidate: { title: "Album", artist: "Artist", editionText: "Remaster" },
+    })).toBeNull();
   });
 
   it.each([
@@ -113,16 +106,6 @@ describe("library album open contracts", () => {
     [
       "negative generation",
       { requestId: REQUEST_ID, tabId: "tab-01", albumLocalId: ALBUM_ID, generation: -1 },
-    ],
-    [
-      "malformed candidate",
-      {
-        requestId: REQUEST_ID,
-        tabId: "tab-01",
-        albumLocalId: ALBUM_ID,
-        generation: 4,
-        candidate: { title: "Album" },
-      },
     ],
   ])("rejects an invalid open request (%s)", (_label, value) => {
     expect(normalizeLibraryAlbumOpenRequest(value)).toBeNull();
@@ -211,6 +194,157 @@ describe("library album resolved events", () => {
       )
     ).toBeNull();
   });
+
+  it("rejects the retired versionless and summaryless detail shapes", () => {
+    const versionless = resolvedEvent() as Record<string, unknown>;
+    delete versionless.versionId;
+    expect(normalizeLibraryAlbumResolvedEvent(versionless, correlation())).toBeNull();
+
+    const summaryless = resolvedEvent() as Record<string, unknown>;
+    delete summaryless.versionSummary;
+    expect(normalizeLibraryAlbumResolvedEvent(summaryless, correlation())).toBeNull();
+  });
+
+  it("accepts bounded exact track metadata and a matching version summary", () => {
+    const event = {
+      ...resolvedEvent(),
+      versionId: "version-01",
+      versionSummary: {
+        versionId: "version-01",
+        editionText: "Deluxe",
+        sourceLabel: "Local",
+        releaseDate: "2003-09-16",
+        trackCount: 2,
+        durationSeconds: 401,
+        available: true,
+      },
+      orderedTracks: [
+        {
+          index: 0,
+          title: "First",
+          trackNumber: 1,
+          mediaNumber: 1,
+          lengthSeconds: 200,
+          available: true,
+        },
+        { index: 1, title: "Second", lengthSeconds: null, available: false },
+      ],
+    };
+    expect(normalizeLibraryAlbumResolvedEvent(event, correlation())).toEqual(event);
+    expect(
+      normalizeLibraryAlbumResolvedEvent(
+        {
+          ...event,
+          versionSummary: { ...event.versionSummary, versionId: "version-02" },
+        },
+        correlation()
+      )
+    ).toBeNull();
+  });
+});
+
+describe("library album version page contracts", () => {
+  it("normalizes select requests and correlated acknowledgments", () => {
+    const request = { operationId: OPERATION_ID, versionId: "version-01" };
+    expect(normalizeLibraryAlbumSelectRequest(request)).toEqual(request);
+    expect(
+      normalizeLibraryAlbumSelectRequest({ ...request, itemKey: "raw-row" })
+    ).toBeNull();
+
+    const ack = {
+      success: true,
+      data: {
+        ...request,
+        resolvingDeadlineAt: RESOLVING_DEADLINE,
+      },
+    };
+    expect(normalizeLibraryAlbumSelectAck(ack, request)).toEqual(ack);
+    expect(
+      normalizeLibraryAlbumSelectAck(ack, { ...request, versionId: "version-02" })
+    ).toBeNull();
+  });
+
+  it("keeps identical display versions distinct by opaque version ID", () => {
+    const event = {
+      requestId: REQUEST_ID,
+      operationId: OPERATION_ID,
+      generation: 4,
+      artist: "Artist",
+      title: "Album",
+      versions: [version("version-01"), version("version-02")],
+    };
+    expect(normalizeLibraryAlbumVersionsEvent(event, correlation())).toEqual(event);
+    expect(
+      normalizeLibraryAlbumVersionsEvent(
+        { ...event, versions: [version("version-01"), version("version-01")] },
+        correlation()
+      )
+    ).toBeNull();
+
+    const oversized = Array.from(
+      { length: LIBRARY_ALBUM_MAX_VERSIONS + 1 },
+      (_, index) => version(`version-${index}`)
+    );
+    expect(
+      normalizeLibraryAlbumVersionsEvent({ ...event, versions: oversized }, correlation())
+    ).toBeNull();
+  });
+
+  it("treats artwork as optional bounded display data only", () => {
+    expect(
+      normalizeLibraryAlbumVersionSummary({
+        ...version("version-01", "Remaster"),
+        imageKeyHint: "same-cover",
+      })
+    ).toEqual({
+      ...version("version-01", "Remaster"),
+      imageKeyHint: "same-cover",
+    });
+    expect(
+      normalizeLibraryAlbumVersionSummary({
+        ...version("version-01"),
+        imageKeyHint: "",
+      })
+    ).toBeNull();
+  });
+
+  it("normalizes richer display metadata but rejects private identity fields", () => {
+    const summary = {
+      ...version("version-01", "Deluxe"),
+      sourceLabel: "Local",
+      releaseDate: "2003",
+      trackCount: 12,
+      durationSeconds: 2_401,
+      available: true,
+      playCount: 4,
+      lastPlayedAt: "2026-08-01T12:30:00.000Z",
+      isFavorite: true,
+      isListenLater: false,
+      isBanned: false,
+    };
+    expect(normalizeLibraryAlbumVersionSummary(summary)).toEqual(summary);
+    expect(
+      normalizeLibraryAlbumVersionSummary({ ...summary, stableKey: "123" })
+    ).toBeNull();
+    expect(
+      normalizeLibraryAlbumVersionSummary({ ...summary, albumId: "123" })
+    ).toBeNull();
+    expect(
+      normalizeLibraryAlbumVersionSummary({ ...summary, releaseDate: "2003-00" })
+    ).toBeNull();
+  });
+
+  it("normalizes only the expected version failure", () => {
+    const event = { ...failedEvent(), versionId: "version-01" };
+    const expected = { ...correlation(), versionId: "version-01" };
+    expect(normalizeLibraryAlbumVersionFailedEvent(event, expected)).toEqual(event);
+    expect(
+      normalizeLibraryAlbumVersionFailedEvent(event, {
+        ...expected,
+        versionId: "version-02",
+      })
+    ).toBeNull();
+  });
 });
 
 describe("library album failed events", () => {
@@ -220,36 +354,13 @@ describe("library album failed events", () => {
     ).toEqual(failedEvent({ code }));
   });
 
-  it("accepts candidates only alongside ALBUM_AMBIGUOUS", () => {
-    const ambiguous = failedEvent({
-      code: "ALBUM_AMBIGUOUS",
-      candidates: [candidate(""), candidate()],
-    });
-    expect(normalizeLibraryAlbumFailedEvent(ambiguous, correlation())).toEqual(
-      ambiguous
-    );
+  it("rejects the retired chooser-candidate failure payload", () => {
     expect(
       normalizeLibraryAlbumFailedEvent(
-        failedEvent({ code: "ALBUM_NOT_FOUND", candidates: [candidate()] }),
-        correlation()
-      )
-    ).toBeNull();
-  });
-
-  it("rejects duplicate or oversized candidate sets", () => {
-    expect(
-      normalizeLibraryAlbumFailedEvent(
-        failedEvent({ code: "ALBUM_AMBIGUOUS", candidates: [candidate(), candidate()] }),
-        correlation()
-      )
-    ).toBeNull();
-    const oversized = Array.from(
-      { length: LIBRARY_ALBUM_MAX_CANDIDATES + 1 },
-      (_, index) => candidate(`Edition ${index}`)
-    );
-    expect(
-      normalizeLibraryAlbumFailedEvent(
-        failedEvent({ code: "ALBUM_AMBIGUOUS", candidates: oversized }),
+        failedEvent({
+          code: "ALBUM_AMBIGUOUS",
+          candidates: [{ title: "Album", artist: "Artist", editionText: "" }],
+        }),
         correlation()
       )
     ).toBeNull();

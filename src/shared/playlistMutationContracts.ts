@@ -1,9 +1,9 @@
-import type { CatalogStatus } from "./timelineCatalogContracts";
+import type { CatalogStatus } from "./catalogContracts";
 import {
   CATALOG_DISPLAY_TEXT_MAX_LENGTH,
   isCatalogLocalId,
   normalizeCatalogStatus,
-} from "./timelineCatalogContracts";
+} from "./catalogContracts";
 import type { PlaylistActionEligibility, PlaylistKind } from "./playlistContracts";
 import {
   normalizeFocusPlaylistManageSmartInfo,

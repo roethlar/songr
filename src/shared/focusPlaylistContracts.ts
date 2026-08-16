@@ -2,7 +2,7 @@ import {
   CATALOG_DISPLAY_TEXT_MAX_LENGTH,
   normalizeCatalogStatus,
   type CatalogStatus,
-} from "./timelineCatalogContracts";
+} from "./catalogContracts";
 import {
   SMART_PLAYLIST_FOCUS_SELECTION_MAX_VALUES,
   SMART_PLAYLIST_FOCUS_TEXT_MAX_LENGTH,

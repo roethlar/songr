@@ -14,7 +14,7 @@ import {
   normalizeCatalogStatus,
   type CatalogRefreshAcceptedResponse,
   type CatalogStatus,
-} from "../../../shared/timelineCatalogContracts";
+} from "../../../shared/catalogContracts";
 import type { ErrorResponse } from "../../../shared/types";
 import { buildCatalogIndexResponse } from "../../../shared/catalogIndexContracts";
 import type { CatalogIndexNativeFeatures } from "../../../shared/catalogIndexContracts";

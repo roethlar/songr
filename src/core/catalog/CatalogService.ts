@@ -27,7 +27,7 @@ import {
   normalizeAlbumRef,
   normalizeArtistRef,
   normalizeCatalogText,
-} from "../../shared/timelineCatalogContracts";
+} from "../../shared/catalogContracts";
 import { repairEncoding } from "../../shared/repairEncoding";
 import { BrowseItem, BrowseResult } from "../../shared/types";
 import {
@@ -35,9 +35,9 @@ import {
   CoordinatedBrowseSession,
 } from "../roon/BrowseSessionCoordinator";
 import {
-  TimelineDiscographyResolution,
-  TimelineDiscographyResolver,
-} from "../roon/TimelineDiscographyResolver";
+  DiscographyResolution,
+  DiscographyResolver,
+} from "../roon/DiscographyResolver";
 import { CatalogPersistence } from "./CatalogPersistence";
 import {
   CatalogReconciliationError,
@@ -61,7 +61,7 @@ export interface CatalogAuxiliaryArtistResolver {
   resolve(
     session: CoordinatedBrowseSession,
     artist: Readonly<ArtistRef>
-  ): Promise<TimelineDiscographyResolution>;
+  ): Promise<DiscographyResolution>;
 }
 
 export interface CatalogHierarchyScanMetrics {
@@ -243,7 +243,7 @@ export class CatalogService {
     this.createLocalId = options.createLocalId ?? randomUUID;
     this.persistence = options.persistence;
     this.auxiliaryArtistResolver =
-      options.auxiliaryArtistResolver ?? new TimelineDiscographyResolver();
+      options.auxiliaryArtistResolver ?? new DiscographyResolver();
     this.validateConfiguration();
   }
 

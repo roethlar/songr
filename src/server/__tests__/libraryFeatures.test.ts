@@ -12,7 +12,7 @@ import http from "http";
 import type { AddressInfo } from "net";
 import type { Logger } from "pino";
 
-import type { CatalogStatus } from "../../shared/timelineCatalogContracts";
+import type { CatalogStatus } from "../../shared/catalogContracts";
 import { createErrorHandler } from "../http/middleware/errorHandler";
 import {
   isFeatureLayerInstalled,
@@ -245,6 +245,11 @@ describe("loading the extended library features", () => {
     expect(layer.playlistWrites).toBeUndefined();
     expect(layer.focusPlaylists).toBeUndefined();
     expect(layer.albumDetailFallback).toBeUndefined();
+    expect(layer.albumVersionInventory).toBeUndefined();
+    // No editorial read port either: the session service then answers
+    // every open FEATURE_UNAVAILABLE (its own no-port test) and public
+    // item pages render with no editorial sections (Slice 8).
+    expect(layer.editorialItems).toBeUndefined();
     // The host stops the layer's own scheduled refresh while shutting down and
     // does not branch on whether the layer has one, so absence has to answer.
     expect(() => layer.stopScheduledRefresh()).not.toThrow();

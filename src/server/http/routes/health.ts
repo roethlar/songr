@@ -11,7 +11,7 @@ import type {
   HealthResponse,
   RecentlyPlayedHealth,
 } from "../../../shared/types";
-import { normalizeCatalogStatus } from "../../../shared/timelineCatalogContracts";
+import { normalizeCatalogStatus } from "../../../shared/catalogContracts";
 
 export const createHealthRouter = (
   recentlyPlayedService?: RecentlyPlayedService,
@@ -76,8 +76,8 @@ export const createHealthRouter = (
           }
         }
       } catch {
-        // Timeline is still unavailable, so diagnostics must not impair the
-        // Classic controller's global readiness endpoint.
+        // The catalog is a non-critical diagnostic, so its failures must not
+        // impair the controller's global readiness endpoint.
       }
     }
 

@@ -69,7 +69,7 @@ const nodeFileSystem: CatalogPersistenceFileSystem = {
 };
 
 /**
- * Atomic, Core-scoped JSON storage for the Timeline catalog read model.
+ * Atomic, Core-scoped JSON storage for the Library catalog read model.
  *
  * Core IDs are opaque Roon values, so they are hashed rather than interpolated
  * into a path. Schema validation belongs to CatalogService; this class owns

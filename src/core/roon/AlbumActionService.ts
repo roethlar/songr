@@ -1,7 +1,6 @@
 import { randomUUID } from "crypto";
 import { Logger } from "pino";
 
-import { CatalogSnapshot } from "../catalog/CatalogService";
 import {
   ALBUM_ACTION_LABEL_MAX_LENGTH,
   ALBUM_ACTION_MAX_CHOICES,
@@ -19,7 +18,6 @@ import {
   normalizeAlbumActionCancelRequest,
   normalizeAlbumActionExecuteRequest,
 } from "../../shared/albumActionContracts";
-import { AlbumRef } from "../../shared/timelineCatalogContracts";
 import {
   BrowseOptions,
   BrowseResult,
@@ -28,6 +26,7 @@ import {
 import {
   AlbumActionResolutionError,
   AlbumActionResolverPort,
+  AlbumActionVersionSource,
   ResolvedAlbumAction,
 } from "./AlbumActionResolver";
 import {
@@ -65,12 +64,35 @@ export interface AlbumActionBeginReservation {
   readonly start?: () => void;
 }
 
-export interface AlbumActionCatalogPort {
-  getSnapshot(coreId: string): CatalogSnapshot | null;
-}
-
 export interface AlbumActionZonePort {
   getZone(zoneId: string): Zone | undefined;
+}
+
+export interface AlbumActionPageAuthority {
+  readonly pageId: string;
+  readonly versionId: string;
+  readonly coreId: string;
+  readonly socketId: string;
+  readonly tabId: string;
+  readonly generation: number;
+  readonly albumSignature: string;
+  readonly retainedItemKey: string;
+  readonly source: Readonly<AlbumActionVersionSource>;
+}
+
+export interface AlbumActionPagePort {
+  claimSelectedVersionAction(
+    origin: AlbumActionOrigin,
+    input: {
+      readonly pageId: string;
+      readonly versionId: string;
+      readonly tabId: string;
+      readonly generation: number;
+    }
+  ): Readonly<AlbumActionPageAuthority> | null;
+  isSelectedVersionActionCurrent(
+    authority: Readonly<AlbumActionPageAuthority>
+  ): boolean;
 }
 
 export interface AlbumActionCoordinatorPort {
@@ -129,6 +151,7 @@ interface AlbumActionOperation {
   readonly topologyFingerprint: string;
   readonly access: ActionSessionAccess;
   readonly sink: AlbumActionEventSink;
+  readonly pageAuthority: Readonly<AlbumActionPageAuthority>;
   phase: OperationPhase;
   timer?: Timer;
   started: boolean;
@@ -137,7 +160,6 @@ interface AlbumActionOperation {
   executeIssued: boolean;
   coreInvalidated: boolean;
   choosingDeadlineAt?: number;
-  albumSignature?: string;
   actions: ActionBinding[];
 }
 
@@ -153,7 +175,7 @@ class AlbumActionPhaseError extends Error {
 }
 
 /**
- * Owns the server-side two-phase Timeline album-action state machine.
+ * Owns the server-side two-phase album-action state machine.
  * Raw Roon keys stay only in ActionBinding and are invalidated at every
  * terminal transition; clients receive opaque one-use action IDs instead.
  */
@@ -172,7 +194,7 @@ export class AlbumActionService {
 
   public constructor(
     private readonly coordinator: AlbumActionCoordinatorPort,
-    private readonly catalog: AlbumActionCatalogPort,
+    private readonly pages: AlbumActionPagePort,
     private readonly zones: AlbumActionZonePort,
     private readonly resolver: AlbumActionResolverPort,
     private readonly logger: Logger,
@@ -216,6 +238,18 @@ export class AlbumActionService {
     if (!topologyFingerprint) {
       return this.beginRejected("ZONE_NOT_FOUND", "The target zone is unavailable");
     }
+    const pageAuthority = this.pages.claimSelectedVersionAction(origin, {
+      pageId: request.pageId,
+      versionId: request.versionId,
+      tabId: request.tabId,
+      generation: request.generation,
+    });
+    if (!pageAuthority) {
+      return this.beginRejected(
+        "SESSION_LOST",
+        "The selected album version is no longer current"
+      );
+    }
 
     let operationId: string;
     try {
@@ -243,7 +277,7 @@ export class AlbumActionService {
         ? this.beginRejected("BACKPRESSURE", "Album action capacity is full")
         : this.beginRejected(
             "INVALID_REQUEST",
-            "The Timeline session cannot own this album action"
+            "The browse session cannot own this album action"
           );
     }
 
@@ -261,6 +295,7 @@ export class AlbumActionService {
         handle,
       }),
       sink,
+      pageAuthority,
       phase: "resolving",
       started: false,
       resolutionInFlight: false,
@@ -330,6 +365,13 @@ export class AlbumActionService {
       this.expireChoosing(operation);
       return { success: true, data: { claimed: false } };
     }
+    if (!this.pages.isSelectedVersionActionCurrent(operation.pageAuthority)) {
+      this.close(operation, false);
+      return this.executeRejected(
+        "ALBUM_UNRESOLVED",
+        "The selected album version is no longer current"
+      );
+    }
 
     let coordinatorClaimed = false;
     try {
@@ -380,22 +422,13 @@ export class AlbumActionService {
         "The target zone grouping changed"
       );
     }
-    const currentAlbum = this.currentResolvedAlbum(
-      operation.origin.coreId,
-      operation.request.albumLocalId
-    );
-    if (
-      !currentAlbum ||
-      !operation.albumSignature ||
-      this.albumAuthoritySignature(currentAlbum) !== operation.albumSignature
-    ) {
+    if (!this.pages.isSelectedVersionActionCurrent(operation.pageAuthority)) {
       this.close(operation, false);
       return this.executeRejected(
         "ALBUM_UNRESOLVED",
-        "The album identity is no longer resolved"
+        "The selected album version changed before execution"
       );
     }
-
     try {
       await this.coordinator.executeAction(
         operation.access,
@@ -501,25 +534,14 @@ export class AlbumActionService {
 
   private async resolveOperation(operation: AlbumActionOperation): Promise<void> {
     try {
-      const album = this.currentResolvedAlbum(
-        operation.origin.coreId,
-        operation.request.albumLocalId
-      );
-      if (!album) {
-        throw new AlbumActionResolutionError(
-          "ALBUM_NOT_FOUND",
-          "The album is not currently resolved"
-        );
-      }
-      operation.albumSignature = this.albumAuthoritySignature(album);
       this.assertResolutionAuthority(operation);
       operation.resolutionInFlight = true;
       const resolved = await this.coordinator.runAction(
         operation.access,
         (session) =>
-          this.resolver.resolve(
+          this.resolver.resolveSelectedVersion(
             this.guardedResolutionSession(operation, session),
-            album,
+            operation.pageAuthority.source,
             operation.request.zoneId,
             operation.request.track
           )
@@ -739,22 +761,6 @@ export class AlbumActionService {
     }
   }
 
-  private currentResolvedAlbum(coreId: string, localId: string): AlbumRef | null {
-    const snapshot = this.catalog.getSnapshot(coreId);
-    if (!snapshot || snapshot.coreId !== coreId) return null;
-    const matches = snapshot.albums.filter(
-      (album) => album.localId === localId && album.coreId === coreId
-    );
-    if (
-      matches.length !== 1 ||
-      matches[0].resolutionStatus !== "resolved" ||
-      !matches[0].trackTitleFingerprint
-    ) {
-      return null;
-    }
-    return matches[0];
-  }
-
   private guardedResolutionSession(
     operation: AlbumActionOperation,
     session: CoordinatedBrowseSession
@@ -797,35 +803,12 @@ export class AlbumActionService {
         "The target zone grouping changed during album action resolution"
       );
     }
-    const currentAlbum = this.currentResolvedAlbum(
-      operation.origin.coreId,
-      operation.request.albumLocalId
-    );
-    if (
-      !currentAlbum ||
-      !operation.albumSignature ||
-      this.albumAuthoritySignature(currentAlbum) !== operation.albumSignature
-    ) {
+    if (!this.pages.isSelectedVersionActionCurrent(operation.pageAuthority)) {
       throw new AlbumActionPhaseError(
-        "ALBUM_NOT_FOUND",
-        "The album identity changed during action resolution"
+        "SESSION_LOST",
+        "The selected album version changed during action resolution"
       );
     }
-  }
-
-  private albumAuthoritySignature(album: Readonly<AlbumRef>): string {
-    return JSON.stringify([
-      album.coreId,
-      album.localId,
-      album.artistLocalId ?? "",
-      album.exactTitle,
-      album.exactArtist,
-      album.normalizedTitle,
-      album.normalizedArtist,
-      album.editionText,
-      album.trackTitleFingerprint ?? "",
-      album.resolutionStatus,
-    ]);
   }
 
   private zoneTopologyFingerprint(zone: Zone, expectedZoneId: string): string | null {
@@ -969,6 +952,7 @@ export class AlbumActionService {
         message: {
           ALBUM_NOT_FOUND: "The album could not be resolved",
           ALBUM_AMBIGUOUS: "The album edition is ambiguous",
+          ALBUM_CHANGED: "The selected album version changed",
           TRACK_NOT_FOUND: "The selected track no longer exists on the album",
           TRACK_MISMATCH: "The selected track no longer matches the album",
           ACTION_PATH_NOT_FOUND: "No exact album action path was found",
@@ -983,7 +967,12 @@ export class AlbumActionService {
   }
 
   private beginRejected(
-    code: "INVALID_REQUEST" | "ZONE_NOT_FOUND" | "BACKPRESSURE" | "REQUEST_ID_CONFLICT",
+    code:
+      | "INVALID_REQUEST"
+      | "ZONE_NOT_FOUND"
+      | "BACKPRESSURE"
+      | "REQUEST_ID_CONFLICT"
+      | "SESSION_LOST",
     error: string
   ): AlbumActionBeginReservation {
     return Object.freeze({ ack: Object.freeze({ success: false, code, error }) });

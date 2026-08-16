@@ -4,8 +4,6 @@ import type {
 } from '$lib/libraryPageState';
 import type { LibraryView } from '$lib/stores/libraryViewStore';
 
-export type ClassicTruncationHistoryPolicy = 'replace' | 'preserve';
-
 export interface CommittedLibraryModeActivation {
 	readonly cause: LibraryViewActivationCause;
 	readonly pageState: LibraryPageState;
@@ -19,7 +17,6 @@ export interface LibraryModeLifecycle {
 }
 
 export interface LibraryModeActivationContext {
-	classicTruncationHistoryPolicy(): ClassicTruncationHistoryPolicy;
 	/** The activation that actually committed the currently mounted mode. */
 	committedActivation?(): CommittedLibraryModeActivation | null;
 	/**

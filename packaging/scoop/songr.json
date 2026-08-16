@@ -1,0 +1,37 @@
+{
+  "version": "@VERSION@",
+  "description": "Multi platform controller for your Roon Core. Linux, macOS, Windows, or browser, your library is at your fingertips.",
+  "homepage": "https://github.com/roethlar/songr",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/roethlar/songr/releases/download/v@VERSION@/Songr.Setup.@VERSION@.exe#/dl.7z",
+      "hash": "@SHA256_EXE_X64@"
+    }
+  },
+  "pre_install": [
+    "Expand-7zipArchive \"$dir\\`$PLUGINSDIR\\app-64.7z\" \"$dir\" -Removal",
+    "Remove-Item \"$dir\\`$PLUGINSDIR\" -Recurse -Force -ErrorAction SilentlyContinue",
+    "Remove-Item \"$dir\\Uninstall Songr.exe\" -Force -ErrorAction SilentlyContinue"
+  ],
+  "bin": "Songr.exe",
+  "shortcuts": [
+    [
+      "Songr.exe",
+      "Songr"
+    ]
+  ],
+  "checkver": {
+    "github": "https://github.com/roethlar/songr"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/roethlar/songr/releases/download/v$version/Songr.Setup.$version.exe#/dl.7z"
+      }
+    },
+    "hash": {
+      "url": "https://github.com/roethlar/songr/releases/download/v$version/SHA256SUMS"
+    }
+  }
+}

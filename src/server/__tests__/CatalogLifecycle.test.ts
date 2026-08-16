@@ -37,9 +37,9 @@ describe("CatalogLifecycle", () => {
       }),
       shutdown: jest.fn(),
     };
-    const timelineBrowse = {
+    const libraryAlbums = {
       invalidateCore: jest.fn((coreId: string) => {
-        order.push(`timeline:${coreId}`);
+        order.push(`albums:${coreId}`);
       }),
       shutdown: jest.fn(),
     };
@@ -48,7 +48,7 @@ describe("CatalogLifecycle", () => {
       coordinator,
       logger,
       albumActions,
-      timelineBrowse
+      libraryAlbums
     );
 
     lifecycle.corePaired("core-a");
@@ -68,17 +68,17 @@ describe("CatalogLifecycle", () => {
       ["core-a"],
       ["core-b"],
     ]);
-    expect(timelineBrowse.invalidateCore.mock.calls).toEqual([
+    expect(libraryAlbums.invalidateCore.mock.calls).toEqual([
       ["core-a"],
       ["core-b"],
     ]);
     expect(order).toEqual([
-      "timeline:core-a",
       "actions:core-a",
+      "albums:core-a",
       "catalog:core-a",
       "coordinator:core-a",
-      "timeline:core-b",
       "actions:core-b",
+      "albums:core-b",
       "catalog:core-b",
       "coordinator:core-b",
     ]);
@@ -125,9 +125,9 @@ describe("CatalogLifecycle", () => {
       invalidateCore: jest.fn(),
       shutdown: jest.fn(() => order.push("actions")),
     };
-    const timelineBrowse = {
+    const libraryAlbums = {
       invalidateCore: jest.fn(),
-      shutdown: jest.fn(() => order.push("timeline")),
+      shutdown: jest.fn(() => order.push("albums")),
     };
     // The extended library features refresh their own snapshot on a schedule.
     // Shutting the catalog down has to stop it, or a timer keeps pulling
@@ -140,8 +140,7 @@ describe("CatalogLifecycle", () => {
       coordinator,
       logger,
       albumActions,
-      timelineBrowse,
-      undefined,
+      libraryAlbums,
       scheduledRefresh
     );
 
@@ -153,14 +152,14 @@ describe("CatalogLifecycle", () => {
 
     expect(coordinator.shutdown).toHaveBeenCalledTimes(1);
     expect(albumActions.shutdown).toHaveBeenCalledTimes(1);
-    expect(timelineBrowse.shutdown).toHaveBeenCalledTimes(1);
+    expect(libraryAlbums.shutdown).toHaveBeenCalledTimes(1);
     expect(scheduledRefresh.stopScheduledRefresh).toHaveBeenCalledTimes(1);
     // Stopping what would START new catalog work comes before tearing down the
     // services that work runs through.
     expect(order).toEqual([
       "scheduled-refresh",
-      "timeline",
       "actions",
+      "albums",
       "coordinator",
     ]);
     expect(service.start).toHaveBeenCalledTimes(1);
@@ -185,7 +184,6 @@ describe("CatalogLifecycle", () => {
       service,
       coordinator,
       logger,
-      undefined,
       undefined,
       undefined,
       scheduledRefresh

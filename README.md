@@ -47,12 +47,10 @@ per-scope sorting, a Recently played scope, and a Surprise me shuffle. Album
 sheets show full track listings with artwork. Density control switches between
 Compact and Normal, plus a layout tuned for a Raspberry Pi touchscreen.
 
-Two library views ship, and you can switch between them any time from the
-settings menu in the top bar. **Library** is the default: it browses a catalog
-Songr indexes from your Core, which is what makes the jump rails, sorting and
-counts possible. **Classic** browses your Core live, folder by folder, the way
-Roon's own browser does — it needs no index, so it is useful immediately and
-useful if you prefer walking the hierarchy.
+The Library combines catalog-backed scopes with a **Browse** scope that walks
+your Core live, folder by folder. The catalog powers jump rails, sorting, and
+counts; Browse needs no index, so it is available immediately and remains the
+direct way to walk Roon's hierarchy.
 
 **Search.** An instant palette — start typing anywhere — with drill-down into
 results. Search runs in an isolated browse session, so exploring a result never
@@ -67,8 +65,9 @@ zone — always in the desktop app, and in Chromium-family browsers too.
 **Queue.** Per-zone queue with artwork, play-from-here, shuffle, loop, and auto
 radio.
 
-**Presentation.** Light and dark themes with a persisted preference, and artwork
-cached to disk so browsing a large library stays quick.
+**Presentation.** A fixed OLED-black and gold interface with Compact, Normal,
+and Pi density controls, plus artwork cached to disk so browsing a large
+library stays quick.
 
 ## Desktop app
 
@@ -194,8 +193,8 @@ scales with library size: seconds for a small collection, a few minutes for
 tens of thousands of albums.
 
 Nothing is missing or misconfigured while that notice is up, and there is no
-setting to change. If you would rather not wait, switch to the Classic view
-from the settings menu — it browses your Core live and is usable immediately.
+setting to change. If you would rather not wait, open **Browse** in the Library
+bar — it reads your Core's hierarchy live and is usable immediately.
 
 ## Configuration
 
@@ -293,5 +292,4 @@ Songr is free and open source. If it is useful to you, you can support it on
 Songr is an independent project and is not affiliated with, endorsed by, or
 sponsored by Roon Labs LLC. "Roon" is a trademark of Roon Labs LLC, used here
 only to describe what this software interoperates with.
-
 

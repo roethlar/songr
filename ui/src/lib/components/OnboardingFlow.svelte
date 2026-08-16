@@ -169,13 +169,19 @@
 		background: #000;
 	}
 
+	/* Self-contained palette, no theme tokens. This surface renders before
+	   any theme preference exists, on a hardcoded black scrim; inheriting
+	   the theme's text token painted near-black text on black whenever the
+	   OS was in light mode (the theme initializer follows
+	   prefers-color-scheme), which made the first-run pairing screen
+	   unreadable. Guarded by OnboardingFlow.test.ts. */
 	.onboarding-panel {
 		width: min(560px, 100%);
 		padding: 2rem;
-		border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+		border: 1px solid rgba(255, 255, 255, 0.14);
 		border-radius: 16px;
-		background: var(--surface-1, #0a0a0a);
-		color: var(--text, #f2f2f2);
+		background: #0a0a0a;
+		color: #f2f2f2;
 	}
 
 	.eyebrow {
@@ -200,7 +206,7 @@
 	.status {
 		margin-top: 1rem;
 		padding: 0.7rem 0.85rem;
-		border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+		border: 1px solid rgba(255, 255, 255, 0.12);
 		border-radius: 10px;
 		background: rgba(255, 255, 255, 0.04);
 		font-size: 0.87rem;
@@ -224,14 +230,14 @@
 
 	.primary {
 		border: 1px solid transparent;
-		background: var(--accent, #c8a24a);
+		background: #c8a24a;
 		color: #101010;
 		font-weight: 600;
 		text-decoration: none;
 	}
 
 	.secondary {
-		border: 1px solid var(--border, rgba(255, 255, 255, 0.2));
+		border: 1px solid rgba(255, 255, 255, 0.2);
 		background: transparent;
 		color: inherit;
 	}

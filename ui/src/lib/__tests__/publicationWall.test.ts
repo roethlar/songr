@@ -29,10 +29,35 @@ const UI_SRC = path.resolve(here, '..', '..');
 /** repo root */
 const REPO_ROOT = path.resolve(UI_SRC, '..', '..');
 
-/** The walled roots on this side, as absolute paths. */
+/**
+ * Walled ROUTE roots are discovered by their `.walled-root` marker rather
+ * than named here: naming one would put a private route path into this
+ * published file (ms2-7). A public export carries neither the routes nor
+ * the markers, so discovery honestly yields nothing there.
+ */
+function discoverMarkedRouteRoots(): string[] {
+	const routesDirectory = path.join(UI_SRC, 'routes');
+	return readdirSync(routesDirectory)
+		.map((entry) => path.join(routesDirectory, entry))
+		.filter(
+			(candidate) =>
+				statSync(candidate).isDirectory() &&
+				(() => {
+					try {
+						return statSync(path.join(candidate, '.walled-root')).isFile();
+					} catch {
+						return false;
+					}
+				})()
+		);
+}
+
+/** The walled roots on this side, as absolute paths. Kept in step with the
+ * scanner config's walled-roots group (pinned in inventoryData.test.ts). */
 const WALLED_UI_ROOTS = [
 	path.join(UI_SRC, 'lib', 'native'),
-	path.join(UI_SRC, 'routes', 'library', 'native')
+	path.join(UI_SRC, 'routes', 'library', 'native'),
+	...discoverMarkedRouteRoots()
 ];
 
 /** The walled root inside the shared tree, reached from here via `@shared/*`. */
