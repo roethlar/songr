@@ -1,0 +1,147 @@
+# Publishes the package-manager manifests for an existing release tag.
+#
+# This is the same job as release.yml's publish-packages, made runnable on
+# its own: the v1.1.4 run died at job setup (an action ref pinned to a major
+# tag the action does not publish), after the assets had already shipped.
+# Re-cutting a release to re-run publishing is wrong; dispatching this is
+# right. Keep the two copies of the job in step when either changes.
+name: publish-packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v1.1.4)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish-packages:
+    name: publish to package managers
+    if: github.repository == 'roethlar/songr'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Publish SHA256SUMS and render the manifests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo=roethlar/songr
+          tag="${{ inputs.tag }}"
+          version="${tag#v}"
+          # Checksums come from the release API's own server-computed digests,
+          # so nothing is downloaded and nothing is hashed twice. SHA256SUMS
+          # itself is excluded so re-running cannot fold it into its own list.
+          gh release view "$tag" --repo "$repo" --json assets \
+            --jq '.assets[] | select(.name != "SHA256SUMS") | "\(.digest | sub("sha256:";""))  \(.name)"' \
+            | sort -k2 > SHA256SUMS
+          test -s SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$tag" SHA256SUMS --repo "$repo" --clobber
+          date=$(gh release view "$tag" --repo "$repo" --json publishedAt --jq '.publishedAt[0:10]')
+          node packaging/render.mjs --version "$version" --sums SHA256SUMS --date "$date" --out rendered
+          {
+            echo "SONGR_VERSION=$version"
+            echo "SONGR_TAG=$tag"
+          } >> "$GITHUB_ENV"
+      - name: Detect which publishing credentials exist
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          SCOOP_BUCKET_DEPLOY_KEY: ${{ secrets.SCOOP_BUCKET_DEPLOY_KEY }}
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for name in HOMEBREW_TAP_DEPLOY_KEY SCOOP_BUCKET_DEPLOY_KEY WINGET_TOKEN AUR_SSH_PRIVATE_KEY NPM_TOKEN; do
+            if [ -n "$(printenv "$name")" ]; then
+              echo "HAVE_${name}=true" >> "$GITHUB_ENV"
+            else
+              echo "::notice title=Skipping a package manager::$name is not set"
+            fi
+          done
+      - name: Detect which manifests actually rendered
+        # render.mjs renders each target independently and skips one held back
+        # by an unresolved placeholder without failing the other targets. A
+        # skipped target has no output directory, so this is checked before
+        # spending a credential trying to publish it.
+        run: |
+          set -euo pipefail
+          [ -d rendered/homebrew ] && echo "HAVE_RENDERED_HOMEBREW=true" >> "$GITHUB_ENV"
+          [ -d rendered/scoop ] && echo "HAVE_RENDERED_SCOOP=true" >> "$GITHUB_ENV"
+          if [ -f rendered/aur/PKGBUILD ]; then
+            echo "HAVE_RENDERED_AUR=true" >> "$GITHUB_ENV"
+          else
+            echo "::notice title=Skipping AUR::the PKGBUILD template did not render, see the render step's log"
+          fi
+      - name: Push the Homebrew cask
+        if: env.HAVE_HOMEBREW_TAP_DEPLOY_KEY == 'true' && env.HAVE_RENDERED_HOMEBREW == 'true'
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          ./packaging/push-repo.sh \
+            --key "$DEPLOY_KEY" \
+            --repo git@github.com:roethlar/homebrew-tap.git \
+            --from rendered/homebrew \
+            --message "songr ${SONGR_VERSION}"
+      - name: Push the Scoop manifest
+        if: env.HAVE_SCOOP_BUCKET_DEPLOY_KEY == 'true' && env.HAVE_RENDERED_SCOOP == 'true'
+        env:
+          DEPLOY_KEY: ${{ secrets.SCOOP_BUCKET_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          ./packaging/push-repo.sh \
+            --key "$DEPLOY_KEY" \
+            --repo git@github.com:roethlar/scoop-bucket.git \
+            --from rendered/scoop \
+            --message "songr: update to ${SONGR_VERSION}"
+      - name: Submit to WinGet
+        if: env.HAVE_WINGET_TOKEN == 'true'
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: roethlar.Songr
+          version: ${{ env.SONGR_VERSION }}
+          release-tag: ${{ env.SONGR_TAG }}
+          installers-regex: '^Songr\.Setup\..*\.exe$'
+          token: ${{ secrets.WINGET_TOKEN }}
+      - name: Publish to the AUR
+        if: env.HAVE_AUR_SSH_PRIVATE_KEY == 'true' && env.HAVE_RENDERED_AUR == 'true'
+        uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
+        with:
+          pkgname: songr-bin
+          pkgbuild: rendered/aur/PKGBUILD
+          commit_username: Songr Release
+          commit_email: release@songr.invalid
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: songr-bin ${{ env.SONGR_VERSION }}
+          updpkgsums: false
+      - name: Publish songr-server to npm
+        # Unlike the other four targets, this one needs the actual built
+        # payload inside the published tarball, not a manifest pointing at a
+        # URL -- downloaded from THIS release's own songr-server asset
+        # (produced by the linux job's --server-tar) rather than rebuilt, so
+        # this job publishes exactly what was already tested and released.
+        # See packaging/npm-server/README.md for why bundledDependencies is
+        # required here (node-roon-api and friends are not on the public npm
+        # registry) and what was proven about it empirically.
+        if: env.HAVE_NPM_TOKEN == 'true'
+        run: |
+          set -euo pipefail
+          gh release download "$SONGR_TAG" --repo roethlar/songr \
+            --pattern "songr-server-*.tar.gz" --output songr-server.tar.gz
+          mkdir -p server-payload
+          tar -xzf songr-server.tar.gz -C server-payload --strip-components=1
+          npm config set //registry.npmjs.org/:_authToken="${NPM_TOKEN}"
+          node packaging/npm-server/patch-and-publish.mjs --dir "$(pwd)/server-payload"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

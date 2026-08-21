@@ -425,7 +425,7 @@ jobs:
 
       - name: Publish to the AUR
         if: env.HAVE_AUR_SSH_PRIVATE_KEY == 'true' && env.HAVE_RENDERED_AUR == 'true'
-        uses: KSXGitHub/github-actions-deploy-aur@v4
+        uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
         with:
           pkgname: songr-bin
           pkgbuild: rendered/aur/PKGBUILD
