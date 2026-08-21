@@ -19,6 +19,16 @@ appId: app.songr.desktop
 productName: Songr
 copyright: Songr contributors
 
+# The public runtime identity, written into the packaged app's own
+# package.json. This is the half the pulled v1.1.4 build lacked: productName
+# above names the bundle and artifacts, but Electron derives userData — and
+# the single-instance lock — from this manifest. The private tree's build
+# overrides both values on the command line (see `builderIdentityArgs` in
+# `src/packaging.ts`), exactly like the appId/productName literals above.
+extraMetadata:
+  name: songr
+  productName: Songr
+
 directories:
   output: release/artifacts
 

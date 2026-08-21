@@ -2,6 +2,7 @@ import path from 'path';
 
 import {
   appIdForTree,
+  builderIdentityArgs,
   ENGINE_LAYOUT,
   ENGINE_RESOURCE_DIR,
   engineUiBuildPath,
@@ -11,6 +12,7 @@ import {
   PRODUCT_NAME,
   productNameForTree,
   PUBLIC_APP_ID,
+  runtimeNameForTree,
 } from '../packaging';
 
 const MAC_RESOURCES = '/Applications/Songr.app/Contents/Resources';
@@ -76,12 +78,74 @@ describe('application identity', () => {
 });
 
 describe('product name per tree (dt7-1)', () => {
-  it('splits the name with the id, so the builds do not share userData', () => {
-    // Electron derives userData - and the single-instance lock - from the
-    // product name; two builds named "Songr" could not run side by side.
+  it('splits the name with the id, so the installed apps are distinct', () => {
+    // The bundle name alone does NOT split userData — that is the runtime
+    // identity's job, asserted in the v1.1.4-collision describes below.
     expect(productNameForTree(false)).toBe(PRODUCT_NAME);
     expect(productNameForTree(true)).not.toBe(productNameForTree(false));
     expect(productNameForTree(true)).toContain(PRODUCT_NAME);
+  });
+});
+
+describe('runtime identity per tree (v1.1.4 collision)', () => {
+  it('splits the packaged-manifest identity, which is what Electron keys on', () => {
+    // Electron derives userData — and the single-instance lock inside it —
+    // from the packaged app's own package.json (productName first, then
+    // name). Both halves have to split, or the two builds share settings,
+    // engine CONFIG_DIR/DATA_DIR and the lock, which is exactly how the
+    // pulled v1.1.4 public build focused the private app's window.
+    expect(runtimeNameForTree(false)).toBe('songr');
+    expect(runtimeNameForTree(true)).toBe('songr-private');
+    expect(builderIdentityArgs(false)).toEqual([
+      `--config.appId=${PUBLIC_APP_ID}`,
+      `--config.productName=${PRODUCT_NAME}`,
+      `--config.extraMetadata.name=songr`,
+      `--config.extraMetadata.productName=${PRODUCT_NAME}`,
+    ]);
+    expect(builderIdentityArgs(true)).toEqual([
+      `--config.appId=${PUBLIC_APP_ID}${PRIVATE_APP_ID_SUFFIX}`,
+      `--config.productName=${PRODUCT_NAME} Private`,
+      `--config.extraMetadata.name=songr-private`,
+      `--config.extraMetadata.productName=${PRODUCT_NAME} Private`,
+    ]);
+  });
+
+  it('splits on every identity channel Electron or electron-builder reads', () => {
+    // A regression that dropped any one of these (e.g. back to bundle-only)
+    // has to fail loudly: the trees must differ on all four arguments.
+    const publicArgs = builderIdentityArgs(false);
+    const privateArgs = builderIdentityArgs(true);
+    expect(publicArgs).toHaveLength(4);
+    expect(privateArgs).toHaveLength(4);
+    for (let i = 0; i < publicArgs.length; i += 1) {
+      expect(privateArgs[i]).not.toBe(publicArgs[i]);
+    }
+  });
+});
+
+describe('runtime identity wiring (v1.1.4 collision)', () => {
+  /*
+   * The pulled v1.1.4 release proved that `--config.productName` alone does
+   * not split the two builds: it names the bundle and artifacts, but Electron
+   * derives userData and the single-instance lock from the app package.json
+   * inside the bundle, which only extraMetadata rewrites. Both 1.1.4 builds
+   * carried `name: "roon-controller-desktop"` there, so the public app shared
+   * userData — and the lock — with Songr Private.
+   */
+  it('passes the per-tree runtime identity from the shared module', () => {
+    // Same source-text discipline as the dt7-2 guard below: the identity
+    // function in src/packaging.ts is load-bearing only if the script
+    // actually consumes it.
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const script = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'scripts', 'package-app.mjs'),
+      'utf8',
+    );
+    expect(script).toContain('builderIdentityArgs(privateTree)');
+    // The identity args must not be assembled a second way inline.
+    expect(script).not.toMatch(/--config\.appId=\$\{/);
+    expect(script).not.toMatch(/--config\.productName=\$\{/);
   });
 });
 

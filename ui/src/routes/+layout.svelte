@@ -22,7 +22,9 @@
 	import { zonesStore, zoneMapStore } from '$lib/stores/zonesStore';
 	import { interpolatedSeekStore } from '$lib/stores/interpolatedSeekStore';
 	import { registerSocketHandlers } from '$lib/socket/register';
+	import { startDocumentTitleBinding } from '$lib/media/documentTitle';
 	import { startMediaSessionBinding } from '$lib/media/mediaSessionBinding';
+	import { startSpacebarPlayPause } from '$lib/media/spacebarPlayPause';
 	import { getSocket } from '$lib/socket/client';
 	import { emitWithAck } from '$lib/socket/emit';
 	import { splitArtists } from '$lib/artistList';
@@ -98,9 +100,17 @@
 		// hardware media keys back through the same transport commands the
 		// on-screen buttons send. No-op where the platform has no media session.
 		const stopMediaSession = startMediaSessionBinding();
+		// One Space listener for the whole app, down the same play/pause
+		// command as the on-screen button. Guards live in the module.
+		const stopSpacebar = startSpacebarPlayPause();
+		// Now playing in the browser tab, restored to the default title
+		// whenever nothing is playing.
+		const stopDocumentTitle = startDocumentTitleBinding();
 		void initializeStores(fetch);
 
 		return () => {
+			stopDocumentTitle();
+			stopSpacebar();
 			stopMediaSession();
 			cleanupSocket();
 			clearCommandFeedback();

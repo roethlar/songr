@@ -89,10 +89,12 @@ try {
 }
 const {
   appIdForTree,
+  builderIdentityArgs,
   ENGINE_LAYOUT,
   ENGINE_RESOURCE_DIR,
   engineUiBuildPath,
   productNameForTree,
+  runtimeNameForTree,
 } = packaging;
 
 /** The payload itself, under the name it will carry inside the app's resources. */
@@ -376,12 +378,18 @@ function verifyStaging() {
 
 function packageApp(options) {
   const privateTree = fs.existsSync(path.join(REPO_ROOT, PRIVATE_TREE_MARKER));
-  const appId = appIdForTree(privateTree);
-  // The name splits with the id (dt7-1): Electron derives userData — and the
-  // macOS single-instance lock — from the product name, so two builds sharing
-  // "Songr" would share settings and could not run side by side.
-  const productName = productNameForTree(privateTree);
-  log(`${privateTree ? 'private' : 'public'} tree: building ${productName} as ${appId}`);
+  // Identity splits per tree on BOTH levels (dt7-1 + the v1.1.4 collision):
+  // the bundle level (appId/productName) keeps the installed apps distinct,
+  // and the runtime level (extraMetadata name/productName, packed into the
+  // app's own package.json) is what Electron derives userData — and the
+  // single-instance lock — from. The pulled v1.1.4 build had only the first
+  // half and shared userData with the private build. `builderIdentityArgs`
+  // carries both halves; do not reassemble them inline.
+  log(
+    `${privateTree ? 'private' : 'public'} tree: building ` +
+      `${productNameForTree(privateTree)} as ${appIdForTree(privateTree)} ` +
+      `(runtime name ${runtimeNameForTree(privateTree)})`,
+  );
 
   // The package's own JS entry, run under process.execPath — never the
   // node_modules/.bin shim, whose Windows form is a `.cmd` execFileSync
@@ -394,8 +402,7 @@ function packageApp(options) {
   const args = [
     '--config',
     'electron-builder.yml',
-    `--config.appId=${appId}`,
-    `--config.productName=${productName}`,
+    ...builderIdentityArgs(privateTree),
     '--publish',
     'never',
     ...options.platforms,

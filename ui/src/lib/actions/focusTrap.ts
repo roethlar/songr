@@ -16,6 +16,18 @@
  */
 const MODAL_SURFACE_SELECTOR = '[aria-modal="true"], dialog[open]';
 
+/**
+ * Whether any trapped surface (modal or menu) is currently mounted.
+ *
+ * The same selector the trap itself uses, so the two can never disagree about
+ * what counts as trapped. Global keyboard shortcuts ask this before acting:
+ * while a dialog owns the keyboard, an app-wide key must stay out of its way.
+ */
+export function hasOpenModalSurface(): boolean {
+	if (typeof document === 'undefined') return false;
+	return document.querySelector(MODAL_SURFACE_SELECTOR) !== null;
+}
+
 export function isTopModalOwner(node: HTMLElement): boolean {
 	const owner = node.matches(MODAL_SURFACE_SELECTOR)
 		? node

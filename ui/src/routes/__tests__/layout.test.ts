@@ -25,6 +25,14 @@ vi.mock('$lib/socket/register', () => ({ registerSocketHandlers: vi.fn(() => vi.
 vi.mock('$lib/media/mediaSessionBinding', () => ({
 	startMediaSessionBinding: vi.fn(() => vi.fn())
 }));
+const { stopSpacebarMock } = vi.hoisted(() => ({ stopSpacebarMock: vi.fn() }));
+vi.mock('$lib/media/spacebarPlayPause', () => ({
+	startSpacebarPlayPause: vi.fn(() => stopSpacebarMock)
+}));
+const { stopDocumentTitleMock } = vi.hoisted(() => ({ stopDocumentTitleMock: vi.fn() }));
+vi.mock('$lib/media/documentTitle', () => ({
+	startDocumentTitleBinding: vi.fn(() => stopDocumentTitleMock)
+}));
 vi.mock('$lib/socket/emit', () => ({
 	emitWithAck: vi.fn().mockResolvedValue({ success: true })
 }));
@@ -34,6 +42,8 @@ vi.mock('$lib/stores', async (importOriginal) => {
 });
 
 import Layout from '../+layout.svelte';
+import { startDocumentTitleBinding } from '$lib/media/documentTitle';
+import { startSpacebarPlayPause } from '$lib/media/spacebarPlayPause';
 import { emitWithAck } from '$lib/socket/emit';
 import { setCoreStatus } from '$lib/stores/coreStore';
 import { clearCommandFeedback } from '$lib/stores/commandFeedbackStore';
@@ -102,6 +112,10 @@ describe('Unified-only layout', () => {
 		libraryHost = claimLibraryViewHost();
 		libraryHost.publishActiveMode('unified');
 		gotoMock.mockReset();
+		vi.mocked(startSpacebarPlayPause).mockClear();
+		stopSpacebarMock.mockClear();
+		vi.mocked(startDocumentTitleBinding).mockClear();
+		stopDocumentTitleMock.mockClear();
 		fakeSocket.connected = true;
 		fakeSocket.emit.mockReset();
 		vi.mocked(emitWithAck).mockReset();
@@ -126,6 +140,30 @@ describe('Unified-only layout', () => {
 	afterEach(() => {
 		cleanup();
 		libraryHost.release();
+	});
+
+	it('starts one Space play/pause shortcut for the shell and stops it on teardown', async () => {
+		const { unmount } = renderLayout();
+		await tick();
+
+		expect(startSpacebarPlayPause).toHaveBeenCalledTimes(1);
+		expect(stopSpacebarMock).not.toHaveBeenCalled();
+
+		unmount();
+
+		expect(stopSpacebarMock).toHaveBeenCalledTimes(1);
+	});
+
+	it('starts one now-playing tab title for the shell and stops it on teardown', async () => {
+		const { unmount } = renderLayout();
+		await tick();
+
+		expect(startDocumentTitleBinding).toHaveBeenCalledTimes(1);
+		expect(stopDocumentTitleMock).not.toHaveBeenCalled();
+
+		unmount();
+
+		expect(stopDocumentTitleMock).toHaveBeenCalledTimes(1);
 	});
 
 	it('renders only the Unified full-bleed shell and transport', async () => {
