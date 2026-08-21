@@ -447,6 +447,11 @@ jobs:
         if: env.HAVE_NPM_TOKEN == 'true'
         run: |
           set -euo pipefail
+          if [ "$(npm view songr-server@${SONGR_VERSION} version 2>/dev/null)" = "${SONGR_VERSION}" ]; then
+            echo "songr-server ${SONGR_VERSION} is already on npm; nothing to publish"
+            exit 0
+          fi
+
           gh release download "$SONGR_TAG" --repo roethlar/songr \
             --pattern "songr-server-*.tar.gz" --output songr-server.tar.gz
           mkdir -p server-payload
