@@ -201,6 +201,12 @@
 	/** Rail auto-hide rule (owner-binding): under 3 letters or 40 items. */
 	const RAIL_MIN_LETTERS = 3;
 	const RAIL_MIN_ITEMS = 40;
+	/**
+	 * How many frames a scroll restore may wait for the list to come back after
+	 * a rebuild. Bounded so a genuinely shorter list (a filter, a smaller Core)
+	 * settles at its own maximum instead of retrying forever.
+	 */
+	const PANE_SCROLL_RESTORE_FRAMES = 30;
 
 	/**
 	 * Prototype rail: fixed letter order with inactive letters kept dim.
@@ -462,6 +468,13 @@
 	 */
 	let pairingRetryDeferred = $state(false);
 	let pairingRetryGeneration: number | null = null;
+	/**
+	 * Where each scope was left. One pane scrolls every scope, so without this
+	 * a tab switch is indistinguishable from starting over.
+	 */
+	const scopeScrollTops = new Map<UnifiedLibraryScope, number>();
+	/** Supersedes an in-flight `restorePaneScrollTop` retry loop. */
+	let paneScrollRestoreToken = 0;
 	/** Session generation captured when the album sheet opened its read. */
 	let sheetGeneration: number | null = null;
 	let hydrationCoreId: string | null = null;
@@ -885,12 +898,54 @@
 		void loadDrillArtistOverlay(artistLocalId);
 	});
 
+	function setPaneScrollTop(top: number): void {
+		if (!pane) return;
+		// The pane sets `scroll-behavior: smooth`; a restore must be instant or
+		// it animates from wherever the rebuild left it.
+		pane.style.scrollBehavior = 'auto';
+		pane.scrollTop = top;
+		pane.style.removeProperty('scroll-behavior');
+	}
+
+	/**
+	 * Drive the pane to `top`, and keep driving it until the content is
+	 * actually tall enough to get there.
+	 *
+	 * `scrollTop` is clamped to the container's CURRENT `scrollHeight`, and a
+	 * history-pop rebuilds this surface from an empty index (`+page.svelte`
+	 * commits `history-pop` as suspend→resume, which calls `resetIndex()`).
+	 * A single post-`tick()` assignment therefore lands against a nearly empty
+	 * pane and silently collapses to the top — which is exactly what "it
+	 * reloads and I lose my place" looks like. Retrying across frames lets the
+	 * restore land once the list is back, and stops as soon as it does.
+	 */
+	function restorePaneScrollTop(top: number): void {
+		if (top <= 0) {
+			void tick().then(() => setPaneScrollTop(0));
+			return;
+		}
+		paneScrollRestoreToken += 1;
+		const token = paneScrollRestoreToken;
+		let framesLeft = PANE_SCROLL_RESTORE_FRAMES;
+		const attempt = (): void => {
+			// A newer restore, a teardown, or a user scroll supersedes this one.
+			if (token !== paneScrollRestoreToken || !pane) return;
+			setPaneScrollTop(top);
+			framesLeft -= 1;
+			if (pane.scrollTop >= top || framesLeft <= 0) return;
+			requestAnimationFrame(attempt);
+		};
+		void tick().then(attempt);
+	}
+
 	function resetPaneAfterRender(): void {
+		// Token-guarded like a restore, so a restore issued after this one
+		// wins rather than being clobbered by a late zero.
+		paneScrollRestoreToken += 1;
+		const token = paneScrollRestoreToken;
 		void tick().then(() => {
-			if (!pane) return;
-			pane.style.scrollBehavior = 'auto';
-			pane.scrollTop = 0;
-			pane.style.removeProperty('scroll-behavior');
+			if (token !== paneScrollRestoreToken) return;
+			setPaneScrollTop(0);
 		});
 	}
 
@@ -1312,12 +1367,7 @@
 		// park it instead (backFromItem) and the resume applies it, so this
 		// restore must not mask a broken pop path (ri1-4).
 		if (!restoreFocus) return;
-		void tick().then(() => {
-			if (!pane) return;
-			pane.style.scrollBehavior = 'auto';
-			pane.scrollTop = returnScrollTop;
-			pane.style.removeProperty('scroll-behavior');
-		});
+		restorePaneScrollTop(returnScrollTop);
 		void tick().then(() => {
 			if (invoker?.isConnected) {
 				invoker.focus();
@@ -1596,12 +1646,25 @@
 			resetSongRelationship();
 			startPaletteAuthorityRetirement();
 		}
+		// Remember where this scope was before leaving it, so coming back is a
+		// return rather than a restart.
+		//
+		// With an item page open the live pane shows that page, not the list, so
+		// the position worth keeping is the one captured when the user drilled
+		// in. The scope chips also scroll away with the content (they are inside
+		// the pane and not sticky), which means a switch made from the list
+		// itself is necessarily made from the top — honestly nothing to restore.
+		if (collectionDrill === null && !filterText) {
+			const leavingTop = itemTarget !== null ? itemReturnScrollTop : (pane?.scrollTop ?? 0);
+			scopeScrollTops.set(scope, leavingTop);
+		}
+		const restoreTop = scopeScrollTops.get(next) ?? 0;
 		scope = next;
 		railTarget = null;
 		filterText = '';
 		resetDrill();
 		maybeLoadScopeData(next);
-		resetPaneAfterRender();
+		restorePaneScrollTop(restoreTop);
 		if (next === 'browse') {
 			const activeClaim = claim;
 			if (!activeClaim) return;
@@ -2415,12 +2478,10 @@
 		const parkedScroll = pendingPopReturnScrollTop;
 		pendingPopReturnScrollTop = null;
 		if (parkedScroll !== null && restoredItem === null) {
-			void tick().then(() => {
-				if (!pane) return;
-				pane.style.scrollBehavior = 'auto';
-				pane.scrollTop = parkedScroll;
-				pane.style.removeProperty('scroll-behavior');
-			});
+			// This resume follows `resetIndex()`, so the list is rebuilding from
+			// empty underneath us; a one-shot assignment here clamps to a nearly
+			// empty pane and lands at the top.
+			restorePaneScrollTop(parkedScroll);
 		}
 	}
 

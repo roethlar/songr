@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Library scroll restoration fixture</title>
+		<style>
+			/* The surface is `height: 100%` and its pane is a `flex: 1` scroller,
+			   so it only scrolls when the page gives it a bounded height. The real
+			   app shell does this; the fixture must too, or every scroll assertion
+			   passes against a pane that never scrolled. */
+			html,
+			body,
+			#app {
+				height: 100%;
+				margin: 0;
+			}
+		</style>
+	</head>
+	<body>
+		<main id="app"></main>
+		<script type="module" src="./library-scroll.svelte.ts"></script>
+	</body>
+</html>

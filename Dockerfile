@@ -20,6 +20,11 @@ ARG SOURCE_COMMIT=
 ENV PUBLIC_BUILD_REV=${SOURCE_COMMIT}
 WORKDIR /build
 # Frontend has no Roon deps, so no git is needed.
+# The root package.json is required, not incidental: ui/vite.config.ts reads the
+# product version out of it at config-load time to stamp the About panel. Without
+# it here the config throws ENOENT and `npm run build` fails — which is exactly
+# how the v1.1.5 Docker job broke.
+COPY package.json ./
 COPY src/shared/ src/shared/
 COPY ui/ ui/
 WORKDIR /build/ui

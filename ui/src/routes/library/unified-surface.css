@@ -364,7 +364,11 @@
 .unified-surface .u-main {
   flex: 1;
   overflow-y: auto;
-  padding: 18px 26px 40px;
+  /* Named so the sticky scope bar can cancel and re-apply exactly this padding
+     rather than hardcoding a second copy that could drift. */
+  --pane-pad-block: 18px;
+  --pane-pad-inline: 26px;
+  padding: var(--pane-pad-block) var(--pane-pad-inline) 40px;
   scroll-behavior: smooth;
 }
 .unified-surface .u-main::-webkit-scrollbar {
@@ -381,6 +385,18 @@
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+  /* The scope chips live inside the scrolling pane. Left unpinned they scroll
+     away with the list, so switching tabs from a few thousand pixels down means
+     scrolling all the way back up first. Pinned, they stay reachable from
+     anywhere — which is also what makes per-scope scroll memory meaningful.
+     The negative inline margin lets the backdrop span the pane's own padding so
+     rows do not show through beside the chips. */
+  position: sticky;
+  top: calc(var(--pane-pad-block) * -1);
+  z-index: 6;
+  background: var(--bg);
+  margin: calc(var(--pane-pad-block) * -1) calc(var(--pane-pad-inline) * -1) 0;
+  padding: var(--pane-pad-block) var(--pane-pad-inline) 12px;
 }
 .unified-surface .sc {
   display: inline-flex;
@@ -1103,4 +1119,85 @@
 }
 .unified-surface[data-d="pi"] .prow .p1 {
   font-size: 16px;
+}
+
+/* ── Narrow viewports ─────────────────────────────────────────────────────────
+   The surface was built desktop-first and had no breakpoints at all, so on a
+   phone the header ran past the viewport and `.unified-surface`'s
+   `overflow: hidden` clipped it — the controls were not merely cramped, they
+   were unreachable, with no horizontal scroll to get at them.
+
+   Desktop remains the primary target and none of this touches it. These rules
+   only relax fixed chrome minimums and let rows wrap once there is not enough
+   width to hold them. The content grids are already fluid
+   (`repeat(auto-fill, minmax(...))`) and need no help.
+
+   Measured offenders at 390px before this block: `.settingsbtn` reached
+   x=471 and `.aboutbtn` x=547 against a 390px viewport. The pane itself never
+   overflowed. */
+@media (max-width: 720px) {
+  .unified-surface .bar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 14px;
+    /* Respect a notch / rounded corner when installed to a home screen. */
+    padding-left: max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
+  }
+  /* Search takes the second row whole rather than demanding 280px beside
+     everything else. */
+  .unified-surface .findbtn {
+    order: 3;
+    flex: 1 0 100%;
+    min-width: 0;
+  }
+  .unified-surface .aboutbtn {
+    margin-right: 0;
+  }
+  .unified-surface .aboutbtn,
+  .unified-surface .settingsbtn {
+    padding: 6px 10px;
+  }
+  /* The keyboard hint is desktop advice; it is noise on a touch device and it
+     is what pushes the search control past the viewport. */
+  .unified-surface .findbtn .kbd {
+    display: none;
+  }
+  .unified-surface .u-main {
+    --pane-pad-inline: 14px;
+    padding-left: max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
+  }
+  .unified-surface .np {
+    min-width: 0;
+  }
+  .unified-surface .smenu {
+    min-width: 0;
+    width: min(280px, calc(100vw - 28px));
+  }
+  .unified-surface .prow {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+}
+
+/* Phones proper: the A–Z rail costs width the list needs more. */
+@media (max-width: 520px) {
+  .unified-surface .rail {
+    display: none;
+  }
+  .unified-surface .ctx h2 {
+    font-size: 17px;
+  }
+  /* Density picks 2-5 columns for a desktop pane. At phone width even two
+     truncate every name to an ellipsis, which is worse than scrolling. */
+  .unified-surface .alist {
+    --col: 1;
+  }
+}
+
+@media (max-width: 760px) and (min-width: 521px) {
+  .unified-surface .alist {
+    --col: 2;
+  }
 }
