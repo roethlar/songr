@@ -335,6 +335,11 @@ export interface Harness {
 	indexState?: LibraryIndexState;
 	withContext?: boolean;
 	fetchStatus?: () => Promise<ReturnType<typeof syntheticStatus>>;
+	/**
+	 * Pairing readiness. The cold-start retry hangs off this: a load that
+	 * bailed while unpaired is re-driven when this flips to `true`.
+	 */
+	corePairedStore?: Writable<boolean>;
 	loadIndex?: ReturnType<typeof vi.fn>;
 	genresStore?: ReturnType<typeof fakeNamedCountsStore>;
 	composersStore?: ReturnType<typeof fakeNamedCountsStore>;
@@ -383,6 +388,7 @@ export function mountMode(options: Harness = {}) {
 	const fetchStatus = vi.fn(
 		options.fetchStatus ?? (async () => syntheticStatus({ coreId: 'core-a' }))
 	);
+	const corePairedStore = options.corePairedStore ?? writable(true);
 	const prefsStorage = new Map<string, string>();
 	const prefsStore = createUnifiedLibraryPrefsStore({
 		isBrowser: true,
@@ -432,6 +438,7 @@ export function mountMode(options: Harness = {}) {
 	const props = {
 		sessionClient: options.sessionClient ?? session.client,
 		indexStore: indexStore as unknown as IndexStore,
+		corePairedStore: corePairedStore as never,
 		loadIndex: loadIndex as never,
 		resetIndex,
 		prefsStore,
@@ -523,6 +530,7 @@ export function mountMode(options: Harness = {}) {
 		loadIndex,
 		resetIndex,
 		fetchStatus,
+		corePairedStore,
 		prefsStore,
 		genresStore,
 		composersStore,

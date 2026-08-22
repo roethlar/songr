@@ -9,6 +9,20 @@ finish-args:
   - --socket=fallback-x11
   - --socket=wayland
   - --socket=pulseaudio
+  # No D-Bus session access, deliberately: the Flatpak ships WITHOUT a tray
+  # icon. Owner ruling 2026-08-22 — the tray is not a wanted feature.
+  #
+  # Do not "restore" this as a bug. Measured on KDE Plasma 2026-08-21, every
+  # finish-args configuration that produces a working tray is a
+  # flatpak-builder-lint ERROR (an --own-name of either StatusNotifierItem
+  # spelling, or --socket=session-bus), while --talk-name alone lints clean and
+  # registers nothing, because Electron does not fall back to its unique bus
+  # name. Granting nothing keeps the submission lint-clean and needs no Flathub
+  # exception.
+  #
+  # Closing the window hides rather than quits, but nothing is stranded:
+  # relaunching from the desktop entry takes the single-instance path, which
+  # calls focusExistingWindow() -> show() and brings the window back.
 modules:
   - name: songr
     buildsystem: simple

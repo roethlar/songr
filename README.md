@@ -77,18 +77,6 @@ platform from [Releases](https://github.com/roethlar/songr/releases):
 AppImage, deb, or rpm on Linux (x64 and arm64), dmg on macOS (Apple Silicon
 and Intel), or the Windows installer.
 
-Or let a package manager install and update it:
-
-```bash
-# macOS — Homebrew
-brew tap roethlar/tap
-brew install --cask songr
-
-# Windows — Scoop
-scoop bucket add roethlar https://github.com/roethlar/scoop-bucket
-scoop install songr
-```
-
 - The app runs its own copy of the Songr server, privately, on your machine —
   nothing else to install. Closing the window hides it to the tray; the music
   keeps playing.
@@ -112,18 +100,11 @@ shape when several people or devices share one Songr.
 
 ## Install
 
-Three prebuilt options need no source checkout at all:
+Two prebuilt options need no source checkout at all:
 
-**npm.** The compiled server as a global package, for any platform with
+**Prebuilt server.** Each release attaches `songr-server-<version>.tar.gz` —
+the compiled server with its dependencies, one tarball for any platform with
 [Node.js](https://nodejs.org) 22 or newer:
-
-```bash
-npm install -g songr-server
-songr-server
-```
-
-**Prebuilt server.** The same compiled server as a tarball,
-`songr-server-<version>.tar.gz`, attached to each release:
 
 ```bash
 tar xzf songr-server-1.1.4.tar.gz
@@ -131,9 +112,9 @@ cd songr-server-1.1.4
 node dist/index.js
 ```
 
-Either way, pairing state and caches land in `./config` and `./data` beside
-wherever you run it. Registering it as a service is up to you — or use the
-installers below, which do that from a source checkout.
+Pairing state and caches land in `./config` and `./data` beside wherever you
+run it. Registering it as a service is up to you — or use the installers
+below, which do that from a source checkout.
 
 **Docker.** A prebuilt multi-arch image (amd64/arm64) is published with each
 release:

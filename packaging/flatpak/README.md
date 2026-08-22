@@ -66,7 +66,10 @@ changes, rather than assuming any square PNG will do.
 real rendered manifest and the real build output on `gabrielle`
 2026-08-08, not skipped:
 
-- `manifest io.github.roethlar.songr.yml` → clean, zero findings.
+- `manifest io.github.roethlar.songr.yml` → clean, zero findings. Briefly not
+  clean on 2026-08-21, when tray permissions were added; they were removed
+  again on 2026-08-22 and the manifest lints clean. See "No tray icon,
+  deliberately" below.
 - First run flagged `runtime-update-available-to-org.freedesktop.Platform-25.08`
   — fixed by moving off `runtime-version: '24.08'` (present already on
   `gabrielle`) onto `'25.08'`, re-verified clean after installing that
@@ -88,30 +91,33 @@ real rendered manifest and the real build output on `gabrielle`
   CI. Do not "fix" this by trying to pre-host screenshots on
   `dl.flathub.org` — that isn't something a submitter can do.
 
-## App ID
+## No tray icon, deliberately
 
-`io.github.roethlar.songr` — Flathub's `io.github.*` prefix requires at
-least 4 dot-separated components and computes an expected repository URL
-from the ID (`io.github.<user>.<repo>` → `github.com/<user>/<repo>`) that
-must be reachable; `io.github.roethlar.songr` → `github.com/roethlar/songr`,
-an exact match, so no manual ownership-verification exception is needed.
-Manifest filename must equal the app ID exactly (already true here).
+The Flatpak ships without a tray icon. Owner ruling 2026-08-22: the tray is not
+a wanted feature, so the manifest grants no D-Bus session access at all. **Do
+not file this as a bug or "fix" it by adding permissions.**
 
-## Submission is not the same shape as the other four targets
+It is also the only lint-clean option. Measured on KDE Plasma on `gabrielle`
+2026-08-21, every configuration that produces a working tray is a
+`flatpak-builder-lint` error:
 
-Unlike Homebrew/Scoop/WinGet/AUR, there is no "render and push to our own
-release automation on every tag" path here. Flathub's process (per
-`docs.flathub.org`, verified 2026-08-08) is a **one-time PR** against
-`flathub/flathub`'s `new-pr` branch (not `master`); once merged, reviewers
-create a **new, separate repository** under the `flathub` GitHub org that
-owns all future builds, and the submitter gets an invited-collaborator role
-on it. Future version bumps push to *that* repo, not to
-`product/.github/workflows/release.yml` — out of scope for this templating
-until the initial PR is merged and that repo exists.
+| `finish-args` | linter | tray |
+| --- | --- | --- |
+| nothing (what ships) | clean | none |
+| `--talk-name=org.kde.StatusNotifierWatcher` alone | clean | none |
+| `--own-name=org.freedesktop.StatusNotifierItem-2-1` | error | works |
+| `--own-name=org.kde.StatusNotifierItem-2-1` | error | n/a |
+| `--socket=session-bus` | error | works |
 
-## Rendering
+Talk-name alone registers nothing: Electron does not fall back to its unique
+bus name. `org.freedesktop.StatusNotifierItem-2-1` is the name this Electron
+actually owns — verified with `busctl --user list` and by reading the watcher's
+`RegisteredStatusNotifierItems` with the app running. Shipping none of these
+keeps the manifest lint-clean, so the submission needs no Flathub exception.
 
-`render.mjs` substitutes `@VERSION@`, `@RELEASE_DATE@`, and
-`@SHA256_APPIMAGE_X64@` the same way as every other target. The rendered
-output is what actually gets committed to the PR branch — never hand-edit a
-rendered copy.
+Closing the window hides it rather than quitting, and without a tray there is
+no tray menu to bring it back — but nothing is stranded. Relaunching from the
+desktop entry takes Electron's single-instance path, which calls
+`focusExistingWindow()` → `show()`.
+
+The AppImage/deb/rpm/AUR builds are unsandboxed and still create their tray.

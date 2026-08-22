@@ -291,6 +291,62 @@ describe('UnifiedLibraryMode — lifecycle', () => {
 		socket.emit('connect');
 		expect(harness.session.recover).toHaveBeenCalledTimes(1);
 	});
+
+	it('retries the index load when the Core pairs after a cold start', async () => {
+		// The desktop shell opens the window as soon as the engine's HTTP port
+		// is up, which on a cold start can be ~25s before Roon pairing
+		// completes. The mount-time status call loses that race and rejects
+		// with CoreUnpairedError. Before the retry existed the catch swallowed
+		// it, the store never left `idle`, and — because the socket never
+		// dropped, so no reconnect fired — the body showed "Idle." forever.
+		const corePairedStore = writable(false);
+		const harness = mountMode({
+			corePairedStore,
+			fetchStatus: vi.fn(async () => {
+				throw new Error('Roon core not paired');
+			}) as never
+		});
+
+		await waitFor(() => expect(harness.fetchStatus).toHaveBeenCalledTimes(1));
+		expect(harness.loadIndex).not.toHaveBeenCalled();
+		expect(screen.getByText('Idle.')).toBeInTheDocument();
+
+		// Pairing arrives on the `core-status` event the socket registrar
+		// feeds into `coreStore`; the deferred load rides that signal.
+		harness.fetchStatus.mockImplementation(async () =>
+			syntheticStatus({ coreId: 'core-a' })
+		);
+		corePairedStore.set(true);
+
+		await waitFor(() => expect(harness.loadIndex).toHaveBeenCalledTimes(1));
+		const [, loadOptions] = harness.loadIndex.mock.calls[0] as [
+			unknown,
+			{ coreId: string }
+		];
+		expect(loadOptions.coreId).toBe('core-a');
+	});
+
+	it('spends the deferred retry once, so a persistent failure cannot loop', async () => {
+		const corePairedStore = writable(false);
+		const harness = mountMode({
+			corePairedStore,
+			fetchStatus: vi.fn(async () => {
+				throw new Error('Roon core not paired');
+			}) as never
+		});
+
+		await waitFor(() => expect(harness.fetchStatus).toHaveBeenCalledTimes(1));
+		corePairedStore.set(true);
+
+		// Exactly one retry: the initial attempt plus the deferred one. The
+		// retry's own failure must not re-arm the deferral.
+		await waitFor(() => expect(harness.fetchStatus).toHaveBeenCalledTimes(2));
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(harness.fetchStatus).toHaveBeenCalledTimes(2);
+		expect(harness.loadIndex).not.toHaveBeenCalled();
+		expect(screen.getByText('Idle.')).toBeInTheDocument();
+	});
 });
 
 describe('UnifiedLibraryMode — shell', () => {
@@ -4353,6 +4409,12 @@ describe('UnifiedLibraryMode — About panel', () => {
 		expect(open).toHaveAttribute('aria-expanded', 'true');
 		// Version provenance is the reason this surface exists: without it the
 		// default view reveals nothing about what build is running.
+		// The product version, not the build revision. Before this row existed
+		// the panel named only an opaque git short SHA, so the release the user
+		// was running was nowhere on the surface.
+		expect(screen.getByTestId('unified-about-app-version').textContent?.trim()).toMatch(
+			/^\d+\.\d+\.\d+/u
+		);
 		expect(screen.getByTestId('unified-about-ui-revision').textContent).toContain('rev');
 		expect(screen.getByTestId('unified-about-core-name')).toBeTruthy();
 		expect(screen.getByTestId('unified-about-core-version')).toBeTruthy();

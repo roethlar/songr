@@ -270,6 +270,7 @@
 		scopeSlots = libraryScopeSlots,
 		drillStore = unifiedDrillStore,
 		fetchStatus = fetchCatalogStatus,
+		corePairedStore = isCorePaired,
 		hydrateArtistAlbums = loadCatalogArtistAlbums,
 		fetchFn = fetch,
 		albumController: suppliedAlbumController,
@@ -316,6 +317,8 @@
 		scopeSlots?: Pick<ResolvedLibraryScopeSlots, 'mostPlayedView' | 'playlistsView'>;
 		drillStore?: typeof unifiedDrillStore;
 		fetchStatus?: typeof fetchCatalogStatus;
+		/** Pairing readiness, injected so tests can drive the retry. */
+		corePairedStore?: typeof isCorePaired;
 		hydrateArtistAlbums?: typeof loadCatalogArtistAlbums;
 		fetchFn?: typeof fetch;
 		albumController?: LibraryAlbumController;
@@ -451,6 +454,14 @@
 	let connectionSocket: UnifiedConnectionSocket | null = null;
 	let connectionListenersAttached = false;
 	let recoveryGeneration: number | null = null;
+	/**
+	 * A load bailed because the engine was not paired yet. The paired-store
+	 * effect owns the single retry this arms; `pairingRetryGeneration` records
+	 * the lifecycle generation whose retry has already been spent, so a
+	 * persistent failure cannot re-arm itself into a loop.
+	 */
+	let pairingRetryDeferred = $state(false);
+	let pairingRetryGeneration: number | null = null;
 	/** Session generation captured when the album sheet opened its read. */
 	let sheetGeneration: number | null = null;
 	let hydrationCoreId: string | null = null;
@@ -2213,11 +2224,34 @@
 			const status = await fetchStatus(fetchFn);
 			coreId = status.coreId;
 		} catch {
+			// A cold desktop launch opens the window as soon as the engine's
+			// HTTP port is up — up to ~25s before Roon discovery and registry
+			// registration finish — so this first status call can lose that
+			// race and reject with CoreUnpairedError. Returning silently used
+			// to strand the library body on "Idle." for the life of the
+			// window: the store never left `idle`, and the socket never
+			// dropped, so `handleReconnect` never re-drove it. Defer instead,
+			// and let pairing re-drive the load.
+			if (pairingRetryGeneration !== generation) pairingRetryDeferred = true;
 			return;
 		}
 		if (generation !== lifecycleGeneration || claim !== activeClaim) return;
 		await loadIndex(fetchFn, { coreId, claim: activeClaim });
 	}
+
+	// Pairing is the readiness signal the deferred load is waiting for, and it
+	// already reaches the client: the engine emits `core-status`, the socket
+	// registrar feeds `coreStore`, and `corePairedStore` derives from it. One
+	// retry per lifecycle generation — enough to cover the cold-start race
+	// without turning a persistent failure into a retry loop.
+	$effect(() => {
+		if (!$corePairedStore || !pairingRetryDeferred) return;
+		pairingRetryDeferred = false;
+		const activeClaim = untrack(() => claim);
+		if (!activeClaim || !untrack(() => resumed)) return;
+		pairingRetryGeneration = lifecycleGeneration;
+		void loadForClaim(activeClaim);
+	});
 
 	function isCurrentUnifiedClaim(activeClaim: ClassicBrowseSessionClaim): boolean {
 		return (
@@ -2399,6 +2433,8 @@
 		detachConnectionListeners();
 		connectionSocket = null;
 		recoveryGeneration = null;
+		pairingRetryDeferred = false;
+		pairingRetryGeneration = null;
 		sheetActionController.cancel();
 		albumController.cancel();
 		albumController.reset();
@@ -2570,6 +2606,8 @@
 					class:good={connectedGood}
 					data-testid="unified-about-connection"
 				>{connectedLabel}</dd>
+				<dt>Version</dt>
+				<dd data-testid="unified-about-app-version">{__APP_VERSION__}</dd>
 				<dt>Interface</dt>
 				<dd data-testid="unified-about-ui-revision">rev {uiBuildRevision}</dd>
 				<dt>Core</dt>

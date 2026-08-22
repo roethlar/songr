@@ -38,17 +38,6 @@ if [ ! -d "$from" ]; then
   exit 1
 fi
 
-# $from is referenced again after this script cd's into its own clone, so a
-# relative path silently resolves to nothing there. That exact miss shipped:
-# the v1.1.4 run printed "no manifest change to publish" with a fully
-# rendered manifest sitting in the caller's cwd, and exited 0. Absolute,
-# always — and an empty source is an error, never a quiet no-op.
-from=$(cd "$from" && pwd)
-if [ -z "$(cd "$from" && find . -type f -print -quit)" ]; then
-  echo "no files under $from" >&2
-  exit 1
-fi
-
 workdir=$(mktemp -d)
 keyfile="$workdir/deploy_key"
 checkout="$workdir/checkout"

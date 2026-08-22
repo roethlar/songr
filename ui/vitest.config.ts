@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import fs from 'node:fs';
 import path from 'node:path';
 import { resolveLibraryScopeSlotsModule } from './src/lib/libraryFeatures/resolveScopeSlots.js';
 
@@ -8,6 +9,14 @@ import { resolveLibraryScopeSlotsModule } from './src/lib/libraryFeatures/resolv
 // .svelte files in component tests; SvelteKit's `$app/*` modules are
 // aliased to tiny stubs so imports resolve in node.
 export default defineConfig({
+	// Mirrors the build-time stamp in vite.config.ts. Read from the same
+	// repository-root package.json rather than hardcoded, so the suite cannot
+	// drift from the version the build would ship.
+	define: {
+		__APP_VERSION__: JSON.stringify(
+			JSON.parse(fs.readFileSync(path.resolve('../package.json'), 'utf8')).version
+		)
+	},
 	plugins: [svelte({ hot: false })],
 	test: {
 		environment: 'jsdom',

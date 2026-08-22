@@ -348,10 +348,18 @@ export class DiscographyResolver {
           "A selected-artist album row had no valid title"
         );
       }
+      // Each discography row carries its OWN album-artist credit in the
+      // subtitle, and that is the string the album's detail header will show.
+      // Stamping the browsing artist here instead minted a second, wrong-artist
+      // record for every album an artist merely appears on — "Champions" filed
+      // under 2 Chainz when Roon credits it to Kanye West — and opening one
+      // always failed AlbumDetailResolver's header check with DETAIL_MISMATCH.
+      // Rows without a subtitle fall back to the artist being browsed.
+      const rowArtist = canonicalDisplayText(item.subtitle);
       const imageKeyHint = opaqueHint(item.imageKey);
       return {
         exactTitle,
-        exactArtist,
+        exactArtist: rowArtist ?? exactArtist,
         editionText: "",
         ...(imageKeyHint ? { imageKeyHint } : {}),
       };

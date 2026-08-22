@@ -89,7 +89,15 @@ linux:
     - deb
     - rpm
   category: AudioVideo
-  icon: build/icon.png
+  # An icon SET directory, not a single PNG. Pointed at `build/icon.png`,
+  # electron-builder installed that file as-is at its native size, so deb/rpm
+  # shipped only `hicolor/1024x1024/apps/songr.png` — a directory
+  # `hicolor-icon-theme`'s index.theme does not list, and freedesktop icon
+  # lookup visits only listed directories. `Icon=songr` therefore resolved to
+  # nothing and launchers drew a blank. `build/icons/` holds 16 through 512,
+  # all listed sizes, rendered by `scripts/render-icons.mjs`. mac and win stay
+  # on the 1024 PNG, which is the source their icns/ico conversion wants.
+  icon: build/icons
   # The package name, the binary on `$PATH`, and (via syncDesktopName) the
   # `.desktop` file and WM_CLASS. Without it every Linux artifact would be named
   # after the npm workspace, `roon-controller-desktop`, and the window manager

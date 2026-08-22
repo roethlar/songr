@@ -62,6 +62,42 @@ class ScriptedSession implements CoordinatedBrowseSession {
 }
 
 describe("DiscographyResolver", () => {
+  it("credits each album row to its own artist, falling back to the browsed artist", async () => {
+    // Roon puts the album's OWN artist credit in the discography row subtitle,
+    // and that is what the album's detail header shows. Taking the browsed
+    // artist instead minted a phantom record for every album an artist merely
+    // appears on — the real "Champions" is credited to Kanye West even when it
+    // is read from 2 Chainz's discography — and opening the phantom always
+    // failed AlbumDetailResolver's header check with DETAIL_MISMATCH.
+    const session = new ScriptedSession();
+    session.browse
+      .mockResolvedValueOnce(page([row("Björk", "artist-target")], 1, 0, "Artists"))
+      .mockResolvedValueOnce(
+        page(
+          [
+            row("Play", "action-header", { hint: "action_list" }),
+            row("Champions", "album-1", { subtitle: "Kanye West" }),
+            row("Debut", "album-2", { subtitle: "  Björk  " }),
+            row("Untitled", "album-3"),
+          ],
+          4,
+          0,
+          "Björk"
+        )
+      );
+
+    const result = await new DiscographyResolver().resolve(session, artist());
+
+    expect(result.kind).toBe("resolved");
+    if (result.kind !== "resolved") throw new Error("expected resolution");
+    expect(result.observation.albums).toEqual([
+      { exactTitle: "Champions", exactArtist: "Kanye West", editionText: "" },
+      { exactTitle: "Debut", exactArtist: "Björk", editionText: "" },
+      // No subtitle on the row: fall back to the artist being browsed.
+      { exactTitle: "Untitled", exactArtist: "Björk", editionText: "" },
+    ]);
+  });
+
   it("resolves a normalized-exact artist across pages and retains direct album order", async () => {
     const session = new ScriptedSession();
     const rootFirst = Array.from({ length: 100 }, (_, index) =>
