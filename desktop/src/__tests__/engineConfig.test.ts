@@ -12,6 +12,7 @@ import {
 import { engineUiBuildPath, packagedEngineEntry } from '../packaging';
 import {
   GET_SETTINGS_CHANNEL,
+  OPEN_SETTINGS_CHANNEL,
   RETRY_ENGINE_CHANNEL,
   SAVE_SETTINGS_CHANNEL,
 } from '../shellChannels';
@@ -211,14 +212,28 @@ describe('preload channels', () => {
   // duplicated there. These guard against the copies drifting — and against
   // the settings channels creeping back into the main window's preload,
   // which remote content shares (dt6-1).
-  it('main preload carries the retry channel and ONLY that', () => {
+  it('main preload carries only commands, never the settings channels', () => {
     const preloadSource = fs.readFileSync(
       path.join(__dirname, '..', 'preload.ts'),
       'utf8',
     );
+    // Two send-only commands. `open-settings` exists because the tray used to
+    // be the only route to advanced settings, which strands network serving on
+    // any desktop without a StatusNotifier host.
     expect(preloadSource).toContain(`'${RETRY_ENGINE_CHANNEL}'`);
+    expect(preloadSource).toContain(`'${OPEN_SETTINGS_CHANNEL}'`);
+    // The boundary that matters (dt6-1): this preload is shared with remote
+    // content, so it must never be able to READ or WRITE settings.
     expect(preloadSource).not.toContain(`'${GET_SETTINGS_CHANNEL}'`);
     expect(preloadSource).not.toContain(`'${SAVE_SETTINGS_CHANNEL}'`);
+  });
+
+  it('settings preload never gains the open-settings command', () => {
+    const settingsPreloadSource = fs.readFileSync(
+      path.join(__dirname, '..', 'settingsPreload.ts'),
+      'utf8',
+    );
+    expect(settingsPreloadSource).not.toContain(`'${OPEN_SETTINGS_CHANNEL}'`);
   });
 
   it('settings preload carries the settings channels and never retry', () => {

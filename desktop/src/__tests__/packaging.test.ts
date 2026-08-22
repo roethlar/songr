@@ -101,12 +101,24 @@ describe('runtime identity per tree (v1.1.4 collision)', () => {
       `--config.productName=${PRODUCT_NAME}`,
       `--config.extraMetadata.name=songr`,
       `--config.extraMetadata.productName=${PRODUCT_NAME}`,
+      `--config.linux.executableName=songr`,
+      `--config.deb.packageName=songr`,
+      `--config.rpm.packageName=songr`,
+      `--config.extraMetadata.desktopName=songr.desktop`,
     ]);
     expect(builderIdentityArgs(true)).toEqual([
       `--config.appId=${PUBLIC_APP_ID}${PRIVATE_APP_ID_SUFFIX}`,
       `--config.productName=${PRODUCT_NAME} Private`,
       `--config.extraMetadata.name=songr-private`,
       `--config.extraMetadata.productName=${PRODUCT_NAME} Private`,
+      // Without these the two trees still collided as Linux packages: same
+      // package name, same /usr/bin entry, same .desktop, same icon files.
+      `--config.linux.executableName=songr-private`,
+      `--config.deb.packageName=songr-private`,
+      `--config.rpm.packageName=songr-private`,
+      // package.json hardcodes desktopName, so syncDesktopName never falls
+      // back to executableName; both trees shipped songr.desktop without this.
+      `--config.extraMetadata.desktopName=songr-private.desktop`,
     ]);
   });
 
@@ -115,8 +127,8 @@ describe('runtime identity per tree (v1.1.4 collision)', () => {
     // has to fail loudly: the trees must differ on all four arguments.
     const publicArgs = builderIdentityArgs(false);
     const privateArgs = builderIdentityArgs(true);
-    expect(publicArgs).toHaveLength(4);
-    expect(privateArgs).toHaveLength(4);
+    expect(publicArgs).toHaveLength(8);
+    expect(privateArgs).toHaveLength(8);
     for (let i = 0; i < publicArgs.length; i += 1) {
       expect(privateArgs[i]).not.toBe(publicArgs[i]);
     }

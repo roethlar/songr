@@ -171,5 +171,23 @@ export function builderIdentityArgs(privateTree: boolean): string[] {
     `--config.productName=${productNameForTree(privateTree)}`,
     `--config.extraMetadata.name=${runtimeNameForTree(privateTree)}`,
     `--config.extraMetadata.productName=${productNameForTree(privateTree)}`,
+    // The Linux package identity is a THIRD channel, separate from the bundle
+    // and the runtime. `linux.executableName` (with syncDesktopName) names the
+    // binary, the .desktop file, its `Icon=` key and the installed icon files;
+    // the deb and rpm package names live under their own sections, not under
+    // `linux`. Left at the config's defaults both trees produced a package
+    // called `songr` owning `/usr/bin/songr`, `songr.desktop` and
+    // `hicolor/*/apps/songr.png`, so the private and public packages could not
+    // be installed side by side even though their bundles and runtimes were
+    // already split.
+    `--config.linux.executableName=${runtimeNameForTree(privateTree)}`,
+    `--config.deb.packageName=${runtimeNameForTree(privateTree)}`,
+    `--config.rpm.packageName=${runtimeNameForTree(privateTree)}`,
+    // `syncDesktopName` derives the .desktop FILENAME from `desktopName` in
+    // package.json and only falls back to `executableName` when it is absent —
+    // and package.json hardcodes `songr.desktop`, so without this override both
+    // trees installed the same `/usr/share/applications/songr.desktop` even
+    // once every other name had been split.
+    `--config.extraMetadata.desktopName=${runtimeNameForTree(privateTree)}.desktop`,
   ];
 }

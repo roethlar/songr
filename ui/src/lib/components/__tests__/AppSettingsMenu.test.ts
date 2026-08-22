@@ -47,6 +47,34 @@ describe('AppSettingsMenu', () => {
 		setTheme('dark');
 	});
 
+	// The desktop shell binds its engine to loopback on a random port unless
+	// `serveOnNetwork` is set, and that setting lives in the shell's advanced
+	// settings window. Until this entry existed the tray was its only route, so
+	// on any desktop without a StatusNotifier host — the Flatpak by ruling,
+	// GNOME without an extension — a user could not expose the server at all.
+	it('offers advanced settings when running inside the desktop shell', async () => {
+		const openAdvanced = vi.fn();
+		render(AppSettingsMenu, {
+			props: { resolveAdvancedSettings: () => openAdvanced }
+		});
+		openSettingsMenu();
+		await screen.findByRole('dialog', { name: 'Controller settings' });
+
+		const trigger = screen.getByTestId('settings-open-advanced');
+		await fireEvent.click(trigger);
+		expect(openAdvanced).toHaveBeenCalledTimes(1);
+	});
+
+	it('hides advanced settings in a plain browser tab', async () => {
+		// The bridge resolves to null outside the shell; the control must not
+		// appear at all rather than appear and fail.
+		render(AppSettingsMenu, { props: { resolveAdvancedSettings: () => null } });
+		openSettingsMenu();
+		await screen.findByRole('dialog', { name: 'Controller settings' });
+
+		expect(screen.queryByTestId('settings-open-advanced')).toBeNull();
+	});
+
 	it('renders no trigger of its own and opens from the shared store', async () => {
 		render(AppSettingsMenu);
 		expect(screen.queryByRole('button', { name: 'Open Controller settings' })).toBeNull();

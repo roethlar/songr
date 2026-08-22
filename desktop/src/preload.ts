@@ -19,4 +19,12 @@ contextBridge.exposeInMainWorld('roonControllerShell', {
   retryEngine: (): void => {
     ipcRenderer.send('shell:retry-engine');
   },
+  /**
+   * Open the shell's advanced settings window. The app's own Settings menu
+   * offers this only when the bridge is present, so a plain browser tab shows
+   * nothing. Send-only: no settings cross this bridge in either direction.
+   */
+  openAdvancedSettings: (): void => {
+    ipcRenderer.send('shell:open-settings');
+  },
 });

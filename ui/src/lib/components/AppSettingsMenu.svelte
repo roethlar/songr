@@ -3,6 +3,7 @@
 	import { ROON_EXTENSION_DISPLAY_NAME } from '@shared/types';
 	import { focusTrap, isTopModalOwner } from '$lib/actions/focusTrap';
 	import { switchCore as switchCoreRequest } from '$lib/api/client';
+	import { openAdvancedSettings } from '$lib/desktopShell';
 	import { coreStore } from '$lib/stores/coreStore';
 	import { onboardingStatusStore } from '$lib/stores/onboardingStore';
 	import { closeSettingsMenu, settingsMenuOpen } from '$lib/stores/settingsMenuStore';
@@ -17,12 +18,20 @@
 	let {
 		requestDensity = requestUnifiedLibraryDensity,
 		switchCoreClient = switchCoreRequest,
-		fetchFn = fetch
+		fetchFn = fetch,
+		resolveAdvancedSettings = openAdvancedSettings
 	}: {
 		requestDensity?: typeof requestUnifiedLibraryDensity;
 		switchCoreClient?: typeof switchCoreRequest;
 		fetchFn?: typeof fetch;
+		/** Injected so tests can mount both the shell and the browser case. */
+		resolveAdvancedSettings?: typeof openAdvancedSettings;
 	} = $props();
+
+	// Null in a browser tab. The desktop shell is the only place these settings
+	// exist, and until now the tray was the only way to reach them — so on any
+	// desktop without a tray, network serving could not be turned on at all.
+	const advancedSettings = $derived(resolveAdvancedSettings());
 
 	type CoreSwitchPhase = 'idle' | 'confirm' | 'requesting' | 'waiting' | 'error' | 'complete';
 
@@ -255,6 +264,25 @@
 							>Connect to a different Core</button>
 						{/if}
 					</section>
+					{#if advancedSettings}
+						<section class="settings-section" aria-labelledby="settings-advanced-title">
+							<div>
+								<h3 id="settings-advanced-title">Desktop app</h3>
+								<p>
+									Share this library with phones and other computers on your
+									network, or point the app at another Songr server.
+								</p>
+							</div>
+							<button
+								type="button"
+								class="core-switch-action"
+								data-testid="settings-open-advanced"
+								onclick={() => advancedSettings?.()}
+							>
+								Open advanced settings
+							</button>
+						</section>
+					{/if}
 				</div>
 
 				<footer class="settings-footer">

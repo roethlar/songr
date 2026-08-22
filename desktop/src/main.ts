@@ -34,6 +34,7 @@ import { createEngineSpawner } from './engineProcess';
 import { decideNavigation } from './navigationPolicy';
 import {
   GET_SETTINGS_CHANNEL,
+  OPEN_SETTINGS_CHANNEL,
   RETRY_ENGINE_CHANNEL,
   SAVE_SETTINGS_CHANNEL,
 } from './shellChannels';
@@ -418,6 +419,14 @@ function startApp(): void {
     // A second launch is a request to see the window that already exists, not
     // a request for a second engine.
     focusExistingWindow();
+  });
+
+  // Without this the advanced settings — and therefore network serving — were
+  // reachable only from the tray, so a desktop with no StatusNotifier host had
+  // no way to get at them. Opening the window is all this does; the window
+  // itself owns the settings channels.
+  ipcMain.on(OPEN_SETTINGS_CHANNEL, () => {
+    openSettingsWindow();
   });
 
   ipcMain.on(RETRY_ENGINE_CHANNEL, () => {

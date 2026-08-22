@@ -71,15 +71,17 @@ library stays quick.
 
 ## Desktop app
 
-The same controller in its own window, with a tray icon, hardware media keys,
-and a first-run guide that finds your Core. Download the build for your
+The same controller in its own window, with hardware media keys and a
+first-run guide that finds your Core. Download the build for your
 platform from [Releases](https://github.com/roethlar/songr/releases):
 AppImage, deb, or rpm on Linux (x64 and arm64), dmg on macOS (Apple Silicon
 and Intel), or the Windows installer.
 
 - The app runs its own copy of the Songr server, privately, on your machine —
-  nothing else to install. Closing the window hides it to the tray; the music
-  keeps playing.
+  nothing else to install. Closing the window hides it rather than quitting,
+  so the music keeps playing; launch it again to bring the window back.
+- On desktops that show one, a tray icon offers play/pause, next, previous and
+  Quit. Not every Linux desktop has a system tray, so nothing depends on it.
 - To play audio **on the computer itself**, install Roon Labs' free
   [Roon Bridge](https://roon.app/downloads) alongside (their official
   download, all three platforms) — Songr is a controller, and Roon Bridge is
@@ -91,24 +93,43 @@ and Intel), or the Windows installer.
   (Apple Silicon does this to unsigned downloads), clear the quarantine flag
   once with `xattr -dc /Applications/Songr.app`. Windows: SmartScreen →
   "More info" → "Run anyway".
-- Advanced, off by default: from the tray's Advanced Settings the app can
-  also serve browsers on your network (read [Security](#security) first), or
-  connect to an existing Songr server instead of running its own.
+- Advanced, off by default: under Settings → Desktop app → Open advanced
+  settings, the app can also serve browsers on your network (read
+  [Security](#security) first), or connect to an existing Songr server instead
+  of running its own. Without it the app serves only itself, on a private
+  port.
 
 A desktop user needs only the app. The server install below is the right
 shape when several people or devices share one Songr.
 
 ## Install
 
-Two prebuilt options need no source checkout at all:
+### Package managers
+
+The desktop app and the server are both packaged. Each tracks the latest
+release automatically.
+
+| Platform | Command |
+| --- | --- |
+| Arch Linux (AUR) | `yay -S songr-bin` — or any AUR helper |
+| macOS (Homebrew) | `brew install --cask roethlar/tap/songr` |
+| Windows (Scoop) | `scoop bucket add roethlar https://github.com/roethlar/scoop-bucket` then `scoop install roethlar/songr` |
+| Any (npm) | `npm install -g songr-server` then `songr-server` |
+
+The npm package is the **server**, not the desktop app: use it when you want
+Songr running headless for other devices to reach. The rest install the
+desktop app.
+
+Prefer a direct download, or on a distribution without one of the above? Both
+prebuilt options below need no source checkout either.
 
 **Prebuilt server.** Each release attaches `songr-server-<version>.tar.gz` —
 the compiled server with its dependencies, one tarball for any platform with
 [Node.js](https://nodejs.org) 22 or newer:
 
 ```bash
-tar xzf songr-server-1.1.4.tar.gz
-cd songr-server-1.1.4
+tar xzf songr-server-<version>.tar.gz
+cd songr-server-<version>
 node dist/index.js
 ```
 
