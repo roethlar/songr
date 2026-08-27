@@ -115,6 +115,7 @@ function observed(
 }
 
 class ScriptedSession implements CoordinatedBrowseSession {
+  public readonly sessionScope = "scripted-session";
   public readonly browse = jest.fn();
   public readonly load = jest.fn();
   public readonly pop = jest.fn();

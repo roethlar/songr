@@ -11,6 +11,7 @@ import {
   AlbumActionZonePort,
 } from "../AlbumActionService";
 import {
+  AlbumActionBrowseHierarchy,
   AlbumActionResolutionError,
   AlbumActionResolverPort,
   AlbumActionVersionSource,
@@ -105,12 +106,24 @@ function zone(outputIds = ["output-a"]): Zone {
   };
 }
 
-function resolvedActions(): ResolvedAlbumActions {
+function resolvedActions(
+  hierarchy: AlbumActionBrowseHierarchy = "artists"
+): ResolvedAlbumActions {
   return {
     actions: [
-      { label: "Play Now", semantic: "play-now", itemKey: "raw-play" },
-      { label: "Add Next", semantic: "add-next", itemKey: "raw-next" },
-      { label: "Queue", semantic: "queue", itemKey: "raw-queue" },
+      {
+        label: "Play Now",
+        semantic: "play-now",
+        itemKey: "raw-play",
+        hierarchy,
+      },
+      {
+        label: "Add Next",
+        semantic: "add-next",
+        itemKey: "raw-next",
+        hierarchy,
+      },
+      { label: "Queue", semantic: "queue", itemKey: "raw-queue", hierarchy },
     ],
   };
 }
@@ -241,6 +254,7 @@ class FakeCoordinator implements AlbumActionCoordinatorPort {
     this.runCalls += 1;
     this.runAccesses.push(access);
     const session: CoordinatedBrowseSession = {
+      sessionScope: "action-session",
       browse: () => this.browseImpl(),
       load: () => this.browseImpl(),
       pop: () => this.browseImpl(),
@@ -764,7 +778,7 @@ describe("AlbumActionService", () => {
     expect(coordinator.releaseCalls).toBe(1);
   });
 
-  it("claims once, executes the exact stored key and zone, and invalidates siblings", async () => {
+  it("claims once, executes the exact stored key, zone, and hierarchy, and invalidates siblings", async () => {
     const event = await resolveRequest();
     const play = event.actions.find((action) => action.semantic === "play-now");
     const queue = event.actions.find((action) => action.semantic === "queue");
@@ -790,11 +804,43 @@ describe("AlbumActionService", () => {
     });
     expect(coordinator.executeCalls).toHaveLength(1);
     expect(coordinator.executeCalls[0].options).toEqual({
-      hierarchy: "search",
+      hierarchy: "artists",
       zoneId: "zone-1",
       itemKey: "raw-play",
     });
     expect(coordinator.releaseCalls).toBe(1);
+  });
+
+  it("executes an artists-resolved binding (library album page) against the artists hierarchy", async () => {
+    resolverImpl = () => Promise.resolve(resolvedActions("artists"));
+    const event = await resolveRequest();
+    const play = event.actions.find((action) => action.semantic === "play-now");
+    if (!play) throw new Error("Expected a Play Now choice");
+
+    await service.execute(origin, { actionId: play.actionId });
+
+    expect(coordinator.executeCalls).toHaveLength(1);
+    expect(coordinator.executeCalls[0].options).toEqual({
+      hierarchy: "artists",
+      zoneId: "zone-1",
+      itemKey: "raw-play",
+    });
+  });
+
+  it("executes a search-resolved binding (search-origin album) against the search hierarchy", async () => {
+    resolverImpl = () => Promise.resolve(resolvedActions("search"));
+    const event = await resolveRequest();
+    const play = event.actions.find((action) => action.semantic === "play-now");
+    if (!play) throw new Error("Expected a Play Now choice");
+
+    await service.execute(origin, { actionId: play.actionId });
+
+    expect(coordinator.executeCalls).toHaveLength(1);
+    expect(coordinator.executeCalls[0].options).toEqual({
+      hierarchy: "search",
+      zoneId: "zone-1",
+      itemKey: "raw-play",
+    });
   });
 
   it("rejects a regrouped zone after claiming and sends zero execute calls", async () => {

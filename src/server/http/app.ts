@@ -10,6 +10,7 @@ import { createOnboardingRouter } from "./routes/onboarding";
 import { createZonesRouter } from "./routes/zones";
 import { createTransportRouter } from "./routes/transport";
 import { createImageRouter } from "./routes/image";
+import { createArtistPortraitRouter } from "./routes/artist-portrait";
 import { createRecentlyPlayedRouter } from "./routes/recently-played";
 import { createFavoritesRouter } from "./routes/favorites";
 import {
@@ -28,6 +29,7 @@ import { ImageService } from "../../core/roon/ImageService";
 import { RecentlyPlayedService } from "../../core/recently-played/RecentlyPlayedService";
 import { FavoritesService } from "../../core/favorites/FavoritesService";
 import { ErrorResponse } from "../../shared/types";
+import type { ArtistPortraitFeaturePort } from "../libraryFeatures";
 
 export interface HttpCatalogContext {
   readonly catalogService: CatalogHttpService;
@@ -37,6 +39,7 @@ export interface HttpCatalogContext {
   readonly playlistContents?: CatalogHttpPlaylistContents;
   readonly playlistMutations?: CatalogHttpPlaylistMutations;
   readonly focusPlaylists?: CatalogHttpFocusPlaylists;
+  readonly artistPortraits?: ArtistPortraitFeaturePort;
 }
 
 export const createHttpApp = (
@@ -131,6 +134,13 @@ export const createHttpApp = (
   app.use("/api/zones", createZonesRouter(transportService));
   app.use("/api/transport", createTransportRouter(transportService));
   app.use("/api/image", createImageRouter(imageService));
+  // Mounted in every build, with or without the portrait port: a build that
+  // cannot read portraits still has to say so honestly rather than fall
+  // through to the SPA's HTML.
+  app.use(
+    "/api/artist-portrait",
+    createArtistPortraitRouter(catalogContext?.artistPortraits)
+  );
   app.use("/api/recently-played", createRecentlyPlayedRouter(recentlyPlayedService));
   app.use("/api/favorites", createFavoritesRouter(favoritesService));
   if (catalogContext) {

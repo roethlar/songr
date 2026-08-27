@@ -319,6 +319,9 @@ describe('libraryIndexStore — catalog source', () => {
 		expect(state.capabilities.dateFeaturesDisabledReason).toBeUndefined();
 		expect(state.capabilities.playFeatures).toBe(true);
 		expect(state.capabilities.playFeaturesDisabledReason).toBeUndefined();
+		// The editorial presence pair (q1-2): the state-filter answer rides
+		// the index like the date/play/playlist answers.
+		expect(state.capabilities.stateFilterFeatures).toBe(true);
 		const middle = state.albums.find((entry) => entry.title === 'Middle');
 		expect(middle?.originalReleaseDate).toEqual({ year: 1975, month: 6, day: 1 });
 		expect(middle?.releaseDate).toEqual({ year: 1976, month: 0, day: 0 });
@@ -370,6 +373,7 @@ describe('libraryIndexStore — catalog source', () => {
 		expect(state.capabilities.dateFeaturesDisabledReason).toBe(
 			'no native catalog snapshot is available'
 		);
+		expect(state.capabilities.stateFilterFeatures).toBe(false);
 	});
 
 	it('carries the play-feature gate and its honest reason (Slice 6)', async () => {
@@ -625,6 +629,55 @@ describe('libraryIndexStore — catalog source', () => {
 		expect(state.artists.find((artist) => artist.name === 'Zebra Trio')?.albumCount).toBeUndefined();
 		expect(state.capabilities.albumActions).toBe(true);
 		expect(state.capabilities.durableRestoration).toBe(true);
+	});
+
+	it('skips the rebuild when the same Core revision is already rendered', async () => {
+		// The resume path re-fires this load on every Back from an item page.
+		// A public index (countComplete: false) turns every rebuild into a
+		// full live artist drain — 16 s on a 1,680-artist library, measured
+		// against a live Core 2026-08-17. Same Core + same revision must be
+		// a no-op: the fetch still runs (a changed revision reloads), but no
+		// re-drain and no loading flash.
+		const index = smallIndex();
+		const incomplete = {
+			...index,
+			artists: index.artists.map((artist) => ({ ...artist, countComplete: false }))
+		};
+		fetchCatalogIndexMock.mockResolvedValue({ kind: 'index', index: incomplete });
+		const transaction = mockArtistCountDrain([
+			browseItem('Zebra Trio', '11 albums'),
+			browseItem('alpha band', '27 albums')
+		]);
+
+		await loadLibraryIndex(fetchFn, { coreId: 'core-a', claim: TEST_CLAIM });
+		expect(get(libraryIndexStore).phase).toBe('ready');
+		expect(transaction.browse).toHaveBeenCalledTimes(1);
+
+		// The navigation-return reload: fetches (a changed revision must
+		// reload), but never re-drains and never leaves the ready state.
+		const phases: string[] = [];
+		const unsubscribe = libraryIndexStore.subscribe((state) => {
+			phases.push(state.phase);
+		});
+		await loadLibraryIndex(fetchFn, { coreId: 'core-a', claim: TEST_CLAIM });
+		unsubscribe();
+		expect(fetchCatalogIndexMock).toHaveBeenCalledTimes(2);
+		expect(transaction.browse).toHaveBeenCalledTimes(1);
+		expect(phases).not.toContain('loading');
+		expect(get(libraryIndexStore).phase).toBe('ready');
+
+		// A changed revision is real work again.
+		const bumped = smallIndex({ revision: 2 });
+		fetchCatalogIndexMock.mockResolvedValue({
+			kind: 'index',
+			index: {
+				...bumped,
+				artists: bumped.artists.map((artist) => ({ ...artist, countComplete: false }))
+			}
+		});
+		await loadLibraryIndex(fetchFn, { coreId: 'core-a', claim: TEST_CLAIM });
+		expect(transaction.browse).toHaveBeenCalledTimes(2);
+		expect(get(libraryIndexStore).revision).toBe(2);
 	});
 
 	it('fails visibly when required Roon counts cannot be loaded', async () => {

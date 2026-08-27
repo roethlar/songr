@@ -1,4 +1,5 @@
 import type { UnifiedLibraryDensity } from '$lib/stores/unifiedLibraryPrefsStore';
+import { CATALOG_DISPLAY_TEXT_MAX_LENGTH } from '@shared/catalogContracts';
 
 export type LibraryViewActivationCause =
 	| 'initial'
@@ -31,7 +32,9 @@ export interface BrowseHistorySnapshot {
 	forward: BrowseHistoryStep[];
 }
 
-export const UNIFIED_LIBRARY_PAGE_STATE_VERSION = 7 as const;
+export const UNIFIED_LIBRARY_PAGE_STATE_VERSION = 8 as const;
+/** v7 predates the item origin name (issue #6). */
+const LEGACY_UNIFIED_LIBRARY_ITEM_ORIGIN_VERSION = 7 as const;
 const LEGACY_UNIFIED_LIBRARY_ITEM_SPLIT_VERSION = 6 as const;
 const LEGACY_UNIFIED_LIBRARY_DRILL_VERSION = 5 as const;
 const LEGACY_UNIFIED_LIBRARY_PAGE_STATE_VERSION = 4 as const;
@@ -39,6 +42,10 @@ const LEGACY_UNIFIED_LIBRARY_PAGE_STATE_WITHOUT_BROWSE_VERSION = 3 as const;
 export const UNIFIED_LOCAL_ID_MAX_LENGTH = 256;
 export const UNIFIED_LABEL_MAX_LENGTH = 256;
 export const UNIFIED_FILTER_TEXT_MAX_LENGTH = 256;
+// The origin name is a raw catalog display name; accept exactly the catalog's
+// own display-text domain so a name valid upstream can never be rejected on
+// restore (finding gh6-1).
+export const UNIFIED_ITEM_ORIGIN_NAME_MAX_LENGTH = CATALOG_DISPLAY_TEXT_MAX_LENGTH;
 export const UNIFIED_BROWSE_RESTORE_COUNT_MAX = 100_000;
 /** Mirrors the editorial contract's zero-based track-anchor bound. */
 export const UNIFIED_TRACK_INDEX_MAX = 500;
@@ -116,6 +123,13 @@ export interface UnifiedLibrarySnapshot {
 	itemDetail: UnifiedItemDetailTarget | null;
 	/** Optional composition surface over a COMPOSER collection drill (v7). */
 	composition: UnifiedCompositionSurface | null;
+	/**
+	 * Optional display-name label for an album item page's origin (v8):
+	 * set when the album was opened from its artist's page, so the back
+	 * button can keep naming the artist after reload/popstate restore
+	 * (issue #6). Only meaningful over an ALBUM item page.
+	 */
+	itemOriginName: string | null;
 	filterText: string;
 	surpriseSeed: number | null;
 	/** Null only for an untagged root; semantic entries capture the live density. */
@@ -150,14 +164,19 @@ const UNIFIED_SNAPSHOT_KEYS = [
 	'itemTarget',
 	'itemDetail',
 	'composition',
+	'itemOriginName',
 	'filterText',
 	'surpriseSeed',
 	'density',
 	'browseHistory'
 ] as const;
-/** v6 predates the item-detail and composition surfaces. */
+/** v6 predates the item-detail and composition surfaces (and v7's origin name). */
 const LEGACY_V6_UNIFIED_SNAPSHOT_KEYS = UNIFIED_SNAPSHOT_KEYS.filter(
-	(key) => key !== 'itemDetail' && key !== 'composition'
+	(key) => key !== 'itemDetail' && key !== 'composition' && key !== 'itemOriginName'
+);
+/** v7 predates the item origin name (issue #6). */
+const LEGACY_V7_UNIFIED_SNAPSHOT_KEYS = UNIFIED_SNAPSHOT_KEYS.filter(
+	(key) => key !== 'itemOriginName'
 );
 const LEGACY_UNIFIED_SNAPSHOT_KEYS = [
 	'scope',
@@ -367,6 +386,10 @@ function normalizeCompositionSurface(
 		: null;
 }
 
+function normalizeItemOriginName(value: unknown): string | null {
+	return isNonEmptyString(value, UNIFIED_ITEM_ORIGIN_NAME_MAX_LENGTH) ? value : null;
+}
+
 function normalizeSharedSnapshotFields(value: Record<string, unknown>): {
 	filterText: string;
 	surpriseSeed: number | null;
@@ -396,9 +419,14 @@ function normalizeSharedSnapshotFields(value: Record<string, unknown>): {
 
 function normalizeUnifiedSnapshot(
 	value: unknown,
-	legacyV6 = false
+	legacyTier: 'v6' | 'v7' | null = null
 ): UnifiedLibrarySnapshot | null {
-	const keys = legacyV6 ? LEGACY_V6_UNIFIED_SNAPSHOT_KEYS : UNIFIED_SNAPSHOT_KEYS;
+	const keys =
+		legacyTier === 'v6'
+			? LEGACY_V6_UNIFIED_SNAPSHOT_KEYS
+			: legacyTier === 'v7'
+				? LEGACY_V7_UNIFIED_SNAPSHOT_KEYS
+				: UNIFIED_SNAPSHOT_KEYS;
 	if (!isRecord(value) || !hasExactKeys(value, keys)) return null;
 	if (!isUnifiedScope(value.scope)) return null;
 	const collectionDrill =
@@ -411,7 +439,7 @@ function normalizeUnifiedSnapshot(
 	if (value.itemTarget !== null && !itemTarget) return null;
 	let itemDetail: UnifiedItemDetailTarget | null = null;
 	let composition: UnifiedCompositionSurface | null = null;
-	if (!legacyV6) {
+	if (legacyTier !== 'v6') {
 		itemDetail =
 			value.itemDetail === null ? null : normalizeItemDetail(value.itemDetail);
 		if (value.itemDetail !== null && !itemDetail) return null;
@@ -425,6 +453,15 @@ function normalizeUnifiedSnapshot(
 		if (value.composition !== null && !composition) return null;
 		if (composition !== null && collectionDrill?.kind !== 'composer') return null;
 	}
+	let itemOriginName: string | null = null;
+	if (legacyTier === null) {
+		itemOriginName =
+			value.itemOriginName === null ? null : normalizeItemOriginName(value.itemOriginName);
+		if (value.itemOriginName !== null && itemOriginName === null) return null;
+		// The origin label only makes sense over an open album page
+		// (issue #6): without one, it is not a reconstructible back target.
+		if (itemOriginName !== null && itemTarget?.kind !== 'album') return null;
+	}
 	const shared = normalizeSharedSnapshotFields(value);
 	if (!shared) return null;
 	const browseHistory = normalizeBrowseHistorySnapshot(value.browseHistory);
@@ -435,6 +472,7 @@ function normalizeUnifiedSnapshot(
 		itemTarget,
 		itemDetail,
 		composition,
+		itemOriginName,
 		...shared,
 		browseHistory
 	};
@@ -489,6 +527,7 @@ function normalizeLegacyUnifiedSnapshot(
 		itemTarget,
 		itemDetail: null,
 		composition: null,
+		itemOriginName: null,
 		...shared,
 		browseHistory
 	};
@@ -512,9 +551,22 @@ export function normalizeLibraryPageState(value: unknown): LibraryPageState | nu
 		}
 		if (
 			value.libraryView === 'unified' &&
+			value.schemaVersion === LEGACY_UNIFIED_LIBRARY_ITEM_ORIGIN_VERSION
+		) {
+			const snapshot = normalizeUnifiedSnapshot(value.snapshot, 'v7');
+			return snapshot
+				? {
+						libraryView: 'unified',
+						schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+						snapshot
+					}
+				: null;
+		}
+		if (
+			value.libraryView === 'unified' &&
 			value.schemaVersion === LEGACY_UNIFIED_LIBRARY_ITEM_SPLIT_VERSION
 		) {
-			const snapshot = normalizeUnifiedSnapshot(value.snapshot, true);
+			const snapshot = normalizeUnifiedSnapshot(value.snapshot, 'v6');
 			return snapshot
 				? {
 						libraryView: 'unified',
@@ -574,12 +626,13 @@ function requireLibraryPageState(value: unknown): LibraryPageState {
 export function buildUnifiedLibraryPageState(
 	snapshot: Omit<
 		UnifiedLibrarySnapshot,
-		'density' | 'browseHistory' | 'itemDetail' | 'composition'
+		'density' | 'browseHistory' | 'itemDetail' | 'composition' | 'itemOriginName'
 	> & {
 		readonly density?: UnifiedLibraryDensity | null;
 		readonly browseHistory?: BrowseHistorySnapshot;
 		readonly itemDetail?: UnifiedItemDetailTarget | null;
 		readonly composition?: UnifiedCompositionSurface | null;
+		readonly itemOriginName?: string | null;
 	}
 ): UnifiedLibraryPageState {
 	return requireLibraryPageState({
@@ -590,6 +643,7 @@ export function buildUnifiedLibraryPageState(
 			browseHistory: emptyBrowseHistory(),
 			itemDetail: null,
 			composition: null,
+			itemOriginName: null,
 			...snapshot
 		}
 	}) as UnifiedLibraryPageState;

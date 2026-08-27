@@ -34,9 +34,9 @@ import { ensureInitialCatalogScan } from "./initialCatalogScan";
 import {
   isFeatureLayerInstalled,
   loadLibraryFeatureLayer,
+  type CatalogBrowseRunner,
   type LibraryFeatureLayer,
 } from "./libraryFeatures";
-import type { CoordinatedBrowseSession } from "../core/roon/BrowseSessionCoordinator";
 
 export interface ServerContext {
   readonly httpServer: http.Server;
@@ -81,29 +81,11 @@ export const startServer = (
     persistence: new FileCatalogPersistence({ directory: config.catalogPath }),
   });
   const publicSongSelectionRegistry = new PublicSongSelectionRegistry();
-  // Manual playlist reads ride the public Browse playlist path on a
-  // serialized server-driven catalog-lease session. The tail keeps those
-  // reads one at a time; it belongs to the application, not to the feature
-  // layer, because the lease it serializes is the application's.
-  let catalogBrowseTail: Promise<void> = Promise.resolve();
-  const runCatalogBrowse = <T,>(
-    coreId: string,
-    work: (session: CoordinatedBrowseSession) => Promise<T>
-  ): Promise<T> => {
-    const run = catalogBrowseTail.then(async () => {
-      const handle = browseSessionCoordinator.acquireCatalog(coreId);
-      try {
-        return await browseSessionCoordinator.runCatalog(coreId, handle, work);
-      } finally {
-        await browseSessionCoordinator.releaseCatalog(coreId, handle);
-      }
-    });
-    catalogBrowseTail = run.then(
-      () => undefined,
-      () => undefined
-    );
-    return run;
-  };
+  // Manual playlist reads ride the public Browse playlist path on the catalog
+  // service's own serialized session, so every in-process catalog consumer
+  // shares one FIFO and one singleton lease instead of racing a second tail.
+  const runCatalogBrowse: CatalogBrowseRunner = (coreId, work) =>
+    catalogService.runCatalogBrowse(coreId, work);
   // The extended library features (Playlists, Most Played, library date
   // ordering, album detail fallback, song relationships) live behind one
   // interface and are loaded once, here. A build that does not carry them
@@ -183,6 +165,9 @@ export const startServer = (
     ...(libraryFeatures.editorialItems
       ? { port: libraryFeatures.editorialItems }
       : {}),
+    ...(libraryFeatures.nativeProfileAuthority
+      ? { readAuthority: libraryFeatures.nativeProfileAuthority }
+      : {}),
     logger,
   });
   const catalogLifecycle = new CatalogLifecycle(
@@ -242,6 +227,9 @@ export const startServer = (
         : {}),
       ...(libraryFeatures.focusPlaylists
         ? { focusPlaylists: libraryFeatures.focusPlaylists }
+        : {}),
+      ...(libraryFeatures.artistPortraits
+        ? { artistPortraits: libraryFeatures.artistPortraits }
         : {}),
     }
   );

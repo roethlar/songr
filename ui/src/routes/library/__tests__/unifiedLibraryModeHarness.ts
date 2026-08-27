@@ -29,6 +29,7 @@ import {
 	INCOMPLETE_ARTIST_COUNTS_CAPABILITIES,
 	type LibraryAlbumEntry,
 	type LibraryArtistEntry,
+	type LibraryCapabilities,
 	type LibraryIndexState,
 	type libraryIndexStore
 } from '$lib/stores/libraryIndexStore';
@@ -197,6 +198,18 @@ export function idleState(): LibraryIndexState {
 		error: null
 	};
 }
+
+/**
+ * The capability answer of a build+Core where editorial presence is
+ * positively established (q1-2): the server's editorial read gate
+ * requires exactly the date + state-filter features, so the UI's
+ * editorial surface keys on the same pair.
+ */
+export const EDITORIAL_PRESENT_CAPABILITIES: LibraryCapabilities = Object.freeze({
+	...CATALOG_CAPABILITIES,
+	dateFeatures: true,
+	stateFilterFeatures: true
+});
 
 export function readyState(over: Partial<LibraryIndexState> = {}): LibraryIndexState {
 	const artists = artistEntries(50);

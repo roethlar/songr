@@ -28,6 +28,7 @@
 		libraryIndexStore,
 		loadLibraryIndex,
 		resetLibraryIndex,
+		albumIdentityKey,
 		bucketLetterFor,
 		compareLibrarySearchKeys,
 		groupLibraryAlbums,
@@ -37,6 +38,7 @@
 		type LibraryAlbumEntry
 	} from '$lib/stores/libraryIndexStore';
 	import { unifiedDrillStore } from '$lib/stores/unifiedDrillStore';
+	import { claimModalSurface } from '$lib/actions/focusTrap';
 	import { openSettingsMenu, settingsMenuOpen } from '$lib/stores/settingsMenuStore';
 	import { foldCatalogNameKey, libraryAlbumEntryFromAlbumRef } from '$lib/catalogNameMatch';
 	import {
@@ -73,6 +75,7 @@
 		claimLibraryIntent,
 		pendingLibraryIntentStore
 	} from '$lib/stores/libraryIntentStore';
+	import type { LibraryIntent } from '$lib/libraryIntent';
 	import { parseCountFilter } from '$lib/unifiedSmartFilters';
 	import { loadRecentlyPlayed, recentlyPlayedStore } from '$lib/stores/recentlyPlayedStore';
 	import { libraryScopeSlots, type ResolvedLibraryScopeSlots } from '@libraryFeatures';
@@ -393,6 +396,15 @@
 	let collectionRecordedHistory = false;
 	/** First-class item page over the scope/collection context. */
 	let itemTarget = $state<UnifiedItemTarget | null>(null);
+	/**
+	 * The originating artist's display name when the open item page is an
+	 * ALBUM opened from that artist's page (issue #6): `itemBackLabel`
+	 * prefers this over the scope/collection fallback because the actual
+	 * back target is the artist's page, not the current scope. Cleared by
+	 * every open that is not an album-from-artist transition and by
+	 * `resetItemPage`, so a stale name never labels an unrelated page.
+	 */
+	let itemOriginName = $state<string | null>(null);
 	let itemRecordedHistory = false;
 	/**
 	 * Live-pushed entry ownership for in-page child closes (ri8-1): a
@@ -535,6 +547,18 @@
 				: {})
 		};
 	});
+	/**
+	 * The positive editorial-presence signal (q1-2): the catalog index
+	 * carries the capability state machine's answers, and the server's
+	 * editorial read gate requires exactly the date + state-filter
+	 * features. Editorial DOM and editorial opens exist only while this
+	 * holds — the public build (absent layer answers all-false) and a
+	 * browse fallback never render an editorial surface, not even a
+	 * skeleton, at any transport phase.
+	 */
+	const editorialFeatureAvailable = $derived(
+		index.capabilities.dateFeatures && index.capabilities.stateFilterFeatures
+	);
 	/**
 	 * The chip row, build-v5 order: Most played exists only while play
 	 * features do, Playlists only while the base native capability serves
@@ -801,6 +825,10 @@
 	 */
 	const itemBackLabel = $derived.by(() => {
 		if (returnToPalette) return 'Search results';
+		// An album opened from its artist's page names the artist, since
+		// that is the actual back target — not the current scope or
+		// collection drill (issue #6).
+		if (itemOriginName !== null) return itemOriginName;
 		if (collectionDrill !== null) return collectionDrill.label;
 		return ALL_SCOPE_CHIPS.find((chip) => chip.id === scope)?.label ?? 'Library';
 	});
@@ -968,6 +996,10 @@
 				collectionDrill?.kind === 'composer' && compositionMode
 					? { title: openCompositionTitle }
 					: null,
+			// The artist-origin label for an open album page (issue #6):
+			// persisted so the back button keeps naming the artist after
+			// reload/popstate restore instead of falling back to the scope.
+			itemOriginName: itemTarget?.kind === 'album' ? itemOriginName : null,
 			filterText,
 			surpriseSeed: scope === 'surprise' ? shuffleSeed : null,
 			density,
@@ -1020,6 +1052,15 @@
 			document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		if (itemTarget === null) itemReturnScrollTop = pane?.scrollTop ?? 0;
 		drillNotice = null;
+		// An album opened from its artist's page names that artist for the
+		// back button (issue #6); every other transition — including a
+		// fresh artist open — clears a stale name so it never mislabels an
+		// unrelated page. Restoration repopulates this separately (below,
+		// in resumeUnified) since itemTarget is null at that call site.
+		itemOriginName =
+			target.kind === 'album' && itemTarget?.kind === 'artist'
+				? (drillArtist?.name ?? null)
+				: null;
 		if (target.kind === 'album') {
 			albumSongFocusTitle = albumOptions?.songFocusTitle ?? null;
 			itemTarget = target;
@@ -1065,6 +1106,9 @@
 		editorialFollowTarget = null;
 		editorialTrackIndex = null;
 		restoredTrackInfoIndex = null;
+		// No positive capability, no open (q1-2): the pages render no
+		// editorial surface, so no read is ever issued without one.
+		if (!editorialFeatureAvailable) return;
 		void editorialItemController.open({
 			anchor:
 				target.kind === 'album'
@@ -1086,15 +1130,17 @@
 		restoredTrackInfoIndex = null;
 		editorialFollowTarget = null;
 		editorialTrackIndex = trackPosition;
-		void editorialItemController.open({
-			anchor: {
-				kind: 'track',
-				albumLocalId: target.localId,
-				trackIndex: trackPosition
-			},
-			tabId: getTabId(),
-			generation: current.generation
-		});
+		if (editorialFeatureAvailable) {
+			void editorialItemController.open({
+				anchor: {
+					kind: 'track',
+					albumLocalId: target.localId,
+					trackIndex: trackPosition
+				},
+				tabId: getTabId(),
+				generation: current.generation
+			});
+		}
 		// The exact-track child is a page-chain step (Slice 8): one
 		// semantic entry per transition, restored by album + index. A
 		// transient parent (palette-opened, ri1-2) owns no semantic entry,
@@ -1354,6 +1400,7 @@
 		itemPageController.close();
 		albumSongFocusTitle = null;
 		itemTarget = null;
+		itemOriginName = null;
 		itemRecordedHistory = false;
 		trackChildOwnsEntry = false;
 		drillArtistOverlay = null;
@@ -1785,6 +1832,16 @@
 		selectedSong = null;
 		resetSongRelationship();
 		returnToPalette = false;
+		// The app-wide Space shortcut asks `hasOpenModalSurface()` before
+		// toggling playback, but the palette's aria-modal dialog only reaches
+		// the DOM on the next flush. Typing "a" and hitting Space in that same
+		// turn must already belong to the palette, not play/pause — hold a
+		// synchronous claim across the render gap (public issue #2 follow-up).
+		// Release on both outcomes: if the flush rejects, an unreleased claim
+		// would leave hasOpenModalSurface() stuck true and the Space shortcut
+		// dead until reload. releaseSurfaceClaim() is idempotent.
+		const releaseSurfaceClaim = claimModalSurface();
+		void tick().then(releaseSurfaceClaim, releaseSurfaceClaim);
 		paletteOpen = true;
 		// Named indexes load lazily; kick both so genre and composer
 		// results can answer without sharing the live song-search session.
@@ -1794,6 +1851,42 @@
 			const composers = $composersStore;
 			if (!composers.loaded && !composers.loading) void composersStore.load(claim);
 		}
+	}
+
+	/**
+	 * Resolves an artist/album entity intent (issue #10: play-bar and
+	 * NowPlayingOverlay name clicks) to an item-page target against the
+	 * loaded library index, ahead of the palette-search fallback. Roon's
+	 * now-playing strings do not always equal library names (joined artist
+	 * lists, remasters), so no match, an ambiguous match, or an index that
+	 * is not yet `ready` all return null — the caller falls back to
+	 * `openPalette` unchanged.
+	 */
+	function resolveEntityIntentTarget(intent: LibraryIntent): UnifiedItemTarget | null {
+		if (index.phase !== 'ready') return null;
+		if (intent.kind === 'artist') {
+			const key = librarySortKey(intent.query);
+			const matches = index.artists.filter((entry) => librarySortKey(entry.name) === key);
+			return matches.length === 1 ? { kind: 'artist', localId: matches[0].id } : null;
+		}
+		if (intent.kind === 'album') {
+			const title = intent.display?.title;
+			const artist = intent.display?.artist;
+			if (!title || !artist) return null;
+			const key = albumIdentityKey(title, artist);
+			const match = index.albums.find(
+				(entry) => albumIdentityKey(entry.title, entry.artist) === key
+			);
+			// Mirrors the album-tile drill rule (UnifiedScopeViews.svelte):
+			// browse-fallback entries (`browse:album:N`, libraryIndexStore.ts
+			// `prepareBrowseFallback`) carry no catalogLocalId and stay inert,
+			// so an intent match must resolve through the catalog identity
+			// too, not the index-local id — otherwise it opens an album page
+			// the album controller UUID-rejects. Fall back to the palette
+			// instead.
+			return match?.catalogLocalId ? { kind: 'album', localId: match.catalogLocalId } : null;
+		}
+		return null;
 	}
 
 	$effect(() => {
@@ -1807,7 +1900,13 @@
 			return;
 		}
 		const intent = claimLibraryIntent(pending.requestId);
-		if (intent?.destination === 'search') openPalette(intent.query);
+		if (intent?.destination !== 'search') return;
+		const resolved = resolveEntityIntentTarget(intent);
+		if (resolved) {
+			void openDrill(resolved);
+			return;
+		}
+		openPalette(intent.query);
 	});
 
 	function retirePaletteAuthority(): Promise<void> {
@@ -2402,6 +2501,23 @@
 		connectionListenersAttached = true;
 	}
 
+	// Cold-start pairing race (proven live 2026-08-17 on the public desktop
+	// build): the page mounts as soon as the engine serves, Core pairing
+	// lands a beat later, and the mount-time loadForClaim dies unpaired —
+	// leaving the library at "Idle." until a manual reload. Re-fire the load
+	// when pairing ARRIVES. The first effect run only records the state (the
+	// mount-time load owns the already-paired path), and a steady paired
+	// state never re-fires, so a genuine catalog error cannot loop.
+	let coreWasPaired: boolean | null = null;
+	$effect(() => {
+		const paired = $isCorePaired;
+		const becamePaired = coreWasPaired === false && paired;
+		coreWasPaired = paired;
+		if (!becamePaired || !resumed || claim === null) return;
+		if (index.phase !== 'idle' && index.phase !== 'error') return;
+		void loadForClaim(claim);
+	});
+
 	function resumeUnified(activation: CommittedLibraryModeActivation | null = null): void {
 		lifecycleGeneration += 1;
 		const pageState = activation?.pageState;
@@ -2409,6 +2525,8 @@
 		let restoredItem: UnifiedItemTarget | null = null;
 		let restoredDetail: UnifiedItemDetailTarget | null = null;
 		let restoredComposition: { title: string | null } | null = null;
+		/** Issue #6: the persisted artist-origin label for a restored album page. */
+		let restoredOriginName: string | null = null;
 		if (pageState && pageState.libraryView === 'unified') {
 			scope = pageState.snapshot.scope;
 			browseController.reset(pageState.snapshot.browseHistory);
@@ -2416,6 +2534,7 @@
 			restoredItem = pageState.snapshot.itemTarget;
 			restoredDetail = pageState.snapshot.itemDetail;
 			restoredComposition = pageState.snapshot.composition;
+			restoredOriginName = pageState.snapshot.itemOriginName;
 			shuffleSeed = pageState.snapshot.surpriseSeed ?? 0;
 			const restoredDensity = pageState.snapshot.density;
 			if (restoredDensity !== null && restoredDensity !== prefs.density) {
@@ -2463,6 +2582,16 @@
 		}
 		if (restoredItem) {
 			void openItemPage(restoredItem, false);
+			// openItemPage's synchronous prefix always clears itemOriginName
+			// (it has no way to see the artist-origin transition during
+			// restore, since itemTarget is still null at this call site) —
+			// re-apply the persisted label immediately after so the back
+			// button keeps naming the artist across reload/popstate
+			// (issue #6). Safe because that prefix, including the clearing
+			// assignment, has already run synchronously by the time control
+			// returns here (album targets yield only on the later `await
+			// openAlbumRead(...)`).
+			if (restoredItem.kind === 'album') itemOriginName = restoredOriginName;
 			itemRecordedHistory = true;
 			// The exact-track child restores AFTER the album page opens: the
 			// page consumes the index once its single-version track order
@@ -2515,6 +2644,7 @@
 		classicSearchOwnerGeneration += 1;
 		itemPageController.close();
 		itemTarget = null;
+		itemOriginName = null;
 		itemRecordedHistory = false;
 		trackChildOwnsEntry = false;
 		itemInvoker = null;
@@ -2615,18 +2745,23 @@
 				</svg>
 			{/if}
 		</button>
+		<div class="spacer"></div>
+		<!-- Search demoted to the small-button family and moved to the right
+		     cluster (owner ruling 2026-08-17): the 280px input-styled box
+		     next to the 15px mark was "ugly, prominent, confusing" — and it
+		     impersonated a text field while really opening the palette.
+		     The palette itself is unchanged. -->
 		<button
 			type="button"
 			class="findbtn"
 			data-testid="unified-find"
+			title="Search — or just type anywhere"
 			disabled={playlistActionState.phase === 'executing' ||
 				browseActionState.phase !== 'idle'}
 			onclick={() => openPalette('')}
 		>
-			<span>⚲</span> Search
-			<span class="kbd mono">TYPE ANYWHERE</span>
+			<span aria-hidden="true">⚲</span> Search
 		</button>
-		<div class="spacer"></div>
 		<button
 			type="button"
 			class="settingsbtn mono"
@@ -2950,7 +3085,7 @@
 						onRetry={retryAlbumPage}
 						onBeginAction={beginSheetAction}
 						onOpenArtist={drillAlbumArtistId ? openAlbumArtist : undefined}
-						editorial={$editorialItemController}
+						editorial={editorialFeatureAvailable ? $editorialItemController : null}
 						onEditorialRetry={retryEditorial}
 						onEditorialFollow={followEditorial}
 						onEditorialBack={backFromEditorialFollow}
@@ -2966,7 +3101,7 @@
 						truncated={drillArtistTruncated}
 						backLabel={itemBackLabel}
 						onBack={backFromItem}
-						editorial={$editorialItemController}
+						editorial={editorialFeatureAvailable ? $editorialItemController : null}
 						onEditorialRetry={retryEditorial}
 						onEditorialFollow={followEditorial}
 						editorialFollowActive={editorialFollowTarget !== null}

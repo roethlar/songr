@@ -238,30 +238,19 @@
   border-color: var(--accent);
 }
 .unified-surface .findbtn {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  background: var(--songr-inset);
+  background: none;
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 9px 14px;
+  padding: 7px 12px;
   color: var(--dim);
-  font-size: 13.5px;
-  cursor: pointer;
-  min-width: 280px;
-}
-.unified-surface .findbtn:hover {
-  border-color: var(--accent);
-  color: var(--soft);
-}
-.unified-surface .findbtn .kbd {
-  margin-left: auto;
   font-size: 10px;
-  letter-spacing: 0.08em;
-  color: var(--songr-kbd);
-  border: 1px solid var(--songr-keyline);
-  border-radius: 4px;
-  padding: 2px 6px;
+  letter-spacing: 0.16em;
+  cursor: pointer;
+}
+.unified-surface .findbtn:hover,
+.unified-surface .findbtn:focus-visible {
+  color: var(--accent2);
+  border-color: var(--accent);
 }
 .unified-surface .spacer {
   flex: 1;

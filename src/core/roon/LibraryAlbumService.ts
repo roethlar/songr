@@ -1530,6 +1530,7 @@ export class LibraryAlbumService {
     session: CoordinatedBrowseSession
   ): CoordinatedBrowseSession {
     const guarded: CoordinatedBrowseSession = {
+      sessionScope: session.sessionScope,
       browse: (options) =>
         this.runResolutionCall(operation, () => session.browse(options)),
       load: (options) =>
@@ -1555,40 +1556,71 @@ export class LibraryAlbumService {
       operation.origin.coreId,
       operation.request.albumLocalId
     );
-    if (
-      !bound ||
-      !operation.albumSignature ||
-      this.readAuthoritySignature(bound) !== operation.albumSignature
-    ) {
+    if (!bound || !operation.albumSignature) {
       throw new LibraryAlbumPhaseError(
         "ALBUM_NOT_FOUND",
         "The album identity changed during the page session"
       );
     }
+    const signature = this.readAuthoritySignature(bound);
+    if (signature === operation.albumSignature) {
+      // A benign publish (revision, resolution status, timestamps, artwork
+      // hints) leaves the signature untouched; re-pin so continuations act
+      // on the fresh snapshot state, never on stale metadata.
+      operation.authority = bound;
+      return;
+    }
+    // A kind transition is benign metadata only in the validated direction
+    // — extended → public on an auxiliary resolution (q10-3) — and only
+    // when every album identity field survived it, including the native
+    // identity the extended authority is keyed by (q10-2). Anything else
+    // is a genuine identity change.
+    if (
+      operation.authority &&
+      operation.authority.kind === "extended" &&
+      bound.kind === "public" &&
+      this.albumIdentitySignature(bound.album) ===
+        this.albumIdentitySignature(operation.authority.album) &&
+      (bound.album.extendedAlbumId ?? "") ===
+        (operation.authority.album.extendedAlbumId ?? "")
+    ) {
+      operation.authority = bound;
+      operation.albumSignature = signature;
+      return;
+    }
+    throw new LibraryAlbumPhaseError(
+      "ALBUM_NOT_FOUND",
+      "The album identity changed during the page session"
+    );
+  }
+
+  /**
+   * The fields that decide WHICH catalog album the page is reading: the same
+   * release by the same artist in the same edition with the same track set.
+   * Revision, resolution status, timestamps, and artwork hints are publish
+   * metadata and never appear here.
+   */
+  private albumIdentitySignature(
+    album: LibraryAlbumReadAuthority["album"]
+  ): string {
+    return JSON.stringify([
+      album.coreId,
+      album.localId,
+      album.exactTitle,
+      album.exactArtist,
+      album.normalizedTitle,
+      album.normalizedArtist,
+      album.editionText,
+      album.trackTitleFingerprint ?? "",
+    ]);
   }
 
   private readAuthoritySignature(bound: LibraryAlbumReadAuthority): string {
-    const albumIdentity = [
-      bound.kind,
-      bound.album.coreId,
-      bound.album.localId,
-      bound.album.artistLocalId ?? "",
-      bound.album.exactTitle,
-      bound.album.exactArtist,
-      bound.album.normalizedTitle,
-      bound.album.normalizedArtist,
-      bound.album.editionText,
-      bound.album.trackTitleFingerprint ?? "",
-      bound.album.resolutionStatus,
-    ];
+    const albumIdentity = this.albumIdentitySignature(bound.album);
     return JSON.stringify(
       bound.kind === "public"
-        ? [
-            ...albumIdentity,
-            bound.artist.localId,
-            bound.artist.resolutionStatus,
-          ]
-        : [...albumIdentity, bound.album.extendedAlbumId ?? ""]
+        ? [albumIdentity, "public", bound.artist.localId]
+        : [albumIdentity, "extended", bound.album.extendedAlbumId ?? ""]
     );
   }
 

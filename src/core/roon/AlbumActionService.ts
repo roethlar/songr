@@ -24,6 +24,7 @@ import {
   Zone,
 } from "../../shared/types";
 import {
+  AlbumActionBrowseHierarchy,
   AlbumActionResolutionError,
   AlbumActionResolverPort,
   AlbumActionVersionSource,
@@ -46,6 +47,10 @@ const CONTROL_CHARACTER = /\p{Cc}/u;
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 const OPAQUE_ID_MAX_LENGTH = 128;
 const ID_ATTEMPTS = 32;
+const ALBUM_ACTION_HIERARCHIES: readonly AlbumActionBrowseHierarchy[] = [
+  "search",
+  "artists",
+];
 type Timer = ReturnType<typeof setTimeout>;
 
 export interface AlbumActionOrigin {
@@ -141,6 +146,8 @@ interface ActionBinding {
   readonly label: string;
   readonly semantic: AlbumActionSemantic;
   readonly itemKey: string;
+  /** Browse hierarchy this itemKey resolves within; required for execution. */
+  readonly hierarchy: AlbumActionBrowseHierarchy;
 }
 
 interface AlbumActionOperation {
@@ -433,7 +440,7 @@ export class AlbumActionService {
       await this.coordinator.executeAction(
         operation.access,
         {
-          hierarchy: "search",
+          hierarchy: binding.hierarchy,
           zoneId: operation.request.zoneId,
           itemKey: binding.itemKey,
         },
@@ -644,6 +651,7 @@ export class AlbumActionService {
         !ALBUM_ACTION_SEMANTICS.includes(action.semantic) ||
         typeof action.itemKey !== "string" ||
         action.itemKey.length === 0 ||
+        !ALBUM_ACTION_HIERARCHIES.includes(action.hierarchy) ||
         labels.has(action.label) ||
         itemKeys.has(action.itemKey)
       ) {
@@ -662,6 +670,7 @@ export class AlbumActionService {
           label: action.label,
           semantic: action.semantic,
           itemKey: action.itemKey,
+          hierarchy: action.hierarchy,
         })
       );
     }
@@ -766,6 +775,7 @@ export class AlbumActionService {
     session: CoordinatedBrowseSession
   ): CoordinatedBrowseSession {
     const guarded: CoordinatedBrowseSession = {
+      sessionScope: session.sessionScope,
       browse: (options) =>
         this.runResolutionCall(operation, () => session.browse(options)),
       load: (options) =>

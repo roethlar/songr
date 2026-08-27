@@ -182,15 +182,25 @@ Requires [NSSM](https://nssm.cc/) (`winget install nssm` or
 Options: `-Port`, `-InstallDir` (default: `C:\Program Files\Songr`),
 `-Reinstall`, `-NoStart`
 
+### Docker (published image)
+
+```bash
+docker run -d --name songr --network host \
+  -v "$PWD/config":/app/config -v "$PWD/data":/app/data \
+  ghcr.io/roethlar/songr:latest
+```
+
+Host networking is required on Linux — Roon Core discovery uses
+mDNS/multicast, which does not cross Docker's default bridge network.
+Every setting has a working default; pass `-e PORT=…` etc. to override.
+
 ### Docker (from source)
 
 ```bash
+cp .env.example .env   # optional — only to override defaults
 docker compose build
 docker compose up -d
 ```
-
-Or skip the build and point the compose service at the published image,
-`ghcr.io/roethlar/songr:<version>`.
 
 The `./config/` and `./data/` volumes persist the pairing token, artwork cache,
 and Recently played history across restarts. If you override a persistence path

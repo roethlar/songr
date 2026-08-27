@@ -3,7 +3,12 @@ export { zonesStore, zoneMapStore, loadZones, setZonesSnapshot, upsertZone, remo
 export { interpolatedSeekStore } from './interpolatedSeekStore';
 export { nowPlayingStore, nowPlayingList, setNowPlaying, removeNowPlaying, resetNowPlaying } from './nowPlayingStore';
 export { queueStore, setQueueSnapshot, clearQueue, resetQueue } from './queueStore';
-export { selectedZoneStore, setSelectedZone } from './selectedZoneStore';
+export {
+	selectedZoneStore,
+	setSelectedZone,
+	setEffectiveZone,
+	getPinnedZone
+} from './selectedZoneStore';
 export {
 	browseStore,
 	setBrowseResult,

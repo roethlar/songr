@@ -72,6 +72,18 @@ interface CompleteListOptions {
   readonly maxPages: number;
 }
 
+/** One artist's ephemeral location inside the current browse session's root. */
+interface ArtistLocator {
+  readonly itemKey: string;
+  readonly offset: number;
+}
+
+/** Locators are valid only inside the exact browse session that observed them. */
+interface ArtistLocatorCache {
+  readonly scope: string;
+  readonly entries: Map<string, ArtistLocator>;
+}
+
 function canonicalDisplayText(value: unknown): string | null {
   if (typeof value !== "string" || value.length > CATALOG_DISPLAY_TEXT_MAX_LENGTH) {
     return null;
@@ -127,13 +139,30 @@ function resolverError(
 
 /**
  * Resolves one stable catalog artist into the tab's retained live album level.
- * Every ephemeral key remains inside this method and its coordinated session.
+ * Every ephemeral key remains server-side and is scoped to the exact
+ * coordinated session that observed it.
  */
 export class DiscographyResolver {
+  /**
+   * Item keys rotate with every browse session, so the locator cache is
+   * scoped to session.sessionScope and replaced by each complete root walk.
+   */
+  private locatorCache?: ArtistLocatorCache;
+
   public async resolve(
     session: CoordinatedBrowseSession,
     artist: Readonly<ArtistRef>
   ): Promise<DiscographyResolution> {
+    const locator = this.cachedArtistLocator(session, artist.normalizedName);
+    if (locator) {
+      const direct = await this.resolveFromCachedLocator(
+        session,
+        artist,
+        locator
+      );
+      if (direct) return direct;
+    }
+
     const firstRoot = await session.browse({
       hierarchy: "artists",
       offset: 0,
@@ -146,6 +175,7 @@ export class DiscographyResolver {
       maxRows: TIMELINE_ARTIST_ROOT_MAX_ROWS,
       maxPages: TIMELINE_ARTIST_ROOT_MAX_PAGES,
     });
+    this.rememberArtistRoot(session, rootRows);
     const matches = rootRows.filter(
       (item) =>
         isStructural(item) &&
@@ -168,13 +198,101 @@ export class DiscographyResolver {
     }
 
     const artistRow = matches[0];
-    let current = await session.browse({
+    const first = await session.browse({
       hierarchy: "artists",
       itemKey: artistRow.itemKey,
       offset: 0,
       pageSize: TIMELINE_ARTIST_PAGE_SIZE,
     });
+    return this.resolveFromArtistLevel(
+      session,
+      artist,
+      first,
+      canonicalDisplayText(artistRow.title) ?? artist.exactName,
+      opaqueHint(artistRow.imageKey)
+    );
+  }
 
+  /**
+   * Try one key-scoped browse before paying for a full artist-root walk. The
+   * returned level title must still normalize to the requested artist; any
+   * mismatch or browse failure discards the entry and falls back to the
+   * complete scan.
+   */
+  private async resolveFromCachedLocator(
+    session: CoordinatedBrowseSession,
+    artist: Readonly<ArtistRef>,
+    locator: ArtistLocator
+  ): Promise<DiscographyResolution | null> {
+    let current: BrowseResult;
+    try {
+      current = await session.browse({
+        hierarchy: "artists",
+        itemKey: locator.itemKey,
+        offset: 0,
+        pageSize: TIMELINE_ARTIST_PAGE_SIZE,
+      });
+    } catch {
+      this.dropArtistLocator(session, artist.normalizedName);
+      return null;
+    }
+    if (
+      typeof current.title !== "string" ||
+      normalizeCatalogText(current.title) !== artist.normalizedName
+    ) {
+      this.dropArtistLocator(session, artist.normalizedName);
+      return null;
+    }
+    return this.resolveFromArtistLevel(
+      session,
+      artist,
+      current,
+      canonicalDisplayText(current.title) ?? artist.exactName,
+      undefined
+    );
+  }
+
+  private cachedArtistLocator(
+    session: CoordinatedBrowseSession,
+    normalizedName: string
+  ): ArtistLocator | undefined {
+    if (this.locatorCache?.scope !== session.sessionScope) return undefined;
+    return this.locatorCache.entries.get(normalizedName);
+  }
+
+  private dropArtistLocator(
+    session: CoordinatedBrowseSession,
+    normalizedName: string
+  ): void {
+    if (this.locatorCache?.scope !== session.sessionScope) return;
+    this.locatorCache.entries.delete(normalizedName);
+  }
+
+  private rememberArtistRoot(
+    session: CoordinatedBrowseSession,
+    rootRows: readonly BrowseItem[]
+  ): void {
+    const entries = new Map<string, ArtistLocator>();
+    rootRows.forEach((item, index) => {
+      if (!isStructural(item)) return;
+      const title = canonicalDisplayText(item.title);
+      if (title === null) return;
+      const normalized = normalizeCatalogText(title);
+      if (!entries.has(normalized)) {
+        entries.set(normalized, { itemKey: item.itemKey as string, offset: index });
+      }
+    });
+    this.locatorCache = { scope: session.sessionScope, entries };
+  }
+
+  private async resolveFromArtistLevel(
+    session: CoordinatedBrowseSession,
+    artist: Readonly<ArtistRef>,
+    first: BrowseResult,
+    exactName: string,
+    imageKeyHint: string | undefined
+  ): Promise<DiscographyResolution> {
+    let current = first;
     for (let depth = 0; depth <= TIMELINE_DISCOGRAPHY_MAX_DEPTH; depth += 1) {
       if (this.looksLikeDiscography(current, artist.normalizedName)) {
         const rows = await this.readCompleteList(session, current, {
@@ -186,7 +304,11 @@ export class DiscographyResolver {
         });
         return {
           kind: "resolved",
-          observation: this.buildObservation(artistRow, artist, rows),
+          observation: this.buildObservationFromIdentity(
+            exactName,
+            imageKeyHint,
+            rows
+          ),
         };
       }
 
@@ -304,18 +426,6 @@ export class DiscographyResolver {
       structural.every(
         (item) => item.hint === "list" || item.hint === "action_list"
       )
-    );
-  }
-
-  private buildObservation(
-    artistRow: BrowseItem,
-    catalogArtist: Readonly<ArtistRef>,
-    rows: readonly BrowseItem[]
-  ): ResolvedSelectedArtistObservation {
-    return this.buildObservationFromIdentity(
-      canonicalDisplayText(artistRow.title) ?? catalogArtist.exactName,
-      opaqueHint(artistRow.imageKey),
-      rows
     );
   }
 

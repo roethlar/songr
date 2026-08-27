@@ -7,7 +7,9 @@ import { resolveLibraryScopeSlotsModule } from './src/lib/libraryFeatures/resolv
 // Build-time revision stamp, surfaced in the sidebar footer via
 // `$app/environment`'s `version` and used by SvelteKit for stale-
 // deployment detection. See buildRevision.js for the resolution
-// order and why the fallback is unique per build, never a constant.
+// order and why the fallback must be deterministic within a build
+// (per-environment config evaluation) yet never a constant across
+// releases.
 const revision = resolveBuildRevision();
 
 /** @type {import('@sveltejs/kit').Config} */

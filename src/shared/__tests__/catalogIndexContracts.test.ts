@@ -169,6 +169,52 @@ describe("normalizeCatalogIndexResponse", () => {
   });
 });
 
+describe("artist imageKeyHint threading", () => {
+  it("serves the persisted artist image key hint on the index entry", () => {
+    const built = buildCatalogIndexResponse(status(), {
+      artists: [
+        { ...artist(), imageKeyHint: "artist-img-1" },
+        artist(ARTIST_ID_2, "Second"),
+      ],
+      albums: [album()],
+    });
+    expect(built.artists[0].imageKeyHint).toBe("artist-img-1");
+    expect(built.artists[1].imageKeyHint).toBeUndefined();
+    expect(normalizeCatalogIndexResponse(wireCopy(built))).toEqual(built);
+  });
+
+  it("omits the key entirely when the artist ref carries none", () => {
+    const built = buildCatalogIndexResponse(status(), {
+      artists: [artist()],
+      albums: [album()],
+    });
+    expect(built.artists[0]).toEqual({
+      localId: ARTIST_ID,
+      name: "Björk",
+      knownAlbumCount: 1,
+      countComplete: true,
+    });
+    expect("imageKeyHint" in built.artists[0]).toBe(false);
+  });
+
+  it.each<[string, (value: any) => void]>([
+    ["empty artist imageKeyHint", (v) => (v.artists[0].imageKeyHint = "")],
+    [
+      "control character in artist imageKeyHint",
+      (v) => (v.artists[0].imageKeyHint = "a\u0007b"),
+    ],
+    ["non-string artist imageKeyHint", (v) => (v.artists[0].imageKeyHint = 7)],
+  ])("rejects %s", (_name, mutate) => {
+    const built = buildCatalogIndexResponse(status(), {
+      artists: [{ ...artist(), imageKeyHint: "artist-img-1" }],
+      albums: [album()],
+    });
+    const damaged = wireCopy(built) as any;
+    mutate(damaged);
+    expect(normalizeCatalogIndexResponse(damaged)).toBeNull();
+  });
+});
+
 describe("native capability field (Slice 4)", () => {
   function valid(): CatalogIndexResponse {
     return buildCatalogIndexResponse(

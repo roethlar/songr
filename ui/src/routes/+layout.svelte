@@ -15,6 +15,8 @@
 		nowPlayingList,
 		selectedZoneStore,
 		setSelectedZone,
+		setEffectiveZone,
+		getPinnedZone,
 		pushCommandFeedback,
 		socketStatusStore
 	} from '$lib/stores';
@@ -37,6 +39,7 @@
 	import OnboardingFlow from '$lib/components/OnboardingFlow.svelte';
 	import AppSettingsMenu from '$lib/components/AppSettingsMenu.svelte';
 	import NowPlayingOverlay from '$lib/components/NowPlayingOverlay.svelte';
+	import TransportIcon from '$lib/components/TransportIcon.svelte';
 	import { openNowPlayingOverlay } from '$lib/stores/nowPlayingOverlayStore';
 	import ZoneGroupingModal from '$lib/components/ZoneGroupingModal.svelte';
 	import { openZoneGrouping } from '$lib/stores/zoneGroupingStore';
@@ -125,8 +128,18 @@
 			// Roon Core reconnect. Just leave selected as-is so it rehydrates.
 			return;
 		}
+		const pinned = getPinnedZone();
+		if (zones.some((z) => z.zone_id === pinned)) {
+			// The pinned zone is back — return to it. In-memory only; it is
+			// already the persisted value, so there is nothing new to write.
+			if (selected !== pinned) setEffectiveZone(pinned);
+			return;
+		}
+		// Pinned zone is temporarily absent (Core reconnect, regroup changing
+		// zone_id, partial first delivery). Fall back to the first available
+		// zone in memory only — never persist the fallback over the user's pin.
 		if (!selected || !zones.some((z) => z.zone_id === selected)) {
-			setSelectedZone(zones[0].zone_id);
+			setEffectiveZone(zones[0].zone_id);
 		}
 	});
 
@@ -472,7 +485,9 @@
 			<span style:width={`${progress * 100}%`}></span>
 		</div>
 		<div class="unified-transport-controls">
-			<button type="button" onclick={previous} disabled={!canPrev || commandInFlight} aria-label="Previous">⏮</button>
+			<button type="button" onclick={previous} disabled={!canPrev || commandInFlight} aria-label="Previous"
+				><TransportIcon kind="previous" /></button
+			>
 			<button
 				type="button"
 				class="big"
@@ -480,9 +495,11 @@
 				disabled={!canPlay || commandInFlight}
 				aria-label={isPlaying ? 'Pause' : 'Play'}
 			>
-				{isPlaying ? '⏸' : '▶'}
+				<TransportIcon kind={isPlaying ? 'pause' : 'play'} size={18} />
 			</button>
-			<button type="button" onclick={next} disabled={!canNext || commandInFlight} aria-label="Next">⏭</button>
+			<button type="button" onclick={next} disabled={!canNext || commandInFlight} aria-label="Next"
+				><TransportIcon kind="next" /></button
+			>
 		</div>
 		{#if volumeOutput?.volume && volumeIsIncremental}
 			<div
@@ -849,6 +866,12 @@
 
 	.unified-volume input {
 		cursor: pointer;
+	}
+
+	.unified-volume > span:last-child {
+		min-width: 4ch;
+		text-align: right;
+		font-variant-numeric: tabular-nums;
 	}
 
 	.unified-volume input::-webkit-slider-thumb {

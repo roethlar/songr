@@ -14,6 +14,7 @@ import {
 } from "../../../shared/catalogContracts";
 import { BrowseItem, BrowseResult } from "../../../shared/types";
 import {
+  CatalogArtistAlbumBindingBatch,
   CatalogAuxiliaryArtistResolver,
   CatalogBrowseCoordinator,
   CatalogHierarchy,
@@ -21,9 +22,11 @@ import {
   CatalogServiceError,
 } from "../CatalogService";
 import {
+  BrowseSessionCoordinatorError,
   CatalogSessionHandle,
   CoordinatedBrowseSession,
 } from "../../roon/BrowseSessionCoordinator";
+import { DiscographyResolution } from "../../roon/DiscographyResolver";
 import { CatalogPersistence } from "../CatalogPersistence";
 import {
   CATALOG_SELECTED_ARTIST_OBSERVATION_SOURCE_CONTRACT,
@@ -72,6 +75,12 @@ function deferred(): {
   return { promise, resolve };
 }
 
+function flushPromises(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 class FakeCatalogCoordinator implements CatalogBrowseCoordinator {
   public readonly acquireCalls: string[] = [];
   public readonly runCalls: string[] = [];
@@ -80,9 +89,11 @@ class FakeCatalogCoordinator implements CatalogBrowseCoordinator {
   public pageTransform?: (context: PageContext) => BrowseResult;
   public postRunError?: Error;
   public releaseError?: Error;
+  public readonly browseOptions: Array<Record<string, unknown>> = [];
+  public itemKeyPage?: (itemKey: string) => BrowseResult;
 
   private readonly rows = new Map<string, CatalogRows>();
-  private activeCatalogCore: string | null = null;
+  private readonly activeCatalogCores = new Set<string>();
   private readonly blockers = new Map<
     string,
     { reached: ReturnType<typeof deferred>; gate: ReturnType<typeof deferred> }
@@ -112,10 +123,10 @@ class FakeCatalogCoordinator implements CatalogBrowseCoordinator {
   }
 
   public acquireCatalog(coreId: string): CatalogSessionHandle {
-    if (this.activeCatalogCore !== null) {
+    if (this.activeCatalogCores.has(coreId)) {
       throw new Error("overlapping catalog session");
     }
-    this.activeCatalogCore = coreId;
+    this.activeCatalogCores.add(coreId);
     this.acquireCalls.push(coreId);
     this.handleSequence += 1;
     return {
@@ -141,20 +152,26 @@ class FakeCatalogCoordinator implements CatalogBrowseCoordinator {
     _handle: CatalogSessionHandle
   ): Promise<void> {
     this.releaseCalls.push(coreId);
-    this.activeCatalogCore = null;
+    this.activeCatalogCores.delete(coreId);
     if (this.releaseError) throw this.releaseError;
   }
 
   private session(coreId: string): CoordinatedBrowseSession {
     return {
-      browse: async (options) =>
-        this.page(
+      sessionScope: `catalog-session-${coreId}`,
+      browse: async (options) => {
+        this.browseOptions.push(options as Record<string, unknown>);
+        if (options.itemKey && this.itemKeyPage) {
+          return this.itemKeyPage(options.itemKey);
+        }
+        return this.page(
           coreId,
           "browse",
           options.hierarchy as CatalogHierarchy,
           options.offset ?? 0,
           options.pageSize ?? 100
-        ),
+        );
+      },
       load: async (options) =>
         this.page(
           coreId,
@@ -305,6 +322,7 @@ function service(
     createLocalId?: () => string;
     persistence?: CatalogPersistence;
     auxiliaryArtistResolver?: CatalogAuxiliaryArtistResolver;
+    catalogSessionIdleMs?: number;
   } = {}
 ): CatalogService {
   return new CatalogService(coordinator, logger, {
@@ -314,6 +332,7 @@ function service(
     createLocalId: options.createLocalId ?? idFactory(),
     persistence: options.persistence,
     auxiliaryArtistResolver: options.auxiliaryArtistResolver,
+    catalogSessionIdleMs: options.catalogSessionIdleMs,
   });
 }
 
@@ -487,7 +506,7 @@ describe("CatalogService", () => {
     )).toBe(true);
     expect(coordinator.acquireCalls).toEqual(["core-a"]);
     expect(coordinator.runCalls).toEqual(["core-a"]);
-    expect(coordinator.releaseCalls).toEqual(["core-a"]);
+    expect(coordinator.releaseCalls).toEqual([]);
     expect(metrics.albums).toEqual({
       pages: 46,
       scannedRows: 4_541,
@@ -704,7 +723,7 @@ describe("CatalogService", () => {
 
     expect(catalog.getSnapshot("core-a")).toBe(good);
     expect(catalog.getSnapshot("core-a")?.revision).toBe(1);
-    expect(coordinator.releaseCalls).toHaveLength(2);
+    expect(coordinator.releaseCalls).toHaveLength(0);
   });
 
   it("rejects a catalog over the configured cap without replacing a good snapshot", async () => {
@@ -732,7 +751,7 @@ describe("CatalogService", () => {
     await expect(catalog.scan("core-a")).rejects.toThrow("STALE_GENERATION");
 
     expect(catalog.getSnapshot("core-a")).toBe(good);
-    expect(coordinator.releaseCalls).toHaveLength(2);
+    expect(coordinator.releaseCalls).toHaveLength(0);
   });
 
   it("invalidates an in-flight candidate when its Core disconnects", async () => {
@@ -777,7 +796,7 @@ describe("CatalogService", () => {
     expect(left.snapshot.coreId).toBe("core-a");
     expect(right.snapshot.coreId).toBe("core-b");
     expect(coordinator.acquireCalls).toEqual(["core-a", "core-b"]);
-    expect(coordinator.releaseCalls).toEqual(["core-a", "core-b"]);
+    expect(coordinator.releaseCalls).toEqual([]);
     expect(catalog.getSnapshot("core-a")?.coreId).toBe("core-a");
     expect(catalog.getSnapshot("core-b")?.coreId).toBe("core-b");
   });
@@ -799,8 +818,8 @@ describe("CatalogService", () => {
     const retried = await catalog.scan("core-a");
     expect(retried.snapshot.albums).toHaveLength(5);
     expect(retried.snapshot.revision).toBe(1);
-    expect(coordinator.acquireCalls).toEqual(["core-a", "core-a"]);
-    expect(coordinator.releaseCalls).toEqual(["core-a", "core-a"]);
+    expect(coordinator.acquireCalls).toEqual(["core-a"]);
+    expect(coordinator.releaseCalls).toEqual([]);
   });
 
   it("persists the complete candidate before publishing it in memory", async () => {
@@ -1412,7 +1431,7 @@ describe("CatalogService", () => {
     expect(catalog.getSnapshot("core-a")).toBe(good);
   });
 
-  it("preserves a primary scan error when catalog cleanup also fails", async () => {
+  it("preserves a primary scan error when the retained session release also fails", async () => {
     const coordinator = new FakeCatalogCoordinator(rows(2, 5));
     const catalog = service(coordinator, { pageSize: 2 });
     const primary = new Error("primary page failure");
@@ -1423,25 +1442,38 @@ describe("CatalogService", () => {
     coordinator.releaseError = new Error("cleanup failure");
 
     await expect(catalog.scan("core-a")).rejects.toBe(primary);
-    expect(coordinator.releaseCalls).toEqual(["core-a"]);
     expect(catalog.getSnapshot("core-a")).toBeNull();
+
+    catalog.markCoreDisconnected("core-a");
+    await flushPromises();
+    await flushPromises();
+    expect(coordinator.releaseCalls).toEqual(["core-a"]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: coordinator.releaseError }),
+      "Retained catalog session release failed"
+    );
   });
 
-  it("does not publish when cleanup alone rejects a complete candidate", async () => {
+  it("logs and reacquires when a retained session release fails on disconnect", async () => {
     const coordinator = new FakeCatalogCoordinator(rows(2, 2));
     const catalog = service(coordinator, { pageSize: 2 });
     const first = await catalog.scan("core-a");
     coordinator.setRows("core-a", rows(3, 4));
     coordinator.releaseError = new Error("cleanup lost the catalog generation");
 
-    await expect(catalog.scan("core-a")).rejects.toThrow(
-      "cleanup lost the catalog generation"
+    catalog.markCoreDisconnected("core-a");
+    await flushPromises();
+    await flushPromises();
+    expect(coordinator.releaseCalls).toEqual(["core-a"]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: coordinator.releaseError }),
+      "Retained catalog session release failed"
     );
 
-    expect(catalog.getSnapshot("core-a")).toBe(first.snapshot);
-    expect(catalog.getSnapshot("core-a")?.revision).toBe(1);
-    expect(catalog.getLastScanMetrics("core-a")).toBe(first.metrics);
-    expect(coordinator.releaseCalls).toHaveLength(2);
+    coordinator.releaseError = undefined;
+    const second = await catalog.scan("core-a");
+    expect(second.snapshot.revision).toBe(first.snapshot.revision + 1);
+    expect(coordinator.acquireCalls).toEqual(["core-a", "core-a"]);
   });
 
   it("does not publish when the local-ID generator cannot produce unique UUIDs", async () => {
@@ -1453,7 +1485,7 @@ describe("CatalogService", () => {
       code: "INVALID_CONFIGURATION",
     });
     expect(catalog.getSnapshot("core-a")).toBeNull();
-    expect(coordinator.releaseCalls).toEqual(["core-a"]);
+    expect(coordinator.releaseCalls).toEqual([]);
   });
 
   it("records scan timing without choosing a refresh policy", async () => {
@@ -1675,9 +1707,9 @@ describe("CatalogService", () => {
     );
     expect(Object.isFrozen(left)).toBe(true);
     expect(Object.isFrozen(left?.albums)).toBe(true);
-    expect(coordinator.acquireCalls).toHaveLength(acquireBefore + 1);
+    expect(coordinator.acquireCalls).toHaveLength(acquireBefore);
     expect(coordinator.runCalls).toHaveLength(runBefore + 1);
-    expect(coordinator.releaseCalls).toHaveLength(releaseBefore + 1);
+    expect(coordinator.releaseCalls).toHaveLength(releaseBefore);
 
     const cached = await catalog.loadArtistAlbums(
       "core-a",
@@ -1687,7 +1719,7 @@ describe("CatalogService", () => {
     );
     expect(cached?.status.revision).toBe(2);
     expect(resolve).toHaveBeenCalledTimes(1);
-    expect(coordinator.acquireCalls).toHaveLength(acquireBefore + 1);
+    expect(coordinator.acquireCalls).toHaveLength(acquireBefore);
   });
 
   it("serializes an auxiliary load behind an active scan on the same catalog session", async () => {
@@ -1719,15 +1751,15 @@ describe("CatalogService", () => {
       8
     );
     await Promise.resolve();
-    expect(coordinator.acquireCalls).toHaveLength(2);
+    expect(coordinator.acquireCalls).toHaveLength(1);
 
     blocked.release();
     await expect(refresh).resolves.toMatchObject({
       snapshot: { revision: initial.revision + 1 },
     });
     await expect(auxiliary).rejects.toMatchObject({ code: "REVISION_CONFLICT" });
-    expect(coordinator.acquireCalls).toHaveLength(3);
-    expect(coordinator.releaseCalls).toHaveLength(3);
+    expect(coordinator.acquireCalls).toHaveLength(1);
+    expect(coordinator.releaseCalls).toHaveLength(0);
   });
 
   it("rejects a competing revision before auxiliary persistence or overlay publication", async () => {
@@ -1787,7 +1819,7 @@ describe("CatalogService", () => {
       total: 0,
       albums: [],
     });
-    expect(coordinator.releaseCalls).toHaveLength(2);
+    expect(coordinator.releaseCalls).toHaveLength(0);
   });
 
   it("rejects a disconnected blocked auxiliary resolver without publishing its overlay", async () => {
@@ -1832,6 +1864,8 @@ describe("CatalogService", () => {
 
     await expect(pending).rejects.toMatchObject({ code: "INVALID_MERGE" });
     expect(resolve).toHaveBeenCalledTimes(1);
+    await flushPromises();
+    await flushPromises();
     expect(coordinator.releaseCalls).toHaveLength(releaseBefore + 1);
     expect(persistence.writes).toHaveLength(writesBefore);
     expect(catalog.getSnapshot("core-a")).toBe(scanned);
@@ -1849,7 +1883,7 @@ describe("CatalogService", () => {
     });
   });
 
-  it("releases the catalog session and publishes nothing when auxiliary resolution is not unique", async () => {
+  it("keeps the retained catalog session and publishes nothing when auxiliary resolution is not unique", async () => {
     const coordinator = new FakeCatalogCoordinator({
       artists: [item("Auxiliary Artist", "artist-live")],
       albums: [],
@@ -1884,7 +1918,510 @@ describe("CatalogService", () => {
       )
     ).rejects.toMatchObject({ code: "AUXILIARY_ARTIST_UNAVAILABLE" });
     expect(catalog.getSnapshot("core-a")).toBe(scanned);
-    expect(coordinator.releaseCalls).toHaveLength(releaseBefore + 1);
+    expect(coordinator.releaseCalls).toHaveLength(releaseBefore);
+  });
+
+  it("serves the unresolved response without re-invoking the resolver while an auxiliary failure is fresh", async () => {
+    const now = Date.parse("2026-07-15T00:00:00.000Z");
+    const coordinator = new FakeCatalogCoordinator({
+      artists: [item("Auxiliary Artist", "artist-live")],
+      albums: [],
+    });
+    const resolve = jest.fn(
+      async (
+        _session: CoordinatedBrowseSession,
+        _artistValue: Readonly<ArtistRef>
+      ): Promise<DiscographyResolution> => {
+        throw new Error("browse session timed out");
+      }
+    );
+    const catalog = service(coordinator, {
+      now: () => now,
+      auxiliaryArtistResolver: { resolve },
+    });
+    const scanned = (await catalog.scan("core-a")).snapshot;
+    const artistLocalId = scanned.artists[0].localId;
+
+    await expect(
+      catalog.loadArtistAlbums("core-a", artistLocalId, scanned.revision, 8)
+    ).rejects.toThrow("browse session timed out");
+    expect(resolve).toHaveBeenCalledTimes(1);
+    const acquireBefore = coordinator.acquireCalls.length;
+
+    const suppressed = await catalog.loadArtistAlbums(
+      "core-a",
+      artistLocalId,
+      scanned.revision,
+      8
+    );
+    expect(suppressed).toMatchObject({
+      status: { revision: scanned.revision },
+      artist: { localId: artistLocalId, resolutionStatus: "unresolved" },
+      total: 0,
+      albums: [],
+    });
+    expect(normalizeCatalogArtistAlbumsResponse(suppressed)).toEqual(suppressed);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(coordinator.acquireCalls).toHaveLength(acquireBefore);
+  });
+
+  it("re-invokes the resolver after the failure TTL expires and clears the entry on success", async () => {
+    let now = Date.parse("2026-07-15T00:00:00.000Z");
+    const coordinator = new FakeCatalogCoordinator({
+      artists: [item("Auxiliary Artist", "artist-live")],
+      albums: [],
+    });
+    let fail = true;
+    const resolve = jest.fn(
+      async (
+        _session: CoordinatedBrowseSession,
+        artistValue: Readonly<ArtistRef>
+      ): Promise<DiscographyResolution> => {
+        if (fail) throw new Error("browse session timed out");
+        return {
+          kind: "resolved" as const,
+          observation: auxiliaryObservation(artistValue),
+        };
+      }
+    );
+    const catalog = service(coordinator, {
+      now: () => now,
+      auxiliaryArtistResolver: { resolve },
+    });
+    const scanned = (await catalog.scan("core-a")).snapshot;
+    const artistLocalId = scanned.artists[0].localId;
+
+    await expect(
+      catalog.loadArtistAlbums("core-a", artistLocalId, scanned.revision, 8)
+    ).rejects.toThrow("browse session timed out");
+
+    now += 30_000;
+    const suppressed = await catalog.loadArtistAlbums(
+      "core-a",
+      artistLocalId,
+      scanned.revision,
+      8
+    );
+    expect(suppressed?.artist.resolutionStatus).toBe("unresolved");
+    expect(resolve).toHaveBeenCalledTimes(1);
+
+    now += 31_000;
+    fail = false;
+    const resolved = await catalog.loadArtistAlbums(
+      "core-a",
+      artistLocalId,
+      scanned.revision,
+      8
+    );
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(resolved).toMatchObject({
+      status: { revision: scanned.revision + 1 },
+      artist: { localId: artistLocalId, resolutionStatus: "resolved" },
+      total: 1,
+    });
+    expect(normalizeCatalogArtistAlbumsResponse(resolved)).toEqual(resolved);
+  });
+
+  it("expires the negative-cache entry at the exact TTL boundary", async () => {
+    let now = Date.parse("2026-07-15T00:00:00.000Z");
+    const coordinator = new FakeCatalogCoordinator({
+      artists: [item("Auxiliary Artist", "artist-live")],
+      albums: [],
+    });
+    const resolve = jest.fn(
+      async (
+        _session: CoordinatedBrowseSession,
+        _artistValue: Readonly<ArtistRef>
+      ): Promise<DiscographyResolution> => {
+        throw new Error("browse session timed out");
+      }
+    );
+    const catalog = service(coordinator, {
+      now: () => now,
+      auxiliaryArtistResolver: { resolve },
+    });
+    const scanned = (await catalog.scan("core-a")).snapshot;
+    const artistLocalId = scanned.artists[0].localId;
+
+    await expect(
+      catalog.loadArtistAlbums("core-a", artistLocalId, scanned.revision, 8)
+    ).rejects.toThrow("browse session timed out");
+
+    now += 60_000;
+    await expect(
+      catalog.loadArtistAlbums("core-a", artistLocalId, scanned.revision, 8)
+    ).rejects.toThrow("browse session timed out");
+    expect(resolve).toHaveBeenCalledTimes(2);
+  });
+
+  it("expires the negative-cache entry when the clock moves backward", async () => {
+    let now = Date.parse("2026-07-15T00:00:00.000Z");
+    const coordinator = new FakeCatalogCoordinator({
+      artists: [item("Auxiliary Artist", "artist-live")],
+      albums: [],
+    });
+    const resolve = jest.fn(
+      async (
+        _session: CoordinatedBrowseSession,
+        _artistValue: Readonly<ArtistRef>
+      ): Promise<DiscographyResolution> => {
+        throw new Error("browse session timed out");
+      }
+    );
+    const catalog = service(coordinator, {
+      now: () => now,
+      auxiliaryArtistResolver: { resolve },
+    });
+    const scanned = (await catalog.scan("core-a")).snapshot;
+    const artistLocalId = scanned.artists[0].localId;
+
+    await expect(
+      catalog.loadArtistAlbums("core-a", artistLocalId, scanned.revision, 8)
+    ).rejects.toThrow("browse session timed out");
+
+    now -= 3_600_000;
+    await expect(
+      catalog.loadArtistAlbums("core-a", artistLocalId, scanned.revision, 8)
+    ).rejects.toThrow("browse session timed out");
+    expect(resolve).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears a fresh auxiliary failure on an explicit catalog refresh", async () => {
+    const now = Date.parse("2026-07-15T00:00:00.000Z");
+    const coordinator = new FakeCatalogCoordinator({
+      artists: [item("Auxiliary Artist", "artist-live")],
+      albums: [],
+    });
+    let fail = true;
+    const resolve = jest.fn(
+      async (
+        _session: CoordinatedBrowseSession,
+        artistValue: Readonly<ArtistRef>
+      ): Promise<DiscographyResolution> => {
+        if (fail) throw new Error("browse session timed out");
+        return {
+          kind: "resolved" as const,
+          observation: auxiliaryObservation(artistValue),
+        };
+      }
+    );
+    const catalog = service(coordinator, {
+      now: () => now,
+      auxiliaryArtistResolver: { resolve },
+    });
+    const scanned = (await catalog.scan("core-a")).snapshot;
+
+    await expect(
+      catalog.loadArtistAlbums(
+        "core-a",
+        scanned.artists[0].localId,
+        scanned.revision,
+        8
+      )
+    ).rejects.toThrow("browse session timed out");
+    expect(resolve).toHaveBeenCalledTimes(1);
+
+    const refreshed = (await catalog.scan("core-a")).snapshot;
+    expect(refreshed.revision).toBe(scanned.revision + 1);
+    fail = false;
+
+    const resolved = await catalog.loadArtistAlbums(
+      "core-a",
+      refreshed.artists[0].localId,
+      refreshed.revision,
+      8
+    );
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(resolved?.artist.resolutionStatus).toBe("resolved");
+  });
+
+  it("retains one catalog session across auxiliary loads so the resolver locator cache fast-paths", async () => {
+    const coordinator = new FakeCatalogCoordinator({
+      artists: [
+        item("First Artist", "artist-1"),
+        item("Second Artist", "artist-2"),
+      ],
+      albums: [],
+    });
+    coordinator.itemKeyPage = (itemKey) => ({
+      level: 1,
+      offset: 0,
+      count: 1,
+      totalCount: 1,
+      title: itemKey === "artist-1" ? "First Artist" : "Second Artist",
+      items: [
+        {
+          title: itemKey === "artist-1" ? "First Album" : "Second Album",
+          itemKey: `${itemKey}-album`,
+          hint: "list",
+          itemType: "album",
+          isLoadable: true,
+          isPlayable: false,
+        },
+      ],
+    });
+    const catalog = service(coordinator);
+    const scanned = (await catalog.scan("core-a")).snapshot;
+    const firstArtist = scanned.artists.find(
+      (candidate) => candidate.exactName === "First Artist"
+    );
+    const secondArtist = scanned.artists.find(
+      (candidate) => candidate.exactName === "Second Artist"
+    );
+    if (!firstArtist || !secondArtist) throw new Error("scan lost the artists");
+
+    const first = await catalog.loadArtistAlbums(
+      "core-a",
+      firstArtist.localId,
+      scanned.revision,
+      8
+    );
+    expect(first?.artist.resolutionStatus).toBe("resolved");
+    const rootWalksAfterFirst = coordinator.browseOptions.filter(
+      (options) => options.popAll === true && options.hierarchy === "artists"
+    ).length;
+    const second = await catalog.loadArtistAlbums(
+      "core-a",
+      secondArtist.localId,
+      first?.status.revision,
+      8
+    );
+    expect(second?.artist.resolutionStatus).toBe("resolved");
+
+    // One underlying browse session across the scan and both loads...
+    expect(coordinator.acquireCalls).toEqual(["core-a"]);
+    // ...and the second resolve never re-walked the artist root.
+    const rootWalks = coordinator.browseOptions.filter(
+      (options) => options.popAll === true && options.hierarchy === "artists"
+    );
+    expect(rootWalks).toHaveLength(rootWalksAfterFirst);
+  });
+
+  it("releases the retained catalog session after the idle window and reacquires on demand", async () => {
+    jest.useFakeTimers();
+    try {
+      const coordinator = new FakeCatalogCoordinator(rows(1, 1));
+      const catalog = service(coordinator, { catalogSessionIdleMs: 1_000 });
+      await catalog.scan("core-a");
+      expect(coordinator.acquireCalls).toEqual(["core-a"]);
+      expect(coordinator.releaseCalls).toEqual([]);
+
+      await jest.advanceTimersByTimeAsync(1_000);
+      expect(coordinator.releaseCalls).toEqual(["core-a"]);
+
+      await catalog.scan("core-a");
+      expect(coordinator.acquireCalls).toEqual(["core-a", "core-a"]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("drops the retained catalog session after session loss and reacquires on the next call", async () => {
+    const coordinator = new FakeCatalogCoordinator(rows(1, 1));
+    const catalog = service(coordinator, { pageSize: 2 });
+    await catalog.scan("core-a");
+
+    coordinator.postRunError = new BrowseSessionCoordinatorError(
+      "SESSION_LOST",
+      "catalog session lost"
+    );
+    await expect(catalog.scan("core-a")).rejects.toMatchObject({
+      code: "SESSION_LOST",
+    });
+    expect(coordinator.releaseCalls).toEqual(["core-a"]);
+
+    coordinator.postRunError = undefined;
+    await catalog.scan("core-a");
+    expect(coordinator.acquireCalls).toEqual(["core-a", "core-a"]);
+  });
+
+  it("serializes runCatalogBrowse behind in-flight catalog work on the same session", async () => {
+    const coordinator = new FakeCatalogCoordinator(rows(2, 4));
+    const catalog = service(coordinator, { pageSize: 2 });
+    await catalog.scan("core-a");
+    const blocked = coordinator.blockPage("core-a", "artists", 0);
+
+    const refresh = catalog.scan("core-a");
+    await blocked.reached;
+    const order: string[] = [];
+    const browse = catalog.runCatalogBrowse("core-a", async () => {
+      order.push("browse");
+      return "done";
+    });
+    await flushPromises();
+    expect(order).toEqual([]);
+
+    blocked.release();
+    await refresh;
+    await expect(browse).resolves.toBe("done");
+    expect(order).toEqual(["browse"]);
+    expect(coordinator.acquireCalls).toEqual(["core-a"]);
+  });
+
+  it("does not poison the negative cache when a load is rejected on a stale revision", async () => {
+    const now = Date.parse("2026-07-15T00:00:00.000Z");
+    const coordinator = new FakeCatalogCoordinator({
+      artists: [item("Auxiliary Artist", "artist-live")],
+      albums: [],
+    });
+    const resolve = jest.fn(
+      async (
+        _session: CoordinatedBrowseSession,
+        _artistValue: Readonly<ArtistRef>
+      ): Promise<DiscographyResolution> => {
+        throw new Error("browse session timed out");
+      }
+    );
+    const catalog = service(coordinator, {
+      now: () => now,
+      auxiliaryArtistResolver: { resolve },
+    });
+    const scanned = (await catalog.scan("core-a")).snapshot;
+    const artistLocalId = scanned.artists[0].localId;
+
+    // Hold the catalog tail, queue the load on the old revision, then publish
+    // a new revision before the load's session work starts: the pre-resolver
+    // revision rejection must not stamp the cache.
+    const gate = deferred();
+    const hold = catalog.runCatalogBrowse("core-a", () => gate.promise);
+    await flushPromises();
+    const pending = catalog.loadArtistAlbums(
+      "core-a",
+      artistLocalId,
+      scanned.revision,
+      8
+    );
+    await flushPromises();
+    await catalog.reconcileSelectedArtist(
+      "core-a",
+      null,
+      selectedObservation(
+        selectedArtist({
+          exactName: "Concurrent Artist",
+          normalizedName: normalizeCatalogText("Concurrent Artist"),
+        })
+      )
+    );
+    gate.resolve();
+    await hold;
+
+    await expect(pending).rejects.toMatchObject({ code: "REVISION_CONFLICT" });
+    expect(resolve).not.toHaveBeenCalled();
+
+    // The correctly revisioned retry must reach the resolver immediately.
+    await expect(
+      catalog.loadArtistAlbums(
+        "core-a",
+        artistLocalId,
+        scanned.revision + 1,
+        8
+      )
+    ).rejects.toThrow("browse session timed out");
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not suppress a post-refresh retry with a failure stamped against the old revision", async () => {
+    const now = Date.parse("2026-07-15T00:00:00.000Z");
+    const coordinator = new FakeCatalogCoordinator({
+      artists: [item("Auxiliary Artist", "artist-live")],
+      albums: [],
+    });
+    const reached = deferred();
+    const gate = deferred();
+    let fail = true;
+    const resolve = jest.fn(
+      async (
+        _session: CoordinatedBrowseSession,
+        artistValue: Readonly<ArtistRef>
+      ): Promise<DiscographyResolution> => {
+        reached.resolve();
+        await gate.promise;
+        if (fail) throw new Error("browse session timed out");
+        return {
+          kind: "resolved" as const,
+          observation: auxiliaryObservation(artistValue),
+        };
+      }
+    );
+    const catalog = service(coordinator, {
+      now: () => now,
+      auxiliaryArtistResolver: { resolve },
+    });
+    const scanned = (await catalog.scan("core-a")).snapshot;
+    const artistLocalId = scanned.artists[0].localId;
+
+    // The load starts on the old revision; the refresh is requested while the
+    // resolver is still blocked, and the failure lands after scan start.
+    const pending = catalog.loadArtistAlbums(
+      "core-a",
+      artistLocalId,
+      scanned.revision,
+      8
+    );
+    await reached.promise;
+    const refresh = catalog.scan("core-a");
+    fail = true;
+    gate.resolve();
+    await expect(pending).rejects.toThrow("browse session timed out");
+    const refreshed = (await refresh).snapshot;
+    expect(refreshed.revision).toBe(scanned.revision + 1);
+
+    fail = false;
+    const resolved = await catalog.loadArtistAlbums(
+      "core-a",
+      artistLocalId,
+      refreshed.revision,
+      8
+    );
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(resolved?.artist.resolutionStatus).toBe("resolved");
+  });
+
+  it("does not stamp the negative cache when a disconnect invalidates an in-flight load", async () => {
+    const now = Date.parse("2026-07-15T00:00:00.000Z");
+    const coordinator = new FakeCatalogCoordinator({
+      artists: [item("Auxiliary Artist", "artist-live")],
+      albums: [],
+    });
+    const reached = deferred();
+    const gate = deferred();
+    const resolve = jest.fn(
+      async (
+        _session: CoordinatedBrowseSession,
+        _artistValue: Readonly<ArtistRef>
+      ): Promise<DiscographyResolution> => {
+        reached.resolve();
+        await gate.promise;
+        throw new Error("browse session timed out");
+      }
+    );
+    const catalog = service(coordinator, {
+      now: () => now,
+      auxiliaryArtistResolver: { resolve },
+    });
+    const scanned = (await catalog.scan("core-a")).snapshot;
+    const artistLocalId = scanned.artists[0].localId;
+
+    const pending = catalog.loadArtistAlbums(
+      "core-a",
+      artistLocalId,
+      scanned.revision,
+      8
+    );
+    await reached.promise;
+    catalog.markCoreDisconnected("core-a");
+    gate.resolve();
+    await expect(pending).rejects.toThrow("browse session timed out");
+    expect(resolve).toHaveBeenCalledTimes(1);
+    await flushPromises();
+    await flushPromises();
+
+    // The invalidation supersedes the failure write: the retry at the same
+    // revision must reach the resolver instead of serving the stale failure.
+    await expect(
+      catalog.loadArtistAlbums("core-a", artistLocalId, scanned.revision, 8)
+    ).rejects.toThrow("browse session timed out");
+    expect(resolve).toHaveBeenCalledTimes(2);
   });
 
   it("returns only albums with the exact artist local-ID binding and preserves evidence", async () => {
@@ -2198,5 +2735,301 @@ describe("native enrichment (catalog persistence v3)", () => {
     await degraded.start("core-a");
     expect(degraded.getSnapshot("core-a")).toBeNull();
     expect(degraded.getStatus("core-a").persistence).toBe("degraded");
+  });
+});
+
+describe("artist-album binding ingestion", () => {
+  const ABSENT_ID = "30000000-0000-4000-8000-000000000099";
+
+  const batch = (
+    expectedRevision: number,
+    bindings: ReadonlyArray<readonly [string, string]>,
+    over: Partial<CatalogArtistAlbumBindingBatch> = {}
+  ): CatalogArtistAlbumBindingBatch => ({
+    provenCoreId: "core-a",
+    expectedRevision,
+    bindings: new Map(bindings),
+    ...over,
+  });
+
+  it("refuses a batch proven against another Core without applying any of it", async () => {
+    const persistence = new FakeCatalogPersistence();
+    const catalog = service(new FakeCatalogCoordinator(rows(2, 2)), {
+      persistence,
+    });
+    const scanned = (await catalog.scan("core-a")).snapshot;
+    const writesAfterScan = persistence.writes.length;
+
+    await expect(
+      catalog.ingestArtistAlbumBindings(
+        "core-a",
+        batch(
+          scanned.revision,
+          [[scanned.albums[0].localId, scanned.artists[0].localId]],
+          { provenCoreId: "core-b" }
+        )
+      )
+    ).rejects.toMatchObject({ code: "IDENTITY_CONFLICT" });
+
+    // The one otherwise-valid entry is dropped with the batch.
+    expect(catalog.getSnapshot("core-a")).toBe(scanned);
+    expect(scanned.albums[0].artistLocalId).toBeUndefined();
+    expect(persistence.writes).toHaveLength(writesAfterScan);
+
+    // A Core with nothing published has no Core-scoped state to land in.
+    await expect(
+      catalog.ingestArtistAlbumBindings("core-z", {
+        provenCoreId: "core-z",
+        expectedRevision: 1,
+        bindings: new Map([[ABSENT_ID, ABSENT_ID]]),
+      })
+    ).rejects.toMatchObject({ code: "IDENTITY_CONFLICT" });
+  });
+
+  it("fences a batch to the revision and generation it was computed against", async () => {
+    const persistence = new FakeCatalogPersistence();
+    const catalog = service(new FakeCatalogCoordinator(rows(2, 2)), {
+      persistence,
+    });
+    const first = (await catalog.scan("core-a")).snapshot;
+    const generation = catalog.getInvalidationGeneration("core-a");
+    const pending: ReadonlyArray<readonly [string, string]> = [
+      [first.albums[0].localId, first.artists[0].localId],
+    ];
+
+    // A rescan moves the snapshot on; the batch is never merged forward.
+    const rescanned = (await catalog.scan("core-a")).snapshot;
+    expect(rescanned.revision).toBe(first.revision + 1);
+    await expect(
+      catalog.ingestArtistAlbumBindings(
+        "core-a",
+        batch(first.revision, pending)
+      )
+    ).rejects.toMatchObject({ code: "REVISION_CONFLICT" });
+    expect(catalog.getSnapshot("core-a")).toBe(rescanned);
+    expect(rescanned.albums[0].artistLocalId).toBeUndefined();
+
+    // A disconnect during the pass discards it even though the revision
+    // never moved — only the invalidation generation sees that event.
+    catalog.markCoreDisconnected("core-a");
+    expect(catalog.getInvalidationGeneration("core-a")).toBe(generation + 1);
+    await expect(
+      catalog.ingestArtistAlbumBindings(
+        "core-a",
+        batch(rescanned.revision, pending, {
+          expectedInvalidationGeneration: generation,
+        })
+      )
+    ).rejects.toMatchObject({ code: "INVALID_MERGE" });
+    expect(catalog.getSnapshot("core-a")).toBe(rescanned);
+    expect(catalog.getSnapshot("core-a")?.albums[0].artistLocalId).toBeUndefined();
+  });
+
+  it("lands bindings only in the ingesting Core's snapshot and file", async () => {
+    const persistence = new FakeCatalogPersistence();
+    const coordinator = new FakeCatalogCoordinator(rows(2, 2));
+    coordinator.setRows("core-b", rows(2, 2));
+    const catalog = service(coordinator, { persistence });
+    const first = (await catalog.scan("core-a")).snapshot;
+    const other = (await catalog.scan("core-b")).snapshot;
+    const otherWrites = persistence.writes.filter(
+      (write) => write.coreId === "core-b"
+    ).length;
+
+    const result = await catalog.ingestArtistAlbumBindings(
+      "core-a",
+      batch(first.revision, [
+        [first.albums[0].localId, first.artists[0].localId],
+      ])
+    );
+
+    expect(result).toEqual({
+      published: true,
+      revision: first.revision + 1,
+      boundAlbums: 1,
+      alreadyBound: 0,
+    });
+    expect(catalog.getSnapshot("core-a")?.albums[0].artistLocalId).toBe(
+      first.artists[0].localId
+    );
+    // The other Core is untouched in memory and on disk.
+    expect(catalog.getSnapshot("core-b")).toBe(other);
+    for (const album of other.albums) {
+      expect(album.artistLocalId).toBeUndefined();
+    }
+    expect(
+      persistence.writes.filter((write) => write.coreId === "core-b")
+    ).toHaveLength(otherWrites);
+
+    // Read back per Core: the binding exists under one Core's file only.
+    const restored = service(new FakeCatalogCoordinator(rows(0, 0)), {
+      persistence,
+    });
+    await restored.start("core-a");
+    await restored.start("core-b");
+    expect(restored.getSnapshot("core-a")?.albums[0].artistLocalId).toBe(
+      first.artists[0].localId
+    );
+    for (const album of restored.getSnapshot("core-b")?.albums ?? []) {
+      expect(album.artistLocalId).toBeUndefined();
+    }
+  });
+
+  it("reloads ingested bindings and refuses a persisted binding whose artist is gone", async () => {
+    const persistence = new FakeCatalogPersistence();
+    const catalog = service(new FakeCatalogCoordinator(rows(2, 2)), {
+      persistence,
+    });
+    const scanned = (await catalog.scan("core-a")).snapshot;
+    await catalog.ingestArtistAlbumBindings(
+      "core-a",
+      batch(scanned.revision, [
+        [scanned.albums[0].localId, scanned.artists[0].localId],
+      ])
+    );
+
+    const restored = service(new FakeCatalogCoordinator(rows(0, 0)), {
+      persistence,
+    });
+    await restored.start("core-a");
+    expect(restored.getSnapshot("core-a")?.albums[0].artistLocalId).toBe(
+      scanned.artists[0].localId
+    );
+    expect(restored.getStatus("core-a")).toMatchObject({
+      freshness: "stale",
+      staleReason: "restored",
+      persistence: "healthy",
+    });
+
+    // A persisted binding naming an artist this snapshot does not contain
+    // never reaches the read model: the envelope is refused whole rather
+    // than pruned, because rows and bindings persist as one snapshot.
+    const tampered = mutablePersistedEnvelope(persistence.values.get("core-a"));
+    tampered.snapshot.albums[0].artistLocalId = ABSENT_ID;
+    persistence.values.set("core-a", tampered);
+    const degraded = service(new FakeCatalogCoordinator(rows(0, 0)), {
+      persistence,
+    });
+    await degraded.start("core-a");
+    expect(degraded.getSnapshot("core-a")).toBeNull();
+    expect(degraded.getStatus("core-a").persistence).toBe("degraded");
+  });
+
+  it("supersedes prior bindings for the albums a pass names and protects none of them", async () => {
+    const catalog = service(new FakeCatalogCoordinator(rows(2, 2)));
+    const scanned = (await catalog.scan("core-a")).snapshot;
+    const [albumOne, albumTwo] = scanned.albums;
+    const [artistOne, artistTwo] = scanned.artists;
+    const keysBeforeBinding = Object.keys(albumOne).sort();
+
+    const first = await catalog.ingestArtistAlbumBindings(
+      "core-a",
+      batch(scanned.revision, [
+        [albumOne.localId, artistTwo.localId],
+        [albumTwo.localId, artistTwo.localId],
+      ])
+    );
+    const second = await catalog.ingestArtistAlbumBindings(
+      "core-a",
+      batch(first.revision, [[albumOne.localId, artistOne.localId]])
+    );
+
+    expect(second).toEqual({
+      published: true,
+      revision: first.revision + 1,
+      boundAlbums: 1,
+      alreadyBound: 0,
+    });
+    const published = catalog.getSnapshot("core-a");
+    // The named album is rebound; the album this pass did not name keeps
+    // the prior pass's binding.
+    expect(published?.albums[0].artistLocalId).toBe(artistOne.localId);
+    expect(published?.albums[1].artistLocalId).toBe(artistTwo.localId);
+    // Nothing rides along to mark who wrote the binding.
+    expect(Object.keys(published?.albums[0] ?? {}).sort()).toEqual(
+      [...keysBeforeBinding, "artistLocalId"].sort()
+    );
+
+    // Re-ingesting an identical pass publishes nothing.
+    const third = await catalog.ingestArtistAlbumBindings(
+      "core-a",
+      batch(second.revision, [[albumOne.localId, artistOne.localId]])
+    );
+    expect(third).toEqual({
+      published: false,
+      revision: second.revision,
+      boundAlbums: 0,
+      alreadyBound: 1,
+    });
+
+    // The in-session artist load rewrites an ingested row without ceremony:
+    // it adopts the same descriptor and resolves it.
+    const drilled = await catalog.reconcileSelectedArtist(
+      "core-a",
+      artistOne.localId,
+      selectedObservation(
+        selectedArtist({
+          localId: artistOne.localId,
+          exactName: artistOne.exactName,
+        }),
+        [
+          selectedAlbum({
+            localId: albumOne.localId,
+            exactTitle: albumOne.exactTitle,
+            exactArtist: artistOne.exactName,
+          }),
+        ]
+      )
+    );
+    expect(drilled.albums.map((album) => album.localId)).toEqual([
+      albumOne.localId,
+    ]);
+    expect(drilled.albums[0]).toMatchObject({
+      artistLocalId: artistOne.localId,
+      resolutionStatus: "resolved",
+    });
+  });
+
+  it("refuses the whole batch when it names an album or artist the snapshot lacks", async () => {
+    const persistence = new FakeCatalogPersistence();
+    const catalog = service(new FakeCatalogCoordinator(rows(2, 2)), {
+      persistence,
+    });
+    const scanned = (await catalog.scan("core-a")).snapshot;
+    const writesAfterScan = persistence.writes.length;
+
+    // The first entry is valid; the second names an absent artist. Neither
+    // applies — refusal is whole-batch, never per-entry.
+    await expect(
+      catalog.ingestArtistAlbumBindings(
+        "core-a",
+        batch(scanned.revision, [
+          [scanned.albums[0].localId, scanned.artists[0].localId],
+          [scanned.albums[1].localId, ABSENT_ID],
+        ])
+      )
+    ).rejects.toMatchObject({ code: "INVALID_MERGE" });
+    expect(catalog.getSnapshot("core-a")).toBe(scanned);
+    expect(scanned.albums[0].artistLocalId).toBeUndefined();
+
+    await expect(
+      catalog.ingestArtistAlbumBindings(
+        "core-a",
+        batch(scanned.revision, [[ABSENT_ID, scanned.artists[0].localId]])
+      )
+    ).rejects.toMatchObject({ code: "INVALID_MERGE" });
+
+    // A malformed identifier is refused before the snapshot is consulted.
+    await expect(
+      catalog.ingestArtistAlbumBindings(
+        "core-a",
+        batch(scanned.revision, [
+          ["not-a-local-id", scanned.artists[0].localId],
+        ])
+      )
+    ).rejects.toMatchObject({ code: "INVALID_QUERY" });
+
+    expect(catalog.getSnapshot("core-a")).toBe(scanned);
+    expect(persistence.writes).toHaveLength(writesAfterScan);
   });
 });

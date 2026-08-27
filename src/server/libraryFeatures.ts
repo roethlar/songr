@@ -375,6 +375,90 @@ export interface SongRelationshipFeaturePort {
 }
 
 /**
+ * Which photograph of an artist a portrait is.
+ *
+ * The library holds more than one photograph per artist, and they are
+ * genuinely different pictures rather than crops of one another — the wide
+ * one keeps scene the square one never had. So a shape describes what a
+ * portrait *is*, and is never a rendering option a caller gets to choose.
+ */
+export type ArtistPortraitShape = "square" | "wide";
+
+/**
+ * One portrait the library holds: the key that names it and, inseparably,
+ * which photograph that key is.
+ *
+ * The two travel together because they cannot be separated safely. Asking
+ * for a key under the wrong shape does not fail — it answers with a
+ * different picture and no error at all, so a caller that guessed would ship
+ * subtly wrong images with nothing to catch. Nothing on this port takes a
+ * shape as an argument of its own; the only shape in a read is the one that
+ * arrived attached to the key.
+ *
+ * The key travels as a namespace-tagged REFERENCE rather than bare, minted
+ * by the producer that read it out of the library. The library's keys and
+ * the extension API's image keys are disjoint namespaces whose shapes
+ * overlap, so without the tag a foreign key would be indistinguishable from
+ * a real one here and would read as an artist with no photograph instead of
+ * as a mix-up (wh-3). The tag's spelling belongs to the shared editorial
+ * contract, which owns the grammar both ends validate against.
+ */
+export interface ArtistPortraitReference {
+  /** The tagged reference, tag included — never a bare library key. */
+  readonly key: string;
+  readonly shape: ArtistPortraitShape;
+}
+
+/**
+ * The widths a portrait may be asked for.
+ *
+ * A closed list rather than a number, for two reasons. The library refuses a
+ * read that names no width at all, so "no width" is not an option a caller
+ * may express; and a caller-supplied number would travel into the read
+ * unexamined. The library serves its own master when asked for more than it
+ * holds, so the largest entry is a ceiling to ask for, not a promise of size.
+ */
+export const ARTIST_PORTRAIT_WIDTHS = [256, 512, 1024, 2048] as const;
+
+export type ArtistPortraitWidth = (typeof ARTIST_PORTRAIT_WIDTHS)[number];
+
+/** True for a width this port will accept; narrows an arbitrary number. */
+export function isArtistPortraitWidth(
+  value: unknown
+): value is ArtistPortraitWidth {
+  return (ARTIST_PORTRAIT_WIDTHS as readonly unknown[]).includes(value);
+}
+
+/**
+ * A portrait the layer read, ready to serve. `shape` is the shape the read
+ * was performed under, so a host serving the bytes can say which photograph
+ * it is holding without consulting its own notes.
+ */
+export interface ArtistPortraitImage {
+  readonly data: Buffer;
+  readonly contentType: string;
+  readonly shape: ArtistPortraitShape;
+}
+
+/**
+ * Reads artist portraits, cached.
+ *
+ * Three outcomes, deliberately distinct. A portrait resolves to its bytes.
+ * `null` is the clean negative — the library holds no such portrait for this
+ * key, which is an ordinary answer a host renders as "no portrait" and never
+ * as a failure. Anything else is a real fault (the library unreachable, no
+ * library paired, an answer that is not a picture) and is raised as a
+ * `LibraryFeatureRequestError` carrying the status the host should answer
+ * with.
+ */
+export interface ArtistPortraitFeaturePort {
+  read(
+    reference: ArtistPortraitReference,
+    width: ArtistPortraitWidth
+  ): Promise<ArtistPortraitImage | null>;
+}
+
+/**
  * Editorial item reads (rich-item plan §5.3): product-language input (a
  * browser-safe public anchor or a server-held follow key) and output (the
  * §5.4 browser-safe view plus server-held follow keys). Declared as the
@@ -415,6 +499,18 @@ export interface LibraryFeatureLayer {
   readonly albumDetailFallback?: LibraryAlbumFallbackResolverPort;
   readonly albumVersionInventory?: LibraryAlbumVersionInventoryPort;
   readonly editorialItems?: EditorialItemFeaturePort;
+  /**
+   * Wide artist portraits. Absent when the layer is, and a host that cannot
+   * reach this port serves no wide portrait at all rather than an error —
+   * the page keeps whatever header it already had.
+   */
+  readonly artistPortraits?: ArtistPortraitFeaturePort;
+  /**
+   * The profile authority native editorial reads are fenced against (q9-1);
+   * present exactly when the editorial port is, so the host can stamp the
+   * editorial view cache with it.
+   */
+  readonly nativeProfileAuthority?: (coreId: string) => string | null;
 }
 
 /** Runs one unit of work on a serialized server-driven browse lease. */

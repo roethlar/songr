@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 import type { CatalogIndexResponse } from '@shared/catalogIndexContracts';
 import type { CatalogIndexNativeFeatures } from '@shared/catalogIndexContracts';
 import { CLASSIC_BROWSE_PAGE_SIZE_MAX } from '@shared/classicBrowseContracts';
@@ -69,6 +69,15 @@ export interface LibraryCapabilities {
 	 */
 	playlistFeatures: boolean;
 	playlistFeaturesDisabledReason?: string;
+	/**
+	 * The native state-filter answer, carried like the others. Positive
+	 * editorial presence (q1-2) is gated on this together with
+	 * `dateFeatures` — the server's editorial read refuses anything less
+	 * (`readContext` in the editorial item service), so the UI never
+	 * renders editorial DOM the server would only answer
+	 * FEATURE_UNAVAILABLE.
+	 */
+	stateFilterFeatures: boolean;
 }
 
 export interface LibraryArtistEntry {
@@ -81,6 +90,8 @@ export interface LibraryArtistEntry {
 	albumCount?: number;
 	countComplete: boolean;
 	catalogLocalId?: string;
+	/** Opaque artwork key (catalog imageKeyHint or browse image_key). */
+	imageKey?: string;
 }
 
 export interface LibraryAlbumEntry {
@@ -145,7 +156,8 @@ export const CATALOG_CAPABILITIES: LibraryCapabilities = Object.freeze({
 	// answer, date features stay disabled (the menu shows its honest reason).
 	dateFeatures: false,
 	playFeatures: false,
-	playlistFeatures: false
+	playlistFeatures: false,
+	stateFilterFeatures: false
 });
 
 /** Catalog mode when the Roon Artists count list cannot cover every row. */
@@ -158,7 +170,8 @@ export const INCOMPLETE_ARTIST_COUNTS_CAPABILITIES: LibraryCapabilities = Object
 	countsApproximate: false,
 	dateFeatures: false,
 	playFeatures: false,
-	playlistFeatures: false
+	playlistFeatures: false,
+	stateFilterFeatures: false
 });
 
 export const BROWSE_FALLBACK_CAPABILITIES: LibraryCapabilities = Object.freeze({
@@ -170,7 +183,8 @@ export const BROWSE_FALLBACK_CAPABILITIES: LibraryCapabilities = Object.freeze({
 	countsApproximate: false,
 	dateFeatures: false,
 	playFeatures: false,
-	playlistFeatures: false
+	playlistFeatures: false,
+	stateFilterFeatures: false
 });
 
 /**
@@ -406,7 +420,8 @@ function catalogCapabilities(
 		playlistFeatures: native.playlistFeaturesAvailable,
 		...(native.playlistFeaturesUnavailableReason !== undefined
 			? { playlistFeaturesDisabledReason: native.playlistFeaturesUnavailableReason }
-			: {})
+			: {}),
+		stateFilterFeatures: native.stateFilterFeaturesAvailable
 	});
 }
 
@@ -455,7 +470,8 @@ function prepareCatalogIndex(
 					countComplete: artistCountRows
 						? roonCount !== undefined && !artistCountRows.truncated
 						: artist.countComplete,
-					catalogLocalId: artist.localId
+					catalogLocalId: artist.localId,
+					...(artist.imageKeyHint !== undefined ? { imageKey: artist.imageKeyHint } : {})
 				};
 			}
 		)
@@ -545,7 +561,8 @@ function prepareBrowseFallback(
 					name: item.title,
 					searchKey: librarySortKey(item.title),
 					...(albumCount !== null ? { albumCount } : {}),
-					countComplete: albumCount !== null && !artistCountsTruncated
+					countComplete: albumCount !== null && !artistCountsTruncated,
+						...(item.imageKey !== undefined ? { imageKey: item.imageKey } : {})
 				};
 			}
 		)
@@ -593,7 +610,6 @@ export async function loadLibraryIndex(
 	options: LoadLibraryIndexOptions
 ): Promise<void> {
 	const token = fence;
-	internalStore.update((state) => ({ ...state, phase: 'loading', error: null }));
 
 	let result: Awaited<ReturnType<typeof fetchCatalogIndex>>;
 	try {
@@ -620,6 +636,24 @@ export async function loadLibraryIndex(
 			}));
 			return;
 		}
+		// Same Core, same revision, already rendered: the rebuild would
+		// publish by definition the data already on screen, so skip it.
+		// This is what makes a navigation return instant — the resume path
+		// re-fires this load on every Back from an item page, and a public
+		// index (countComplete: false) turns every rebuild into a full live
+		// artist drain (~16 s on a 1,680-artist library, measured against a
+		// live Core 2026-08-17). The fetch above still ran, so a changed
+		// revision reloads exactly as before; only the no-op rebuild skips.
+		const current = get(internalStore);
+		if (
+			current.phase === 'ready' &&
+			current.source === 'catalog' &&
+			current.coreId === index.status.coreId &&
+			current.revision === index.status.revision
+		) {
+			return;
+		}
+		internalStore.update((state) => ({ ...state, phase: 'loading', error: null }));
 		const cacheKey = `${index.status.coreId}:${index.status.revision}`;
 		let prepared = preparedCache.get(cacheKey);
 		if (!prepared) {
@@ -670,6 +704,7 @@ export async function loadLibraryIndex(
 	}
 
 	// Honest empty catalog: browse-drain fallback.
+	internalStore.update((state) => ({ ...state, phase: 'loading', error: null }));
 	try {
 		const drained = await withClassicBrowseRoleTransaction(
 			'classic-explore',

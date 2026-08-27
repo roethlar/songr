@@ -12,6 +12,33 @@
  */
 
 export const EDITORIAL_ID_MAX_LENGTH = 128;
+/**
+ * Upper bound for an opaque artwork IMAGE key: the /api/image route's own
+ * key cap (MAX_KEY_LENGTH = 256 in src/server/http/routes/image.ts) — a
+ * longer key could never be served, so it rejects here instead.
+ */
+export const EDITORIAL_IMAGE_KEY_MAX_LENGTH = 256;
+/**
+ * The namespace tag every wide-portrait REFERENCE carries in front of its
+ * bare key. It is minted in exactly one place — the producer that read the
+ * key out of the music library's own Photo record — so a bare image key, of
+ * any provenance, can never satisfy this field's validator by accident.
+ */
+export const EDITORIAL_WIDE_ARTWORK_REFERENCE_PREFIX = "portrait-";
+/**
+ * Upper bound for a WIDE artist portrait reference — a different, much
+ * smaller domain than the artwork keys above (see
+ * `isEditorialWideArtworkKey`). Wide portraits come from the music library
+ * itself and are served by their own route, which caps a key far shorter
+ * than the artwork route does; a longer key could never be served, so it
+ * rejects here instead.
+ *
+ * The bound is the tag plus the bare key's own 64-character cap, derived
+ * from the prefix rather than written out, so the two can never drift: a
+ * longer tag would move this bound with it.
+ */
+export const EDITORIAL_WIDE_ARTWORK_KEY_MAX_LENGTH =
+	EDITORIAL_WIDE_ARTWORK_REFERENCE_PREFIX.length + 64;
 export const EDITORIAL_TITLE_MAX_LENGTH = 512;
 export const EDITORIAL_META_MAX_LENGTH = 2_048;
 export const EDITORIAL_TEXT_MAX_LENGTH = 262_144;
@@ -160,6 +187,27 @@ export interface EditorialItemView {
 	readonly title: string;
 	readonly subtitle?: string;
 	readonly artworkKey?: string;
+	/**
+	 * The artist's WIDE portrait, when the music library holds one.
+	 *
+	 * A field of its own rather than a shape carried alongside `artworkKey`:
+	 * the field NAME is the declaration, so a reader of this field can only
+	 * be asking for the wide picture, and "which picture" never becomes a
+	 * value anything passes around, stores, or could get wrong. The two keys
+	 * are not interchangeable — different domains (see
+	 * `isEditorialWideArtworkKey`), different routes, and one value may never
+	 * occupy both roles in a single view.
+	 *
+	 * The value is a namespace-tagged REFERENCE rather than a bare key: the
+	 * producer that read it out of the library mints the tag, so an artwork
+	 * key that merely happens to look like a portrait key cannot arrive here
+	 * and be read as one.
+	 *
+	 * Absent whenever no wide portrait exists, which is an ordinary answer
+	 * and never a failure: a reader that finds nothing here shows the
+	 * artist's ordinary header.
+	 */
+	readonly wideArtworkKey?: string;
 	readonly sections: {
 		readonly [Section in EditorialProseSectionName]?: EditorialProseSection;
 	};
@@ -245,6 +293,64 @@ export function isEditorialOpaqueId(value: unknown): value is string {
 		value.length <= EDITORIAL_ID_MAX_LENGTH &&
 		OPAQUE_ID_PATTERN.test(value)
 	);
+}
+
+const IMAGE_KEY_CONTROL_CHARACTER = /\p{Cc}/u;
+
+/**
+ * Opaque IMAGE-key validator for artwork fields (q2-2) — a different
+ * domain from `isEditorialOpaqueId` (identifiers and follow tokens).
+ * Roon image keys legally contain `/`, `?`, `#`, `%`; `imageUrl` encodes
+ * the key as one path segment and /api/image serves the decoded key, so
+ * the id alphabet would silently delete legal keys. The bound matches the
+ * image route's key cap; empty and control-character keys reject.
+ */
+export function isEditorialImageKey(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.length >= 1 &&
+		value.length <= EDITORIAL_IMAGE_KEY_MAX_LENGTH &&
+		!IMAGE_KEY_CONTROL_CHARACTER.test(value)
+	);
+}
+
+/**
+ * The alphabet of the BARE key behind the tag: short, lower-case and
+ * alphanumeric — nothing else. Matched against the remainder rather than
+ * against the whole reference, so the tag has exactly one spelling and this
+ * pattern never has to repeat it.
+ */
+const WIDE_ARTWORK_KEY_PATTERN = /^[a-z0-9]+$/u;
+
+/**
+ * Validator for `wideArtworkKey`, deliberately NOT `isEditorialImageKey`.
+ *
+ * The two fields name pictures held in different places and served by
+ * different routes, so they are validated by different rules on purpose.
+ * `isEditorialImageKey` is broad because artwork keys legally carry `/`,
+ * `?`, `#` and `%`; the key behind this tag admits none of them.
+ *
+ * The tag is what makes the two domains refuse each other by construction,
+ * for every key either side actually mints. A BARE artwork key fails here
+ * for want of the tag — including every 32-character lower-case hex key the
+ * extension API issues, which the untagged alphabet used to accept — and the
+ * tag is minted in exactly one place: the producer that read the key out of
+ * the music library's own Photo record. Nothing else is in a position to
+ * mint it, because nothing else knows which namespace a key came from.
+ *
+ * `isEditorialImageKey` stays deliberately broad regardless: a tagged
+ * reference is a perfectly legal artwork key by its alphabet, so the tag is
+ * a claim about provenance and never a proof that a value is not artwork.
+ * That is why the separation still rests on structure too: two distinct
+ * fields, two distinct routes, and the `normalizeEditorialItemView` rule
+ * that one value may never occupy both roles in a single view.
+ */
+export function isEditorialWideArtworkKey(value: unknown): value is string {
+	if (typeof value !== "string") return false;
+	if (value.length > EDITORIAL_WIDE_ARTWORK_KEY_MAX_LENGTH) return false;
+	if (!value.startsWith(EDITORIAL_WIDE_ARTWORK_REFERENCE_PREFIX)) return false;
+	const key = value.slice(EDITORIAL_WIDE_ARTWORK_REFERENCE_PREFIX.length);
+	return key.length >= 1 && WIDE_ARTWORK_KEY_PATTERN.test(key);
 }
 
 function isBoundedText(value: unknown, max: number): value is string {
@@ -571,7 +677,7 @@ function normalizeRelationshipGroups(
 			}
 			if (
 				"artworkKey" in row &&
-				!isEditorialOpaqueId(row.artworkKey)
+				!isEditorialImageKey(row.artworkKey)
 			) {
 				return null;
 			}
@@ -648,7 +754,15 @@ export function normalizeEditorialItemView(
 			!hasOnlyKeys(
 				record,
 				["kind", "title", "sections"],
-				["subtitle", "artworkKey", "creditGroups", "relationshipGroups", "attribution", "links"]
+				[
+					"subtitle",
+					"artworkKey",
+					"wideArtworkKey",
+					"creditGroups",
+					"relationshipGroups",
+					"attribution",
+					"links",
+				]
 			)
 		) {
 			return null;
@@ -666,7 +780,23 @@ export function normalizeEditorialItemView(
 		) {
 			return null;
 		}
-		if ("artworkKey" in record && !isEditorialOpaqueId(record.artworkKey)) {
+		if ("artworkKey" in record && !isEditorialImageKey(record.artworkKey)) {
+			return null;
+		}
+		if (
+			"wideArtworkKey" in record &&
+			!isEditorialWideArtworkKey(record.wideArtworkKey)
+		) {
+			return null;
+		}
+		// One key can never name both pictures: they are held in different
+		// places and served by different routes, so the same value standing
+		// in both roles is a mix-up rather than a view.
+		if (
+			"wideArtworkKey" in record &&
+			"artworkKey" in record &&
+			record.wideArtworkKey === record.artworkKey
+		) {
 			return null;
 		}
 		const sectionsRecord = plainDataRecord(record.sections);
@@ -718,6 +848,9 @@ export function normalizeEditorialItemView(
 			title: record.title,
 			...("subtitle" in record ? { subtitle: record.subtitle as string } : {}),
 			...("artworkKey" in record ? { artworkKey: record.artworkKey as string } : {}),
+			...("wideArtworkKey" in record
+				? { wideArtworkKey: record.wideArtworkKey as string }
+				: {}),
 			sections,
 			...(creditGroups !== undefined ? { creditGroups } : {}),
 			...(relationshipGroups !== undefined ? { relationshipGroups } : {}),
@@ -757,7 +890,15 @@ export function salvageEditorialItemView(
 			!hasOnlyKeys(
 				record,
 				["kind", "title", "sections"],
-				["subtitle", "artworkKey", "creditGroups", "relationshipGroups", "attribution", "links"]
+				[
+					"subtitle",
+					"artworkKey",
+					"wideArtworkKey",
+					"creditGroups",
+					"relationshipGroups",
+					"attribution",
+					"links",
+				]
 			)
 		) {
 			return null;
@@ -815,15 +956,26 @@ export function salvageEditorialItemView(
 			else droppedFamilies = true;
 		}
 
+		const artworkKey = isEditorialImageKey(record.artworkKey)
+			? record.artworkKey
+			: undefined;
+		// The strict rules again, applied as a drop rather than a rejection:
+		// a wide portrait key that is malformed, or that is merely the
+		// artwork key repeated, costs the page its banner and nothing else.
+		const wideArtworkKey =
+			isEditorialWideArtworkKey(record.wideArtworkKey) &&
+			record.wideArtworkKey !== artworkKey
+				? record.wideArtworkKey
+				: undefined;
+
 		const view: EditorialItemView = {
 			kind: record.kind as EditorialItemKind,
 			title: record.title,
 			...(isBoundedText(record.subtitle, EDITORIAL_TITLE_MAX_LENGTH)
 				? { subtitle: record.subtitle }
 				: {}),
-			...(isEditorialOpaqueId(record.artworkKey)
-				? { artworkKey: record.artworkKey }
-				: {}),
+			...(artworkKey !== undefined ? { artworkKey } : {}),
+			...(wideArtworkKey !== undefined ? { wideArtworkKey } : {}),
 			sections,
 			...(creditGroups !== undefined ? { creditGroups } : {}),
 			...(relationshipGroups !== undefined ? { relationshipGroups } : {}),

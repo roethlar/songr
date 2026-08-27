@@ -670,6 +670,7 @@ describe("catalog HTTP routes", () => {
       acquireCatalog,
       runCatalog: async (_coreId, _handle, work) =>
         work({
+          sessionScope: "catalog-session",
           browse: async () => {
             if (!blocked) {
               blocked = true;

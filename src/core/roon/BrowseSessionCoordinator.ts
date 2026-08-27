@@ -129,6 +129,12 @@ export type CoordinatedBrowsePopOptions = Omit<
 
 /** A session-key-free facade used only by server-side services. */
 export interface CoordinatedBrowseSession {
+  /**
+   * Opaque identity of the underlying browse-session generation. Server-side
+   * resolvers may key ephemeral caches on it; it must never cross a wire or a
+   * persistence boundary.
+   */
+  readonly sessionScope: string;
   browse(options: CoordinatedBrowseOptions): Promise<BrowseResult>;
   load(options: CoordinatedBrowseLoadOptions): Promise<BrowseResult>;
   pop(options: CoordinatedBrowsePopOptions): Promise<BrowseResult>;
@@ -269,6 +275,7 @@ export interface BrowseSessionCoordinatorOptions {
 class CoordinatedBrowseSessionImpl implements CoordinatedModeActionSession {
   private tail: Promise<void> = Promise.resolve();
   private actionAttempted = false;
+  public readonly sessionScope: string;
 
   constructor(
     private readonly browseService: BrowseService,
@@ -279,7 +286,9 @@ class CoordinatedBrowseSessionImpl implements CoordinatedModeActionSession {
       hierarchy: string;
       zoneId?: string;
     }) => void = () => undefined
-  ) {}
+  ) {
+    this.sessionScope = channel.sessionName;
+  }
 
   public browse(options: CoordinatedBrowseOptions): Promise<BrowseResult> {
     return this.enqueue(options, () =>
@@ -842,7 +851,10 @@ export class BrowseSessionCoordinator {
     coreId: string,
     handle: CatalogSessionHandle
   ): Promise<void> {
-    const lease = this.resolveLease(coreId, handle, "catalog");
+    // Holder cleanup is idempotent: a lease retired by a timeout reap or an
+    // invalidation before the holder released is already gone.
+    if (this.isRetiredHandle(coreId, handle)) return;
+    const lease = this.resolveLease(coreId, handle, "catalog", true);
     if (lease.kind !== "catalog") throw this.invalidHandle();
     await this.beginReleaseLease(lease, "STALE_GENERATION", true);
   }
@@ -958,7 +970,8 @@ export class BrowseSessionCoordinator {
   }
 
   public async releaseAction(access: ActionSessionAccess): Promise<void> {
-    const lease = this.resolveAction(access, false);
+    if (this.isRetiredHandle(access.coreId, access.handle)) return;
+    const lease = this.resolveAction(access, false, true);
     await this.beginReleaseLease(lease, "STALE_GENERATION", true);
   }
 
@@ -1021,7 +1034,7 @@ export class BrowseSessionCoordinator {
         },
         onTimeout: (lateSettlement) => {
           this.quarantineChannel(channel, lateSettlement);
-          void this.beginReleaseLease(lease, "SESSION_LOST", false);
+          this.releaseAfterTimeout(lease, false);
         },
       };
       return this.browseService.browse(
@@ -1190,7 +1203,7 @@ export class BrowseSessionCoordinator {
       const lifecycle: BrowseCallLifecycle = {
         onTimeout: (lateSettlement) => {
           this.quarantineChannel(channel, lateSettlement);
-          void this.beginReleaseLease(lease, "SESSION_LOST", true);
+          this.releaseAfterTimeout(lease, true);
         },
       };
       const session = new CoordinatedBrowseSessionImpl(
@@ -1267,7 +1280,7 @@ export class BrowseSessionCoordinator {
     }
     if (lease.state === "closed") return;
     lease.state = reason === "SESSION_LOST" ? "lost" : "releasing";
-    lease.lossCode = reason;
+    lease.lossCode ??= reason;
     this.clearClassicItemKeys(lease);
     if (lease.kind === "mode") {
       this.clearTimer(lease.idleTimer);
@@ -1374,12 +1387,46 @@ export class BrowseSessionCoordinator {
     }
   }
 
+  /**
+   * A lease with a holder (the catalog singleton, a pinned action lease) is
+   * not finalized out from under its holder on timeout: the quarantine
+   * already bars new work on the channel, and the lease is released when the
+   * holder releases it or when the quarantine reaps the channel. Mode leases
+   * keep the immediate release; their holder is the socket lifecycle itself.
+   */
+  private releaseAfterTimeout(lease: LeaseRecord, reroot: boolean): void {
+    if (lease.kind !== "catalog" && lease.kind !== "action") {
+      void this.beginReleaseLease(lease, "SESSION_LOST", reroot);
+      return;
+    }
+    if (lease.state !== "active") return;
+    lease.state = "lost";
+    lease.lossCode = "SESSION_LOST";
+  }
+
+  /**
+   * Reap a held lease whose holder never released it after a timeout. Runs
+   * when the last quarantined channel closes (late settlement or the bounded
+   * quarantine reap), so a wedged holder cannot leak the lease past the
+   * quarantine window; disconnect, invalidateCore, and shutdown reap it too.
+   */
+  private finalizeDeferredLease(lease: LeaseRecord): void {
+    if (lease.state !== "lost" || lease.cleanupPromise) return;
+    if (
+      [...lease.channels.values()].some((channel) => channel.state !== "closed")
+    ) {
+      return;
+    }
+    this.finalizeLease(lease, lease.lossCode ?? "SESSION_LOST");
+  }
+
   private cleanupQuarantine(channel: ChannelRecord): void {
     if (channel.quarantineCleaned) return;
     channel.quarantineCleaned = true;
     this.clearTimer(channel.quarantineTimer);
     channel.quarantineTimer = undefined;
     this.closeChannel(channel);
+    this.finalizeDeferredLease(channel.owner);
   }
 
   private closeChannel(channel: ChannelRecord): void {
@@ -1540,9 +1587,15 @@ export class BrowseSessionCoordinator {
 
   private resolveAction(
     access: ActionSessionAccess,
-    requireCurrentMode = true
+    requireCurrentMode = true,
+    allowInactive = false
   ): ActionLeaseRecord {
-    const lease = this.resolveLease(access.coreId, access.handle, "action");
+    const lease = this.resolveLease(
+      access.coreId,
+      access.handle,
+      "action",
+      allowInactive
+    );
     if (lease.kind !== "action") throw this.invalidHandle();
     if (lease.socketId !== access.socketId || lease.tabId !== access.tabId) {
       throw this.ownerMismatch();
@@ -1733,6 +1786,23 @@ export class BrowseSessionCoordinator {
       handleId: lease.handleId,
       generation: lease.generation,
     });
+  }
+
+  /**
+   * True only for a handle this coordinator already finalized and retired.
+   * A genuinely unknown handle returns false so resolveLease still rejects it.
+   */
+  private isRetiredHandle(
+    coreId: string,
+    handle: ModeSessionHandle | CatalogSessionHandle | ActionSessionHandle
+  ): boolean {
+    if (!handle || typeof handle.handleId !== "string") return false;
+    const retired = this.retiredHandles.get(handle.handleId);
+    return Boolean(
+      retired &&
+        retired.coreId === coreId &&
+        retired.generation === handle.generation
+    );
   }
 
   private retireHandle(

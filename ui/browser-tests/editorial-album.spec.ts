@@ -24,11 +24,13 @@ test('album editorial sections and child views work in every presentation', asyn
 		await expect(page.getByTestId('unified-album-review')).toContainText('Review');
 		const toggle = page.getByTestId('unified-album-review-toggle');
 		await expect(toggle).toHaveText('Read more');
-		const collapsed = await page.getByTestId('unified-album-review-text').textContent();
+		// Collapsed: the section holds the fixed reserved box (q1-1) with
+		// the full prose line-clamped inside; expansion grows it.
+		const collapsedBox = await page.getByTestId('unified-album-review').boundingBox();
 		await toggle.click();
 		await expect(toggle).toHaveText('Show less');
-		const expanded = await page.getByTestId('unified-album-review-text').textContent();
-		expect((expanded ?? '').length).toBeGreaterThan((collapsed ?? '').length);
+		const expandedBox = await page.getByTestId('unified-album-review').boundingBox();
+		expect(expandedBox?.height ?? 0).toBeGreaterThan(collapsedBox?.height ?? 0);
 		await expect(page.getByTestId('unified-album-credits')).toContainText('Robin Engineer');
 		await expect(page.getByTestId('unified-album-credits-follow-0-0')).toHaveText(
 			'Casey Producer'

@@ -3,6 +3,8 @@
 	import type { AlbumActionSemantic } from '@shared/albumActionContracts';
 	import { normalizeCatalogText } from '@shared/catalogContracts';
 	import { imageUrl } from '$lib/imageUrl';
+	import { monogram } from '$lib/monogram';
+	import { hideOnError } from '$lib/actions/imageFallback';
 	import { trackTitleCarriesOrdinal } from '$lib/trackTitle';
 	import type {
 		LibraryAlbumController,
@@ -134,6 +136,9 @@
 	const displayTitle = $derived(sheet.title ?? album?.title ?? 'Album');
 	const displayArtist = $derived(sheet.artist ?? album?.artist ?? '');
 	const displayImageKey = $derived(selectedVersion?.imageKeyHint ?? album?.imageKey ?? null);
+	// Permanent hero placeholder layer (q6): rendered beneath the image so
+	// a failed load — hidden in place by hideOnError — reveals it.
+	const heroFallback = $derived(monogram(displayTitle));
 
 	$effect(() => {
 		void sheet.selectedVersionId;
@@ -150,16 +155,6 @@
 			});
 		}
 	});
-
-	function monogram(title: string): { style: string; letter: string } {
-		const word = title.replace(/^(the |a |an )/i, '').trim() || '?';
-		let hash = 0;
-		for (const character of word) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-		return {
-			style: `background:linear-gradient(150deg,hsl(${hash % 360},14%,20%),hsl(${(hash + 40) % 360},12%,11%))`,
-			letter: (word[0] ?? '?').toUpperCase()
-		};
-	}
 
 	function versionLabel(version: LibraryAlbumVersionState, index: number): string {
 		return version.editionText || `Version ${index + 1}`;
@@ -272,15 +267,26 @@
 	<div class="item-page-body" data-testid="unified-album-page">
 		<div class="pleft">
 			<div class="art">
+				<!-- The monogram is the permanent placeholder layer (q6): a
+				     failed image load hides the img in place — hideOnError keeps
+				     its box, so the geometry never changes — and reveals the
+				     monogram beneath. -->
+				<div
+					class="mono-tile"
+					style={heroFallback.style}
+					data-testid="unified-album-hero-fallback"
+					aria-hidden="true"
+				>
+					{heroFallback.letter}
+				</div>
 				{#if displayImageKey}
 					<img
 						src={imageUrl(displayImageKey, { scale: 'fit', width: 300, height: 300 })}
 						alt=""
 						loading="lazy"
+						data-testid="unified-album-hero-image"
+						use:hideOnError
 					/>
-				{:else}
-					{@const fallback = monogram(displayTitle)}
-					<div class="mono-tile" style={fallback.style}>{fallback.letter}</div>
 				{/if}
 			</div>
 			<div class="pb">
@@ -314,25 +320,33 @@
 		<div class="pright">
 			<div class="pa" data-testid="unified-album-artist">{displayArtist}</div>
 
-			<nav class="album-tabs" aria-label="Album page sections" data-testid="unified-album-tabs">
-				<button
-					type="button"
-					class:on={sheet.activeTab === 'versions'}
-					data-testid="unified-album-tab-versions"
-					onclick={() => controller.showVersions()}
-				>
-					Versions{sheet.versions.length > 0 ? ` (${sheet.versions.length})` : ''}
-				</button>
-				<button
-					type="button"
-					class:on={sheet.activeTab === 'details'}
-					data-testid="unified-album-tab-details"
-					disabled={!sheet.selectedVersionId}
-					onclick={() => controller.showDetails()}
-				>
-					Details
-				</button>
-			</nav>
+			{#if sheet.versions.length > 1}
+				<!-- The tab strip earns its place only when there is a choice
+				     to make (owner ruling 2026-08-17, reversing the 2026-08-10
+				     "tab remains available with one row" line): a single-version
+				     album opens straight on Details and shows no strip at all.
+				     The codebase's own idiom agrees — the "N versions" badge on
+				     tiles only appears when versionCount > 1. -->
+				<nav class="album-tabs" aria-label="Album page sections" data-testid="unified-album-tabs">
+					<button
+						type="button"
+						class:on={sheet.activeTab === 'versions'}
+						data-testid="unified-album-tab-versions"
+						onclick={() => controller.showVersions()}
+					>
+						Versions{sheet.versions.length > 0 ? ` (${sheet.versions.length})` : ''}
+					</button>
+					<button
+						type="button"
+						class:on={sheet.activeTab === 'details'}
+						data-testid="unified-album-tab-details"
+						disabled={!sheet.selectedVersionId}
+						onclick={() => controller.showDetails()}
+					>
+						Details
+					</button>
+				</nav>
+			{/if}
 
 			{#if actionTarget !== undefined && zones.length > 1}
 				<div class="zone-picker" data-testid="unified-album-zone-picker">
@@ -382,10 +396,18 @@
 								onclick={() => selectVersion(version.versionId)}
 							>
 								<span class="version-art">
+									<!-- Same treatment as the hero (q6): the mono glyph is
+									     the permanent placeholder layer; a failed thumb load
+									     hides the img in place and reveals it. -->
+									<span class="version-mono" aria-hidden="true">{versionLabel(version, index).slice(0, 1)}</span>
 									{#if version.imageKeyHint}
-										<img src={imageUrl(version.imageKeyHint, { scale: 'fit', width: 96, height: 96 })} alt="" loading="lazy" />
-									{:else}
-										<span class="version-mono">{versionLabel(version, index).slice(0, 1)}</span>
+										<img
+											src={imageUrl(version.imageKeyHint, { scale: 'fit', width: 96, height: 96 })}
+											alt=""
+											loading="lazy"
+											data-testid="unified-album-version-art-{index}"
+											use:hideOnError
+										/>
 									{/if}
 								</span>
 								<span class="version-copy">
@@ -466,6 +488,16 @@
 						     live follow state — not the view kind — is the gate. -->
 						<section class="editorial" data-testid="unified-album-similar-album">
 							<h3>{editorial.view.title}</h3>
+							{#if editorial.view.artworkKey}
+								<img
+									class="child-art"
+									src={imageUrl(editorial.view.artworkKey, { scale: 'fit', width: 128, height: 128 })}
+									alt=""
+									loading="lazy"
+									data-testid="unified-album-similar-album-art"
+									use:hideOnError
+								/>
+							{/if}
 							{#if editorial.view.subtitle}
 								<p class="child-subtitle">{editorial.view.subtitle}</p>
 							{/if}
@@ -524,6 +556,16 @@
 						     biography, and the way back to the album's own view. -->
 						<section class="editorial" data-testid="unified-album-credit-performer">
 							<h3>{editorial.view.title}</h3>
+							{#if editorial.view.artworkKey}
+								<img
+									class="child-art"
+									src={imageUrl(editorial.view.artworkKey, { scale: 'fit', width: 128, height: 128 })}
+									alt=""
+									loading="lazy"
+									data-testid="unified-album-credit-performer-art"
+									use:hideOnError
+								/>
+							{/if}
 							<button
 								type="button"
 								class="follow-back"
@@ -580,13 +622,21 @@
 	/* The shared hero-art rules are scoped to the retired modal's .panel
 	   ancestor; the page carries its own (ri1-5). */
 	.item-page-body .art {
+		position: relative;
 		width: 196px;
 		height: 196px;
 		border-radius: 4px;
 		overflow: hidden;
 		background: var(--songr-surface-11);
+		/* Same art chrome as the scope-view tiles (q6): soft drop shadow
+		   plus a 1px keyline. */
+		box-shadow:
+			0 6px 16px rgba(0, 0, 0, 0.6),
+			0 0 0 1px var(--line-subtle);
 	}
 	.item-page-body .art img {
+		position: absolute;
+		inset: 0;
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
@@ -660,14 +710,19 @@
 		border-color: color-mix(in srgb, var(--error, #e66) 55%, var(--line-subtle));
 	}
 	.version-art {
+		position: relative;
 		width: 50px;
 		height: 50px;
 		flex: 0 0 50px;
 		overflow: hidden;
 		border-radius: 4px;
 		background: var(--songr-surface-16);
+		/* 1px keyline, matching the tile art chrome at thumbnail size (q6). */
+		box-shadow: 0 0 0 1px var(--line-subtle);
 	}
 	.version-art img {
+		position: absolute;
+		inset: 0;
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
@@ -748,12 +803,13 @@
 	.editorial {
 		margin-top: 18px;
 	}
+	/* Followed-child identity heading (q6): the child title reads as
+	   identity, not a section label — same treatment as the artist page's
+	   followed-child heading. */
 	.editorial h3 {
 		margin: 0 0 6px;
-		font-size: 12px;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: var(--soft);
+		font-size: 15px;
+		font-weight: 600;
 	}
 	.follow-back {
 		padding: 0;
@@ -763,10 +819,24 @@
 		font-size: 12px;
 		cursor: pointer;
 	}
+	.follow-back:hover {
+		color: var(--accent2);
+	}
 	.child-subtitle {
 		margin: 0 0 4px;
 		font-size: 12px;
 		color: var(--soft);
+	}
+	.child-art {
+		display: block;
+		width: 64px;
+		height: 64px;
+		margin: 4px 0 8px;
+		border-radius: 4px;
+		object-fit: cover;
+		background: var(--songr-surface-11);
+		/* 1px keyline, matching the tile art chrome at this size (q6). */
+		box-shadow: 0 0 0 1px var(--line-subtle);
 	}
 	.tinfo {
 		padding: 2px 8px;

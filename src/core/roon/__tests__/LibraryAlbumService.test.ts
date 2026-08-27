@@ -210,6 +210,7 @@ class FakeCoordinator implements LibraryAlbumCoordinatorPort {
     work: (session: CoordinatedBrowseSession) => Promise<T>
   ): Promise<T> {
     const session: CoordinatedBrowseSession = {
+      sessionScope: "action-session",
       browse: () => Promise.resolve({ level: 0, offset: 0, count: 0, items: [] }),
       load: () => Promise.resolve({ level: 0, offset: 0, count: 0, items: [] }),
       pop: (options) => {
@@ -952,6 +953,156 @@ describe("LibraryAlbumService", () => {
     expect(service.open(origin, request({ requestId: "request-4" }), sink()).ack).toMatchObject({
       success: false,
       code: "INVALID_REQUEST",
+    });
+  });
+
+  it("tolerates a benign metadata publish mid-read and continues against the fresh snapshot", async () => {
+    await openPage();
+    const page = versionsEvents[0];
+    const [first] = page.versions;
+
+    // A benign publish: resolution status refines, timestamps advance,
+    // artwork hints appear — the album's identity is untouched.
+    catalogSnapshot = {
+      ...snapshot(
+        album({
+          resolutionStatus: "ambiguous",
+          lastSeenAt: "2026-07-15T00:00:00.000Z",
+        }),
+        artist({ lastSeenAt: "2026-07-15T00:00:00.000Z" })
+      ),
+      revision: 2,
+      updatedAt: "2026-07-15T00:00:00.000Z",
+    };
+
+    await select(first.versionId);
+    expect(versionFailedEvents).toEqual([]);
+    expect(resolvedEvents[0]).toMatchObject({ versionId: first.versionId });
+
+    // A later action authority survives the same tolerated publish.
+    const authority = service.claimSelectedVersionAction(origin, {
+      pageId: page.operationId,
+      versionId: first.versionId,
+      tabId: "tab-1",
+      generation: 7,
+    });
+    expect(authority).toMatchObject({ versionId: first.versionId });
+  });
+
+  it("survives a benign extended→public authority flip while the extended read continues", async () => {
+    catalogSnapshot = {
+      ...snapshot(
+        album({
+          artistLocalId: undefined,
+          resolutionStatus: "unresolved",
+          extendedAlbumId: "123456789",
+        })
+      ),
+      artists: [],
+    };
+    await openPage();
+    expect(versionsEvents[0].versions).toHaveLength(1);
+    const versionId = versionsEvents[0].versions[0].versionId;
+
+    // The auxiliary artist load publishes: the same album entry becomes a
+    // resolved, artist-bound public authority mid-read.
+    catalogSnapshot = snapshot(
+      album({ extendedAlbumId: "123456789" }),
+      artist()
+    );
+
+    await select(versionId);
+    expect(versionFailedEvents).toEqual([]);
+    expect(fallbackResolver.calls).toHaveLength(1);
+    expect(resolvedEvents[0]).toMatchObject({ versionId });
+  });
+
+  it("fails a public read whose album is republished unresolved mid-open (q10-3)", async () => {
+    catalogSnapshot = snapshot(
+      album({ resolutionStatus: "ambiguous", extendedAlbumId: "123456789" })
+    );
+    let releaseObservation!: () => void;
+    resolver.observeImpl = () =>
+      new Promise((resolve) => {
+        releaseObservation = () => resolve(resolver.current);
+      });
+    const reservation = service.open(origin, request(), sink());
+    expect(reservation.ack.success).toBe(true);
+    reservation.start?.();
+    await flush();
+
+    // The publish un-resolves the album: the authority would flip
+    // public → extended for an operation that already pinned the public
+    // read path. That direction is never benign — the read must fail at
+    // the authority check instead of publishing versions.
+    catalogSnapshot = {
+      ...snapshot(
+        album({
+          artistLocalId: undefined,
+          resolutionStatus: "unresolved",
+          extendedAlbumId: "123456789",
+        })
+      ),
+      artists: [],
+    };
+    releaseObservation();
+    await flush();
+
+    expect(versionsEvents).toEqual([]);
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0].code).toBe("ALBUM_NOT_FOUND");
+  });
+
+  it("rejects an extended→public flip that swaps the native album identity (q10-2)", async () => {
+    catalogSnapshot = {
+      ...snapshot(
+        album({
+          artistLocalId: undefined,
+          resolutionStatus: "unresolved",
+          extendedAlbumId: "123456789",
+        })
+      ),
+      artists: [],
+    };
+    await openPage();
+    expect(versionsEvents[0].versions).toHaveLength(1);
+    const versionId = versionsEvents[0].versions[0].versionId;
+
+    // Same catalog identity fields, DIFFERENT native album id: the
+    // extended authority is keyed by extendedAlbumId, so the transition
+    // must fail closed rather than resolve the page against B.
+    catalogSnapshot = snapshot(album({ extendedAlbumId: "987654321" }), artist());
+
+    await select(versionId);
+    expect(resolvedEvents).toEqual([]);
+    expect(versionFailedEvents).toHaveLength(1);
+    expect(versionFailedEvents[0]).toMatchObject({
+      versionId,
+      code: "ALBUM_NOT_FOUND",
+    });
+    expect(fallbackResolver.calls).toHaveLength(0);
+  });
+
+  it("still kills the read when the album's identity genuinely changes mid-read", async () => {
+    await openPage();
+    const [first] = versionsEvents[0].versions;
+
+    // A true version swap behind the same local id: different track set.
+    catalogSnapshot = snapshot(
+      album({
+        trackTitleFingerprint: createCatalogTrackTitleFingerprint([
+          "Other",
+          "Tracks",
+        ]),
+      })
+    );
+
+    await select(first.versionId);
+    expect(resolvedEvents).toEqual([]);
+    expect(versionFailedEvents).toHaveLength(1);
+    expect(versionFailedEvents[0]).toMatchObject({
+      versionId: first.versionId,
+      code: "ALBUM_NOT_FOUND",
     });
   });
 });

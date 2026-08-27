@@ -101,4 +101,28 @@ describe('selectedZoneStore', () => {
 		expect(get(store.selectedZoneStore)).toBe('zone-b');
 		expect(storage.getItem(STORAGE_KEY)).toBeNull();
 	});
+
+	it('setEffectiveZone updates the live value without touching storage or the pin', async () => {
+		const store = await importStore();
+		store.setSelectedZone('zone-a');
+		const write = vi.spyOn(storage, 'setItem');
+
+		store.setEffectiveZone('zone-b');
+
+		expect(get(store.selectedZoneStore)).toBe('zone-b');
+		expect(write).not.toHaveBeenCalled();
+		expect(storage.getItem(STORAGE_KEY)).toBe('zone-a');
+		expect(store.getPinnedZone()).toBe('zone-a');
+	});
+
+	it('getPinnedZone reflects the last explicit selection, not a fallback', async () => {
+		const store = await importStore();
+		store.setSelectedZone('zone-a');
+
+		store.setEffectiveZone('zone-b');
+		expect(store.getPinnedZone()).toBe('zone-a');
+
+		store.setSelectedZone('zone-c');
+		expect(store.getPinnedZone()).toBe('zone-c');
+	});
 });

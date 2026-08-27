@@ -14,8 +14,11 @@ FROM node:22-alpine AS frontend-build
 # This stage has no .git, so the UI build cannot ask git for the
 # revision it stamps into kit.version.name. Pass it in:
 #   docker build --build-arg SOURCE_COMMIT=$(git rev-parse --short HEAD) …
-# Without it the build falls back to a unique per-build stamp (never a
-# constant — SvelteKit uses the value for stale-deployment detection).
+# Without it the build falls back to the root manifest version (never a
+# constant across releases — SvelteKit uses the value for stale-deployment
+# detection — and deterministic within one build, which a per-build clock
+# stamp is not: per-environment config evaluation would split the
+# hydration global and boot to a black page).
 ARG SOURCE_COMMIT=
 ENV PUBLIC_BUILD_REV=${SOURCE_COMMIT}
 WORKDIR /build

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
 	UNIFIED_FILTER_TEXT_MAX_LENGTH,
 	UNIFIED_BROWSE_RESTORE_COUNT_MAX,
+	UNIFIED_LABEL_MAX_LENGTH,
+	UNIFIED_ITEM_ORIGIN_NAME_MAX_LENGTH,
 	UNIFIED_LIBRARY_PAGE_STATE_VERSION,
 	buildLibraryPageStateEnvelope,
 	buildUnifiedLibraryPageState,
@@ -33,6 +35,7 @@ function unifiedSnapshot(): UnifiedLibrarySnapshot {
 		itemTarget: { kind: 'album', localId: 'album-local-9' },
 		itemDetail: null,
 		composition: null,
+		itemOriginName: null,
 		filterText: 'brian',
 		surpriseSeed: 42,
 		density: 'compact',
@@ -42,9 +45,17 @@ function unifiedSnapshot(): UnifiedLibrarySnapshot {
 
 /** The v6 snapshot shape (item split, no child/composition surfaces). */
 function legacyV6Snapshot(): Record<string, unknown> {
-	const { itemDetail, composition, ...rest } = unifiedSnapshot();
+	const { itemDetail, composition, itemOriginName, ...rest } = unifiedSnapshot();
 	void itemDetail;
 	void composition;
+	void itemOriginName;
+	return rest as unknown as Record<string, unknown>;
+}
+
+/** The v7 snapshot shape (item origin name not yet introduced, issue #6). */
+function legacyV7Snapshot(): Record<string, unknown> {
+	const { itemOriginName, ...rest } = unifiedSnapshot();
+	void itemOriginName;
 	return rest as unknown as Record<string, unknown>;
 }
 
@@ -191,6 +202,77 @@ describe('Unified Library page state', () => {
 				snapshot: { ...legacyV6Snapshot(), itemDetail: null }
 			})
 		).toBeNull();
+	});
+
+	it('promotes v7 state with no item origin name (issue #6)', () => {
+		expect(
+			normalizeLibraryPageState({
+				libraryView: 'unified',
+				schemaVersion: 7,
+				snapshot: legacyV7Snapshot()
+			})
+		).toEqual({
+			libraryView: 'unified',
+			schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+			snapshot: unifiedSnapshot()
+		});
+		// A v7 payload that smuggles the v8 key is not v7: reject.
+		expect(
+			normalizeLibraryPageState({
+				libraryView: 'unified',
+				schemaVersion: 7,
+				snapshot: { ...legacyV7Snapshot(), itemOriginName: null }
+			})
+		).toBeNull();
+	});
+
+	it('binds the item origin name to its album parent context (issue #6)', () => {
+		const albumContext = { ...unifiedSnapshot(), itemOriginName: 'Brian Eno' };
+		expect(
+			normalizeLibraryPageState({
+				libraryView: 'unified',
+				schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+				snapshot: albumContext
+			})?.snapshot.itemOriginName
+		).toBe('Brian Eno');
+		// No album parent → the origin label is not a reconstructible back
+		// target: reject.
+		for (const itemTarget of [null, { kind: 'artist', localId: 'a-1' }]) {
+			expect(
+				normalizeLibraryPageState({
+					libraryView: 'unified',
+					schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+					snapshot: { ...albumContext, itemTarget }
+				})
+			).toBeNull();
+		}
+		// Bounds and shape are strict.
+		for (const itemOriginName of [
+			'',
+			'x'.repeat(UNIFIED_ITEM_ORIGIN_NAME_MAX_LENGTH + 1),
+			42,
+			{}
+		]) {
+			expect(
+				normalizeLibraryPageState({
+					libraryView: 'unified',
+					schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+					snapshot: { ...unifiedSnapshot(), itemOriginName }
+				})
+			).toBeNull();
+		}
+	});
+
+	it('accepts an origin name longer than the generic label cap (gh6-1)', () => {
+		// The catalog display-text domain (512) exceeds the generic label cap
+		// (256); a name in between must survive a persisted round-trip.
+		const longName = 'x'.repeat(UNIFIED_LABEL_MAX_LENGTH + 1);
+		const restored = normalizeLibraryPageState({
+			libraryView: 'unified',
+			schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+			snapshot: { ...unifiedSnapshot(), itemOriginName: longName }
+		});
+		expect(restored?.snapshot.itemOriginName).toBe(longName);
 	});
 
 	it('binds the exact-track child to its album parent context (Slice 8)', () => {
@@ -372,6 +454,7 @@ describe('Unified Library page state', () => {
 			itemTarget: null,
 			itemDetail: null,
 			composition: null,
+			itemOriginName: null,
 			filterText: '',
 			surpriseSeed: null,
 			density: null,

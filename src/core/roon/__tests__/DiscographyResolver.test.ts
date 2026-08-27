@@ -24,6 +24,15 @@ function artist(): ArtistRef {
   };
 }
 
+function amonArtist(): ArtistRef {
+  return {
+    ...artist(),
+    localId: "10000000-0000-4000-8000-000000000002",
+    exactName: "Amon Tobin",
+    normalizedName: "amon tobin",
+  };
+}
+
 function row(
   title: string,
   key: string,
@@ -59,6 +68,8 @@ class ScriptedSession implements CoordinatedBrowseSession {
   public readonly browse = jest.fn<Promise<BrowseResult>, [BrowseOptions]>();
   public readonly load = jest.fn<Promise<BrowseResult>, [BrowseLoadOptions]>();
   public readonly pop = jest.fn<Promise<BrowseResult>, [BrowsePopOptions]>();
+
+  public constructor(public readonly sessionScope = "scripted-session") {}
 }
 
 describe("DiscographyResolver", () => {
@@ -409,5 +420,213 @@ describe("DiscographyResolver", () => {
     await expect(
       new DiscographyResolver().observeCurrent(session, artist())
     ).rejects.toMatchObject({ code: "INCOMPLETE_DISCOGRAPHY" });
+  });
+
+  it("reuses a verified cached locator inside one session and skips the artist-root walk", async () => {
+    const resolver = new DiscographyResolver();
+    const session = new ScriptedSession("catalog:4");
+    session.browse
+      .mockResolvedValueOnce(
+        page(
+          [row("Björk", "49:1"), row("Amon Tobin", "49:2")],
+          2,
+          0,
+          "Artists"
+        )
+      )
+      .mockResolvedValueOnce(
+        page([row("Debut", "49:10", { itemType: "album" })], 1, 0, "Björk")
+      );
+
+    const first = await resolver.resolve(session, artist());
+    expect(first.kind).toBe("resolved");
+    expect(session.browse).toHaveBeenCalledTimes(2);
+
+    session.browse.mockResolvedValueOnce(
+      page(
+        [row("Out From Out Where", "49:20", { itemType: "album" })],
+        1,
+        0,
+        "Amon Tobin"
+      )
+    );
+
+    const second = await resolver.resolve(session, amonArtist());
+
+    expect(second.kind).toBe("resolved");
+    if (second.kind !== "resolved") throw new Error("expected resolution");
+    expect(second.observation.artist).toEqual({
+      exactName: "Amon Tobin",
+      candidateCount: 1,
+    });
+    expect(session.browse).toHaveBeenCalledTimes(3);
+    expect(session.browse).toHaveBeenNthCalledWith(3, {
+      hierarchy: "artists",
+      itemKey: "49:2",
+      offset: 0,
+      pageSize: 100,
+    });
+    expect(session.load).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the full artist-root scan when the cached locator verifies the wrong artist", async () => {
+    const resolver = new DiscographyResolver();
+    const session = new ScriptedSession("catalog:4");
+    session.browse
+      .mockResolvedValueOnce(
+        page(
+          [row("Björk", "49:1"), row("Amon Tobin", "49:2")],
+          2,
+          0,
+          "Artists"
+        )
+      )
+      .mockResolvedValueOnce(
+        page([row("Debut", "49:10", { itemType: "album" })], 1, 0, "Björk")
+      );
+    await resolver.resolve(session, artist());
+
+    session.browse
+      .mockResolvedValueOnce(page([row("Impostor", "49:99")], 1, 0, "Someone Else"))
+      .mockResolvedValueOnce(
+        page(
+          [row("Björk", "50:1"), row("Amon Tobin", "50:2")],
+          2,
+          0,
+          "Artists"
+        )
+      )
+      .mockResolvedValueOnce(
+        page(
+          [row("Out From Out Where", "50:20", { itemType: "album" })],
+          1,
+          0,
+          "Amon Tobin"
+        )
+      );
+
+    const result = await resolver.resolve(session, amonArtist());
+
+    expect(result.kind).toBe("resolved");
+    expect(session.browse).toHaveBeenNthCalledWith(3, {
+      hierarchy: "artists",
+      itemKey: "49:2",
+      offset: 0,
+      pageSize: 100,
+    });
+    expect(session.browse).toHaveBeenNthCalledWith(4, {
+      hierarchy: "artists",
+      offset: 0,
+      pageSize: 100,
+      popAll: true,
+      refresh: true,
+    });
+    expect(session.browse).toHaveBeenNthCalledWith(5, {
+      hierarchy: "artists",
+      itemKey: "50:2",
+      offset: 0,
+      pageSize: 100,
+    });
+
+    session.browse.mockResolvedValueOnce(
+      page([row("Post", "50:11", { itemType: "album" })], 1, 0, "Björk")
+    );
+    const refreshed = await resolver.resolve(session, artist());
+    expect(refreshed.kind).toBe("resolved");
+    expect(session.browse).toHaveBeenNthCalledWith(6, {
+      hierarchy: "artists",
+      itemKey: "50:1",
+      offset: 0,
+      pageSize: 100,
+    });
+    expect(session.browse).toHaveBeenCalledTimes(6);
+  });
+
+  it("falls back to the full artist-root scan when the cached locator browse fails", async () => {
+    const resolver = new DiscographyResolver();
+    const session = new ScriptedSession("catalog:4");
+    session.browse
+      .mockResolvedValueOnce(
+        page(
+          [row("Björk", "49:1"), row("Amon Tobin", "49:2")],
+          2,
+          0,
+          "Artists"
+        )
+      )
+      .mockResolvedValueOnce(
+        page([row("Debut", "49:10", { itemType: "album" })], 1, 0, "Björk")
+      );
+    await resolver.resolve(session, artist());
+
+    session.browse
+      .mockRejectedValueOnce(new Error("browse session lost"))
+      .mockResolvedValueOnce(page([row("Amon Tobin", "51:2")], 1, 0, "Artists"))
+      .mockResolvedValueOnce(
+        page(
+          [row("Out From Out Where", "51:20", { itemType: "album" })],
+          1,
+          0,
+          "Amon Tobin"
+        )
+      );
+
+    const result = await resolver.resolve(session, amonArtist());
+
+    expect(result.kind).toBe("resolved");
+    expect(session.browse).toHaveBeenNthCalledWith(4, {
+      hierarchy: "artists",
+      offset: 0,
+      pageSize: 100,
+      popAll: true,
+      refresh: true,
+    });
+  });
+
+  it("drops cached locators when the browse session scope rotates", async () => {
+    const resolver = new DiscographyResolver();
+    const first = new ScriptedSession("catalog:4");
+    first.browse
+      .mockResolvedValueOnce(
+        page(
+          [row("Björk", "49:1"), row("Amon Tobin", "49:2")],
+          2,
+          0,
+          "Artists"
+        )
+      )
+      .mockResolvedValueOnce(
+        page([row("Debut", "49:10", { itemType: "album" })], 1, 0, "Björk")
+      );
+    await resolver.resolve(first, artist());
+
+    const rotated = new ScriptedSession("catalog:5");
+    rotated.browse
+      .mockResolvedValueOnce(page([row("Amon Tobin", "60:2")], 1, 0, "Artists"))
+      .mockResolvedValueOnce(
+        page(
+          [row("Out From Out Where", "60:20", { itemType: "album" })],
+          1,
+          0,
+          "Amon Tobin"
+        )
+      );
+
+    const result = await resolver.resolve(rotated, amonArtist());
+
+    expect(result.kind).toBe("resolved");
+    expect(rotated.browse).toHaveBeenNthCalledWith(1, {
+      hierarchy: "artists",
+      offset: 0,
+      pageSize: 100,
+      popAll: true,
+      refresh: true,
+    });
+    expect(rotated.browse).toHaveBeenNthCalledWith(2, {
+      hierarchy: "artists",
+      itemKey: "60:2",
+      offset: 0,
+      pageSize: 100,
+    });
   });
 });

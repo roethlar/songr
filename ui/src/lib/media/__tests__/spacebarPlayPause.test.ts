@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createFakeSocket } from '../../../test/fixtures/socket';
+import { claimModalSurface } from '$lib/actions/focusTrap';
 import { setSelectedZone } from '$lib/stores/selectedZoneStore';
 import { clearCommandFeedback } from '$lib/stores/commandFeedbackStore';
 import { startSpacebarPlayPause } from '../spacebarPlayPause';
@@ -128,6 +129,25 @@ describe('startSpacebarPlayPause', () => {
 		dialog.remove();
 		pressSpace();
 		expect(playPauseCalls()).toHaveLength(1);
+	});
+
+	it('stays out of the way while a surface claim is held, before its dialog mounts', () => {
+		// A surface that has decided to open claims the keyboard synchronously;
+		// its aria-modal element only reaches the DOM a flush later.
+		const release = claimModalSurface();
+
+		const during = pressSpace();
+
+		expect(socket.emit).not.toHaveBeenCalled();
+		expect(during.defaultPrevented).toBe(false);
+
+		release();
+		release(); // idempotent — a double release must not free someone else's claim
+
+		const after = pressSpace();
+
+		expect(playPauseCalls()).toEqual([['transport:play-pause', { zone_id: 'zone-1' }]]);
+		expect(after.defaultPrevented).toBe(true);
 	});
 
 	it('ignores auto-repeat from a held Space', () => {

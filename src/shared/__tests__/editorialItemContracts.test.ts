@@ -8,6 +8,8 @@ import {
   EDITORIAL_MAX_CREDITS,
   EDITORIAL_MAX_RELATIONSHIP_ROWS,
   EDITORIAL_TEXT_MAX_LENGTH,
+  EDITORIAL_WIDE_ARTWORK_KEY_MAX_LENGTH,
+  EDITORIAL_WIDE_ARTWORK_REFERENCE_PREFIX,
   normalizeEditorialItemCancelRequest,
   normalizeEditorialItemFailedEvent,
   normalizeEditorialItemFollowRequest,
@@ -15,6 +17,7 @@ import {
   normalizeEditorialItemOpenRequest,
   normalizeEditorialItemReadyEvent,
   normalizeEditorialItemView,
+  salvageEditorialItemView,
 } from "../editorialItemContracts";
 
 const REQUEST_ID = "req-1";
@@ -221,6 +224,161 @@ describe("the browser-safe editorial view (§5.4)", () => {
         })
       )
     ).toBeNull();
+  });
+
+  it("round-trips legal opaque image keys and rejects invalid ones (q2-2)", () => {
+    // Roon image keys legally contain URL-significant characters; the
+    // image pipeline encodes and serves them (imageUrl + /api/image).
+    for (const key of ["abc/def?x=1", "img#a%25", "a/b?c#d%e"]) {
+      const normalized = normalizeEditorialItemView(view({ artworkKey: key }));
+      expect(normalized?.artworkKey).toBe(key);
+      const withRow = normalizeEditorialItemView(
+        view({
+          relationshipGroups: [
+            { label: "Similar", items: [{ title: "B", artworkKey: key }] },
+          ],
+        })
+      );
+      expect(withRow?.relationshipGroups?.[0].items[0].artworkKey).toBe(key);
+      // The salvage path applies the same image-key rule.
+      expect(salvageEditorialItemView(view({ artworkKey: key }))?.view.artworkKey).toBe(key);
+    }
+    // Empty, oversized (the /api/image route's 256-char cap), and
+    // control-character keys reject; identifier fields keep the strict
+    // id alphabet (a `/` in a follow target still fails closed).
+    for (const key of ["", "k".repeat(257), "a\u0007b"]) {
+      expect(normalizeEditorialItemView(view({ artworkKey: key }))).toBeNull();
+      expect(
+        normalizeEditorialItemView(
+          view({
+            relationshipGroups: [
+              { label: "Similar", items: [{ title: "B", artworkKey: key }] },
+            ],
+          })
+        )
+      ).toBeNull();
+    }
+    expect(
+      normalizeEditorialItemView(
+        view({
+          relationshipGroups: [
+            { label: "Similar", items: [{ title: "B", followTarget: "a/b" }] },
+          ],
+        })
+      )
+    ).toBeNull();
+  });
+
+  it("holds the wide portrait reference to its own tagged domain", () => {
+    const tag = EDITORIAL_WIDE_ARTWORK_REFERENCE_PREFIX;
+    const wide = `${tag}wideportrait01`;
+    const normalized = normalizeEditorialItemView(
+      view({ kind: "artist", artworkKey: "abc/def?x=1", wideArtworkKey: wide })
+    );
+    expect(normalized?.wideArtworkKey).toBe(wide);
+    expect(normalized?.artworkKey).toBe("abc/def?x=1");
+
+    // Every one of these is a PERFECTLY LEGAL artwork key. None of them is
+    // a wide portrait reference: the two fields are not interchangeable, so
+    // a value that belongs in one is refused in the other's role.
+    //
+    // The BARE keys are the wh-3 cases. A key with no tag cannot have come
+    // from the one producer that mints one, however plausible its shape —
+    // and 32 lowercase hex characters is exactly the shape of a real
+    // extension-API image key, which the untagged lower-case-alphanumeric
+    // rule accepted, sent to a route that could only 404 it, and reported
+    // as an artist with no photograph.
+    for (const key of [
+      "abc/def?x=1",
+      "img#a%25",
+      "a/b?c#d%e",
+      "WIDEPORTRAIT",
+      "wide portrait",
+      "wide-portrait",
+      "wide.portrait",
+      "k".repeat(65),
+      "",
+      "ppcbaaaa",
+      // An extension-API artwork key: 32 lowercase hex characters. Built at
+      // runtime so no token-shaped literal sits in this public file; the
+      // property under test is the shape, not any particular key.
+      "0a1b2c3d".repeat(4),
+      // The tag alone names no picture at all.
+      tag,
+      // Behind the tag, the bare key's own alphabet and cap still bite.
+      `${tag}WIDEPORTRAIT`,
+      `${tag}wide portrait`,
+      `${tag}wide-portrait`,
+      `${tag}wide.portrait`,
+      `${tag}${"k".repeat(65)}`,
+      // A tag that is not at the front is not a tag.
+      `wide${tag}01`,
+    ]) {
+      expect(
+        normalizeEditorialItemView(view({ kind: "artist", wideArtworkKey: key }))
+      ).toBeNull();
+      // Salvage costs the page its banner and nothing else — absence, not
+      // an error, is what reaches a reader.
+      const salvaged = salvageEditorialItemView(
+        view({ kind: "artist", title: "Artist", wideArtworkKey: key })
+      );
+      expect(salvaged?.view.title).toBe("Artist");
+      expect(salvaged?.view.wideArtworkKey).toBeUndefined();
+    }
+  });
+
+  it("admits a reference whose bare key is exactly at the length cap", () => {
+    // The cap is the tag plus the bare key's own 64 characters, and it is
+    // derived from the tag rather than written down twice — so the boundary
+    // is asserted against the exported bound, not against a literal that
+    // could drift away from it.
+    const atCap = `${EDITORIAL_WIDE_ARTWORK_REFERENCE_PREFIX}${"k".repeat(64)}`;
+    expect(atCap).toHaveLength(EDITORIAL_WIDE_ARTWORK_KEY_MAX_LENGTH);
+    expect(
+      normalizeEditorialItemView(view({ kind: "artist", wideArtworkKey: atCap }))
+    ).not.toBeNull();
+    expect(
+      normalizeEditorialItemView(
+        view({
+          kind: "artist",
+          wideArtworkKey: `${EDITORIAL_WIDE_ARTWORK_REFERENCE_PREFIX}${"k".repeat(65)}`,
+        })
+      )
+    ).toBeNull();
+  });
+
+  it("refuses one key standing in both artwork roles", () => {
+    // Legal in BOTH domains on its own, so only the collision rejects it. A
+    // tagged reference is still a legal ARTWORK key by its alphabet — the
+    // tag is a claim about provenance, never a proof that a value is not
+    // artwork — which is exactly why this collision rule is still needed.
+    const shared = `${EDITORIAL_WIDE_ARTWORK_REFERENCE_PREFIX}abc123`;
+    expect(
+      normalizeEditorialItemView(view({ kind: "artist", artworkKey: shared }))
+    ).not.toBeNull();
+    expect(
+      normalizeEditorialItemView(view({ kind: "artist", wideArtworkKey: shared }))
+    ).not.toBeNull();
+    expect(
+      normalizeEditorialItemView(
+        view({ kind: "artist", artworkKey: shared, wideArtworkKey: shared })
+      )
+    ).toBeNull();
+    // Salvage keeps the artwork key and drops the duplicate wide one.
+    const salvaged = salvageEditorialItemView(
+      view({ kind: "artist", artworkKey: shared, wideArtworkKey: shared })
+    );
+    expect(salvaged?.view.artworkKey).toBe(shared);
+    expect(salvaged?.view.wideArtworkKey).toBeUndefined();
+  });
+
+  it("treats an absent wide portrait key as an ordinary view", () => {
+    const normalized = normalizeEditorialItemView(
+      view({ kind: "artist", artworkKey: "abc/def?x=1" })
+    );
+    expect(normalized).not.toBeNull();
+    expect(normalized?.wideArtworkKey).toBeUndefined();
+    expect("wideArtworkKey" in (normalized as object)).toBe(false);
   });
 
   it("allows only http(s) attribution and source URLs", () => {

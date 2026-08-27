@@ -17,13 +17,41 @@
 const MODAL_SURFACE_SELECTOR = '[aria-modal="true"], dialog[open]';
 
 /**
- * Whether any trapped surface (modal or menu) is currently mounted.
+ * Surfaces that have decided to open but whose dialog has not reached the
+ * DOM yet. `hasOpenModalSurface` is DOM-derived, and the flush that mounts
+ * an `aria-modal` element runs a microtask after the state flip — so a key
+ * arriving in that same turn (the library palette's "a" followed by an
+ * immediate Space) would otherwise see no open surface and act on it.
+ */
+let claimedSurfaces = 0;
+
+/**
+ * Synchronously claim keyboard ownership for a modal surface that is about
+ * to mount. Call it in the same turn that flips the open state, and release
+ * once the dialog is in the DOM (`tick().then(release)`), where the
+ * `aria-modal` selector takes over. The returned release is idempotent, so
+ * a claim can never leak past its double-release.
+ */
+export function claimModalSurface(): () => void {
+	claimedSurfaces += 1;
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		claimedSurfaces -= 1;
+	};
+}
+
+/**
+ * Whether any trapped surface (modal or menu) is currently mounted, or has
+ * claimed the keyboard while its dialog is still on the way to the DOM.
  *
  * The same selector the trap itself uses, so the two can never disagree about
  * what counts as trapped. Global keyboard shortcuts ask this before acting:
  * while a dialog owns the keyboard, an app-wide key must stay out of its way.
  */
 export function hasOpenModalSurface(): boolean {
+	if (claimedSurfaces > 0) return true;
 	if (typeof document === 'undefined') return false;
 	return document.querySelector(MODAL_SURFACE_SELECTOR) !== null;
 }

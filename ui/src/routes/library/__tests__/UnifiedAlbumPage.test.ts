@@ -163,6 +163,95 @@ describe('UnifiedAlbumPage', () => {
 		});
 	});
 
+	it('reveals the monogram fallback when the hero image fails to load (q6)', async () => {
+		makeHarness(resolvedState(), actionState(), undefined, null, {
+			album: { imageKey: 'album-art-1', title: 'Debut', artist: 'Björk' }
+		});
+		const image = screen.getByTestId('unified-album-hero-image') as HTMLImageElement;
+		const fallback = screen.getByTestId('unified-album-hero-fallback');
+		// The monogram is the permanent placeholder layer beneath the image
+		// (q6); while the image has not failed, it stays visible on top.
+		expect(fallback.textContent?.trim()).toBe('D');
+		expect(image.style.visibility).toBe('');
+		// A stale key or /api/image error hides the img in place (the box's
+		// geometry is unchanged) and reveals the monogram beneath.
+		await fireEvent.error(image);
+		expect(image.style.visibility).toBe('hidden');
+		// A later successful load (e.g. a retried src) restores the image.
+		await fireEvent.load(image);
+		expect(image.style.visibility).toBe('');
+	});
+
+	it('keeps the permanent fallback glyphs out of the accessibility tree (q6-1)', async () => {
+		makeHarness(resolvedState(), actionState(), undefined, null, {
+			album: { imageKey: 'album-art-1', title: 'Debut', artist: 'Björk' }
+		});
+		// Both fallback layers are decorative in both states — the album
+		// title/version label carry the accessible names — so their stray
+		// initials must not reach assistive tech, whether or not the keyed
+		// images load.
+		expect(screen.getByTestId('unified-album-hero-fallback')).toHaveAttribute(
+			'aria-hidden',
+			'true'
+		);
+	});
+
+	it('keeps the version glyph out of the version button accessible name (q6-1)', async () => {
+		makeHarness(
+			sheetState({
+				phase: 'versions',
+				activeTab: 'versions',
+				artist: 'Björk',
+				title: 'Debut',
+				versions: [
+					{
+						versionId: VERSION_A,
+						editionText: '2011 Remaster',
+						imageKeyHint: 'stale-artwork',
+						phase: 'idle',
+						trackCount: null,
+						code: null,
+						error: null
+					}
+				]
+			})
+		);
+		const button = screen.getByTestId('unified-album-version-0');
+		const mono = button.querySelector('.version-mono');
+		expect(mono).not.toBeNull();
+		// The glyph is a child of the button: without aria-hidden it would
+		// prepend a stray letter to the button's accessible name.
+		expect(mono).toHaveAttribute('aria-hidden', 'true');
+	});
+
+	it('reveals the glyph fallback when a version thumbnail fails to load (q6)', async () => {
+		makeHarness(
+			sheetState({
+				phase: 'versions',
+				activeTab: 'versions',
+				artist: 'Björk',
+				title: 'Debut',
+				versions: [
+					{
+						versionId: VERSION_A,
+						editionText: '2011 Remaster',
+						imageKeyHint: 'stale-artwork',
+						phase: 'idle',
+						trackCount: null,
+						code: null,
+						error: null
+					}
+				]
+			})
+		);
+		const image = screen.getByTestId('unified-album-version-art-0') as HTMLImageElement;
+		expect(image.style.visibility).toBe('');
+		await fireEvent.error(image);
+		expect(image.style.visibility).toBe('hidden');
+		await fireEvent.load(image);
+		expect(image.style.visibility).toBe('');
+	});
+
 	it('lists every version with honest fallback labels and selects the exact row', async () => {
 		const harness = makeHarness(
 			sheetState({
@@ -220,7 +309,12 @@ describe('UnifiedAlbumPage', () => {
 			isFavorite: true,
 			isListenLater: true
 		};
-		makeHarness({ ...base, versions: [version] });
+		makeHarness({
+			...base,
+			// Two versions: the Versions tab only renders when there is a
+			// real choice (owner ruling 2026-08-17), and this test needs it.
+			versions: [version, { ...base.versions[0], versionId: VERSION_B }]
+		});
 
 		expect(screen.getByTestId('unified-album-selected-version')).toHaveTextContent('Deluxe');
 		expect(screen.getByTestId('unified-album-selected-version')).toHaveTextContent(
@@ -270,13 +364,40 @@ describe('UnifiedAlbumPage', () => {
 	});
 
 	it('switches tabs without discarding the selected version tracks', async () => {
-		const harness = makeHarness(resolvedState());
+		// Two versions: the tab strip exists only when there is a choice to
+		// switch between (owner ruling 2026-08-17).
+		const base = resolvedState();
+		const harness = makeHarness({
+			...base,
+			versions: [...base.versions, { ...base.versions[0], versionId: VERSION_B }]
+		});
 		await fireEvent.click(screen.getByTestId('unified-album-tab-versions'));
 		expect(harness.showVersions).toHaveBeenCalledTimes(1);
 		expect(screen.getByTestId('unified-album-version-0')).toHaveClass('selected');
 		await fireEvent.click(screen.getByTestId('unified-album-tab-details'));
 		expect(harness.showDetails).toHaveBeenCalledTimes(1);
 		expect(screen.getByTestId('unified-album-tracks')).toHaveTextContent('Track 2');
+	});
+
+	it('renders no tab strip for a single-version album (owner ruling 2026-08-17)', async () => {
+		// The strip earns its place only when there is a choice to make. A
+		// one-version album opens straight on Details — no "Versions (1)" tab
+		// that can never carry a decision. The codebase's own idiom agrees:
+		// the "N versions" badge on tiles only appears when versionCount > 1.
+		const harness = makeHarness(resolvedState());
+		expect(screen.queryByTestId('unified-album-tabs')).toBeNull();
+		expect(screen.getByTestId('unified-album-tracks')).toBeInTheDocument();
+
+		// A second version arriving brings the strip in.
+		harness.sheetStore.update((state) => ({
+			...state,
+			versions: [...state.versions, { ...state.versions[0], versionId: VERSION_B }]
+		}));
+		await waitFor(() =>
+			expect(screen.getByTestId('unified-album-tab-versions')).toHaveTextContent(
+				'Versions (2)'
+			)
+		);
 	});
 
 	it('surfaces failures with a retry affordance', async () => {

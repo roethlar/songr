@@ -44,7 +44,9 @@ const forbiddenWallCrossing = {
 
 module.exports = tseslint.config(
   {
-    ignores: ["dist/", "node_modules/", "**/__tests__/"],
+    // *.local.* are machine-local scratch probes: untracked, gitignored
+    // (see a7fc972), and never part of what the repo ships or verifies.
+    ignores: ["dist/", "node_modules/", "**/__tests__/", "**/*.local.ts", "**/*.local.mjs"],
   },
   ...tseslint.configs.recommendedTypeChecked,
   forbiddenWallCrossing,

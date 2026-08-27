@@ -69,6 +69,32 @@ const childrenSnippet = createRawSnippet(() => ({
 	render: () => '<div data-testid="route-child">child</div>'
 }));
 
+// This environment's jsdom `window.localStorage` is unreliable (Node's
+// experimental global localStorage shadows it, landing as `undefined`), so
+// selectedZoneStore's persistence path needs a real in-memory Storage stub
+// to exercise. Mirrors the shim in selectedZoneStore.test.ts.
+class MemoryStorage implements Storage {
+	private readonly values = new Map<string, string>();
+	get length(): number {
+		return this.values.size;
+	}
+	clear(): void {
+		this.values.clear();
+	}
+	getItem(key: string): string | null {
+		return this.values.get(key) ?? null;
+	}
+	key(index: number): string | null {
+		return [...this.values.keys()][index] ?? null;
+	}
+	removeItem(key: string): void {
+		this.values.delete(key);
+	}
+	setItem(key: string, value: string): void {
+		this.values.set(key, value);
+	}
+}
+
 function renderLayout() {
 	return render(Layout, { props: { children: childrenSnippet } });
 }
@@ -106,8 +132,14 @@ function seedTransport(outputs: Zone['outputs'] = []): void {
 
 describe('Unified-only layout', () => {
 	let libraryHost: LibraryViewHostPublisher;
+	let storage: MemoryStorage;
+	let originalStorageDescriptor: PropertyDescriptor | undefined;
 
 	beforeEach(() => {
+		storage = new MemoryStorage();
+		originalStorageDescriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+		Object.defineProperty(window, 'localStorage', { configurable: true, value: storage });
+
 		pageState.set({ url: new URL('http://localhost/library') });
 		libraryHost = claimLibraryViewHost();
 		libraryHost.publishActiveMode('unified');
@@ -140,6 +172,11 @@ describe('Unified-only layout', () => {
 	afterEach(() => {
 		cleanup();
 		libraryHost.release();
+		if (originalStorageDescriptor) {
+			Object.defineProperty(window, 'localStorage', originalStorageDescriptor);
+		} else {
+			Reflect.deleteProperty(window, 'localStorage');
+		}
 	});
 
 	it('starts one Space play/pause shortcut for the shell and stops it on teardown', async () => {
@@ -296,6 +333,37 @@ describe('Unified-only layout', () => {
 		);
 		await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Kitchen' }));
 		expect(get(selectedZoneStore)).toBe('zone-b');
+	});
+
+	it('falls back to an available zone in memory without clobbering the pinned zone, then returns to the pin', async () => {
+		const STORAGE_KEY = 'roon-controller-selected-zone';
+		setZonesSnapshot([
+			makeZone({ zone_id: 'zone-a', display_name: 'Living Room' }),
+			makeZone({ zone_id: 'zone-b', display_name: 'Kitchen' })
+		]);
+		setSelectedZone('zone-a');
+		renderLayout();
+		await tick();
+		expect(window.localStorage.getItem(STORAGE_KEY)).toBe('zone-a');
+
+		// Pinned zone momentarily absent from a non-empty zones list (Core
+		// reconnect, regroup changing zone_id, partial first delivery).
+		setZonesSnapshot([makeZone({ zone_id: 'zone-b', display_name: 'Kitchen' })]);
+		await tick();
+
+		expect(get(selectedZoneStore)).toBe('zone-b');
+		expect(window.localStorage.getItem(STORAGE_KEY)).toBe('zone-a');
+
+		// Pinned zone reappears — selection returns to the pin, still with no
+		// new write (the persisted value never changed).
+		setZonesSnapshot([
+			makeZone({ zone_id: 'zone-a', display_name: 'Living Room' }),
+			makeZone({ zone_id: 'zone-b', display_name: 'Kitchen' })
+		]);
+		await tick();
+
+		expect(get(selectedZoneStore)).toBe('zone-a');
+		expect(window.localStorage.getItem(STORAGE_KEY)).toBe('zone-a');
 	});
 
 	it('opens and closes the in-surface Queue panel', async () => {

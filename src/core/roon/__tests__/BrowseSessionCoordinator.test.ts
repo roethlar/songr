@@ -1896,6 +1896,139 @@ describe("BrowseSessionCoordinator", () => {
     expect(order).toEqual(["first-start", "first-end", "second"]);
   });
 
+  it("defers a timed-out catalog lease teardown until the holder releases", async () => {
+    const catalog = coordinator.acquireCatalog("core-1");
+    const late = deferred<void>();
+    service.browse.mockImplementationOnce((_options, lifecycle) => {
+      lifecycle.onTimeout(late.promise);
+      return Promise.reject(new RoonTimeoutError("browse.browse", 15_000));
+    });
+    await expect(
+      coordinator.runCatalog("core-1", catalog, (session) =>
+        session.browse({ hierarchy: "browse" })
+      )
+    ).rejects.toBeInstanceOf(RoonTimeoutError);
+
+    // The generation must not rotate out from under the holder.
+    expect(coordinator.diagnostics("core-1")).toMatchObject({
+      catalog: 1,
+      quarantinedSessions: 1,
+    });
+    expect(() => coordinator.acquireCatalog("core-1")).toThrow(
+      expect.objectContaining({ code: "BACKPRESSURE" })
+    );
+    expect(() =>
+      coordinator.runCatalog("core-1", catalog, async () => undefined)
+    ).toThrow(expect.objectContaining({ code: "SESSION_LOST" }));
+
+    await coordinator.releaseCatalog("core-1", catalog);
+    await flushPromises();
+    expect(coordinator.diagnostics("core-1").catalog).toBe(0);
+
+    late.resolve();
+    await flushPromises();
+    expect(coordinator.diagnostics("core-1").sessions).toBe(0);
+    expect(coordinator.acquireCatalog("core-1")).toMatchObject({
+      kind: "catalog",
+    });
+  });
+
+  it("reaps a deferred catalog lease at the quarantine bound when the holder never releases", async () => {
+    jest.useFakeTimers();
+    coordinator.shutdown();
+    coordinator = makeCoordinator({ quarantineReapMs: 100 });
+    const catalog = coordinator.acquireCatalog("core-1");
+    const never = deferred<void>();
+    service.browse.mockImplementationOnce((_options, lifecycle) => {
+      lifecycle.onTimeout(never.promise);
+      return Promise.reject(new RoonTimeoutError("browse.browse", 15_000));
+    });
+    await expect(
+      coordinator.runCatalog("core-1", catalog, (session) =>
+        session.browse({ hierarchy: "browse" })
+      )
+    ).rejects.toBeInstanceOf(RoonTimeoutError);
+    expect(coordinator.diagnostics("core-1").catalog).toBe(1);
+
+    jest.advanceTimersByTime(100);
+    await flushPromises();
+    expect(coordinator.diagnostics("core-1")).toMatchObject({
+      catalog: 0,
+      sessions: 0,
+    });
+    // Holder cleanup after the reap is a no-op, not an error.
+    await coordinator.releaseCatalog("core-1", catalog);
+    expect(coordinator.acquireCatalog("core-1")).toMatchObject({
+      kind: "catalog",
+    });
+  });
+
+  it("releases a catalog lease idempotently but still rejects an unknown handle", async () => {
+    const catalog = coordinator.acquireCatalog("core-1");
+    await coordinator.releaseCatalog("core-1", catalog);
+    await coordinator.releaseCatalog("core-1", catalog);
+    expect(coordinator.diagnostics("core-1").catalog).toBe(0);
+    await expect(
+      coordinator.releaseCatalog("core-1", {
+        kind: "catalog",
+        handleId: "never-issued",
+        generation: 999,
+      })
+    ).rejects.toMatchObject({ code: "INVALID_HANDLE" });
+
+    // The same idempotency covers a pinned action lease retired before its
+    // holder finished cleanup.
+    const mode = await classicHandle();
+    const action = coordinator.acquireAction({
+      coreId: "core-1",
+      socketId: "socket-1",
+      tabId: "tab-1",
+      leaseId: "idempotent-action",
+      zoneId: "zone-1",
+      generation: mode.generation,
+    });
+    await coordinator.releaseAction(actionAccess(action));
+    await coordinator.releaseAction(actionAccess(action));
+    expect(coordinator.diagnostics("core-1").actions).toBe(0);
+  });
+
+  it("defers a pinned action lease teardown on timeout until the holder releases", async () => {
+    const mode = await classicHandle();
+    const action = coordinator.acquireAction({
+      coreId: "core-1",
+      socketId: "socket-1",
+      tabId: "tab-1",
+      leaseId: "deferred-action",
+      zoneId: "zone-1",
+      generation: mode.generation,
+    });
+    const late = deferred<void>();
+    service.browse.mockImplementationOnce((_options, lifecycle) => {
+      lifecycle.onTimeout(late.promise);
+      return Promise.reject(new RoonTimeoutError("browse.browse", 15_000));
+    });
+    await expect(
+      coordinator.runAction(actionAccess(action), (session) =>
+        session.browse({ hierarchy: "search", zoneId: "zone-1" })
+      )
+    ).rejects.toBeInstanceOf(RoonTimeoutError);
+
+    expect(coordinator.diagnostics("core-1")).toMatchObject({
+      actions: 1,
+      quarantinedSessions: 1,
+    });
+    expect(() =>
+      coordinator.runAction(actionAccess(action), async () => undefined)
+    ).toThrow(expect.objectContaining({ code: "SESSION_LOST" }));
+
+    // The action channel quarantine completes only at the late settlement.
+    const released = coordinator.releaseAction(actionAccess(action));
+    late.resolve();
+    await released;
+    await flushPromises();
+    expect(coordinator.diagnostics("core-1").actions).toBe(0);
+  });
+
   it("rejects attempts to smuggle a raw session key into the facade", async () => {
     const handle = await classicHandle();
     await expect(

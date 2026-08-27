@@ -64,6 +64,7 @@ import {
 	artistEntries,
 	bucketsFor,
 	deferred,
+	EDITORIAL_PRESENT_CAPABILITIES,
 	fakeConnectionSocket,
 	fakeDrillStore,
 	fakeModeActionController,
@@ -1840,6 +1841,32 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		expect(renderedTileTitles()).toEqual(['Name Fallback', 'Bound Two', 'Bound One']);
 	});
 
+	it('labels the back button with the artist name when an album opens from the artist page (issue #6)', async () => {
+		const indexState = readyState({
+			albums: [
+				{ ...albumEntry('alb-1', 'Bound One', 'art-0'), catalogLocalId: 'alb-1' },
+				{ ...albumEntry('alb-2', 'Bound Two', 'art-0'), catalogLocalId: 'alb-2' }
+			]
+		});
+		const album = fakeModeAlbumController();
+		mountMode({
+			indexState,
+			albumController: album.controller,
+			albumActionController: fakeModeActionController()
+		});
+
+		const rows = screen.getAllByTestId('unified-row');
+		await fireEvent.click(rows[0]);
+		await screen.findByTestId('unified-artist-name');
+
+		await fireEvent.click(screen.getAllByTestId('unified-tile')[0]);
+
+		await waitFor(() => expect(screen.getByTestId('unified-album-page')).toBeInTheDocument());
+		// The actual back target is the artist's page, not the "Artists"
+		// scope: the label must name the artist (issue #6).
+		expect(screen.getByTestId('unified-album-back')).toHaveTextContent('a artist 0');
+	});
+
 	// DELIBERATE SUPERSESSION (rich-item plan §4.1, 2026-08-11): the album
 	// used to open as a reference modal over the Albums page; it is now a
 	// first-class page that REPLACES the collection contents, with Back
@@ -1925,7 +1952,12 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			reset: vi.fn()
 		} as unknown as import('$lib/library/EditorialItemController').EditorialItemController;
 		mountMode({
-			indexState: readyState({ albums: [entry], albumBuckets: bucketsFor([entry]) }),
+			indexState: readyState({
+				albums: [entry],
+				albumBuckets: bucketsFor([entry]),
+				// Editorial flows need the feature positively present (q1-2).
+				capabilities: EDITORIAL_PRESENT_CAPABILITIES
+			}),
 			albumController: album.controller,
 			albumActionController: fakeModeActionController(),
 			editorialController: editorial
@@ -2024,7 +2056,12 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			reset: vi.fn()
 		} as unknown as import('$lib/library/EditorialItemController').EditorialItemController;
 		mountMode({
-			indexState: readyState({ albums: [entry], albumBuckets: bucketsFor([entry]) }),
+			indexState: readyState({
+				albums: [entry],
+				albumBuckets: bucketsFor([entry]),
+				// Editorial flows need the feature positively present (q1-2).
+				capabilities: EDITORIAL_PRESENT_CAPABILITIES
+			}),
 			albumController: album.controller,
 			albumActionController: fakeModeActionController(),
 			editorialController: editorial
@@ -2131,6 +2168,101 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		// is not reopened again.
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(editorialOpen).toHaveBeenCalledTimes(2);
+	});
+
+	it('renders no editorial DOM at any phase without positive capability (q1-2)', async () => {
+		// The public build / absent capability: idle, opening, and the
+		// unavailable ack all render nothing — no skeleton flash, no
+		// section — and no read is ever issued.
+		for (const phase of ['idle', 'opening', 'unavailable'] as const) {
+			const editorialStore = writable<
+				import('$lib/library/EditorialItemController').EditorialItemState
+			>({
+				phase,
+				requestId: phase === 'idle' ? null : 'r-1',
+				sessionId: null,
+				generation: 1,
+				view: null,
+				code: phase === 'unavailable' ? 'FEATURE_UNAVAILABLE' : null,
+				section: null,
+				retryable: false,
+				error: null
+			});
+			const editorialOpen = vi.fn().mockResolvedValue(true);
+			const { unmount } = mountMode({
+				indexState: readyState(),
+				editorialController: {
+					subscribe: editorialStore.subscribe,
+					open: editorialOpen,
+					follow: vi.fn().mockResolvedValue(true),
+					cancel: vi.fn(),
+					reset: vi.fn()
+				} as unknown as import('$lib/library/EditorialItemController').EditorialItemController
+			});
+
+			await fireEvent.click(screen.getAllByTestId('unified-row')[0]);
+			await screen.findByTestId('unified-artist-name');
+			expect(screen.queryByTestId('unified-artist-biography')).toBeNull();
+			expect(screen.queryByTestId('unified-artist-biography-skeleton')).toBeNull();
+			expect(screen.queryByTestId('unified-artist-biography-empty')).toBeNull();
+			expect(screen.queryByTestId('unified-artist-relationships')).toBeNull();
+			expect(screen.queryByTestId('unified-artist-relationships-skeleton')).toBeNull();
+			expect(screen.queryByTestId('unified-artist-links')).toBeNull();
+			expect(screen.queryByTestId('unified-artist-links-skeleton')).toBeNull();
+			expect(editorialOpen).not.toHaveBeenCalled();
+			unmount();
+		}
+	});
+
+	it('issues the open and reserves the slots only with capability positively present (q1-2)', async () => {
+		const editorialStore = writable<
+			import('$lib/library/EditorialItemController').EditorialItemState
+		>({
+			phase: 'idle',
+			requestId: null,
+			sessionId: null,
+			generation: null,
+			view: null,
+			code: null,
+			section: null,
+			retryable: false,
+			error: null
+		});
+		const editorialOpen = vi.fn().mockImplementation(async () => {
+			// The open was actually issued over a live socket: the read sits
+			// in flight for the rest of the test.
+			editorialStore.set({
+				phase: 'opening',
+				requestId: 'r-1',
+				sessionId: null,
+				generation: 1,
+				view: null,
+				code: null,
+				section: null,
+				retryable: false,
+				error: null
+			});
+			return true;
+		});
+		mountMode({
+			indexState: readyState({ capabilities: EDITORIAL_PRESENT_CAPABILITIES }),
+			editorialController: {
+				subscribe: editorialStore.subscribe,
+				open: editorialOpen,
+				follow: vi.fn().mockResolvedValue(true),
+				cancel: vi.fn(),
+				reset: vi.fn()
+			} as unknown as import('$lib/library/EditorialItemController').EditorialItemController
+		});
+
+		await fireEvent.click(screen.getAllByTestId('unified-row')[0]);
+		await screen.findByTestId('unified-artist-name');
+		await waitFor(() => expect(editorialOpen).toHaveBeenCalledTimes(1));
+		// Between the issued open and the settled read, the fixed slots are
+		// reserved — the only window editorial DOM may exist pre-settlement.
+		await screen.findByTestId('unified-artist-biography-skeleton');
+		expect(screen.getByTestId('unified-artist-relationships-skeleton')).toBeInTheDocument();
+		expect(screen.getByTestId('unified-artist-links-skeleton')).toBeInTheDocument();
 	});
 
 	function trackChildFixture() {
@@ -2268,7 +2400,12 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		const { entry, album, editorialStore, editorialOpen, detailsState } = trackChildFixture();
 		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
 		mountMode({
-			indexState: readyState({ albums: [entry], albumBuckets: bucketsFor([entry]) }),
+			indexState: readyState({
+				albums: [entry],
+				albumBuckets: bucketsFor([entry]),
+				// Editorial flows need the feature positively present (q1-2).
+				capabilities: EDITORIAL_PRESENT_CAPABILITIES
+			}),
 			albumController: album.controller,
 			albumActionController: fakeModeActionController(),
 			editorialController: {
@@ -2374,7 +2511,12 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		const { entry, album, editorialStore, editorialOpen, detailsState } = trackChildFixture();
 		const harness = mountMode({
 			withContext: true,
-			indexState: readyState({ albums: [entry], albumBuckets: bucketsFor([entry]) }),
+			indexState: readyState({
+				albums: [entry],
+				albumBuckets: bucketsFor([entry]),
+				// Editorial flows need the feature positively present (q1-2).
+				capabilities: EDITORIAL_PRESENT_CAPABILITIES
+			}),
 			albumController: album.controller,
 			albumActionController: fakeModeActionController(),
 			editorialController: {
@@ -3182,6 +3324,102 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await waitFor(() =>
 			expect(screen.getByTestId('unified-palette-input')).toHaveValue('A Sort of Homecoming')
 		);
+		expect(get(pendingLibraryIntentStore)).toBeNull();
+	});
+
+	// Issue #10: play-bar and NowPlayingOverlay artist/album clicks route
+	// through this same intent claim. An entity intent whose name uniquely
+	// matches the loaded library index should open that item's page
+	// directly instead of falling back to a palette search.
+	it('claims an artist intent uniquely matching the index and opens the artist page', async () => {
+		mountMode({ indexState: readyState() });
+
+		publishLibraryIntent({
+			kind: 'artist',
+			destination: 'search',
+			// Deliberately different case than the index entry ('a artist 0')
+			// to prove the match goes through librarySortKey normalization
+			// rather than exact string equality.
+			query: 'A Artist 0',
+			display: { title: 'A Artist 0' }
+		});
+
+		await waitFor(() =>
+			expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('a artist 0')
+		);
+		expect(screen.queryByTestId('unified-palette')).toBeNull();
+		expect(get(pendingLibraryIntentStore)).toBeNull();
+	});
+
+	it('falls back to the palette when an artist intent name has no index match', async () => {
+		mountMode({ indexState: readyState() });
+
+		publishLibraryIntent({
+			kind: 'artist',
+			destination: 'search',
+			query: 'Totally Unknown Artist',
+			display: { title: 'Totally Unknown Artist' }
+		});
+
+		await waitFor(() =>
+			expect(screen.getByTestId('unified-palette-input')).toHaveValue('Totally Unknown Artist')
+		);
+		expect(screen.queryByTestId('unified-artist-name')).toBeNull();
+		expect(get(pendingLibraryIntentStore)).toBeNull();
+	});
+
+	// gh10-1: the album branch must resolve only through catalogLocalId,
+	// mirroring the album-tile drill rule (UnifiedScopeViews.svelte). An
+	// album intent that matches a browse-fallback index entry (synthetic
+	// `browse:album:N` id, no catalogLocalId) must fall back to the palette
+	// exactly like a non-matching name, not open a broken album page.
+	it('falls back to the palette for an album intent matching a browse-fallback entry with no catalog identity', async () => {
+		const albums: LibraryAlbumEntry[] = [
+			{
+				id: 'browse:album:0',
+				title: 'Fallback Album',
+				artist: 'Fallback Artist',
+				searchKey: 'fallback album — fallback artist'
+			}
+		];
+		mountMode({
+			indexState: readyState({ albums, albumBuckets: bucketsFor(albums) })
+		});
+
+		publishLibraryIntent({
+			kind: 'album',
+			destination: 'search',
+			query: 'Fallback Album',
+			display: { title: 'Fallback Album', artist: 'Fallback Artist' }
+		});
+
+		await waitFor(() =>
+			expect(screen.getByTestId('unified-palette-input')).toHaveValue('Fallback Album')
+		);
+		expect(screen.queryByTestId('unified-album-page')).toBeNull();
+		expect(get(pendingLibraryIntentStore)).toBeNull();
+	});
+
+	it('claims an album intent uniquely matching the catalog index and opens the album page', async () => {
+		const entry = albumEntry('alb-1', 'Catalog Album', 'art-1');
+		const albums: LibraryAlbumEntry[] = [{ ...entry, catalogLocalId: entry.id }];
+		const album = fakeModeAlbumController();
+		mountMode({
+			indexState: readyState({ albums, albumBuckets: bucketsFor(albums) }),
+			albumController: album.controller,
+			albumActionController: fakeModeActionController()
+		});
+
+		publishLibraryIntent({
+			kind: 'album',
+			destination: 'search',
+			query: 'Catalog Album',
+			display: { title: 'Catalog Album', artist: entry.artist }
+		});
+
+		await waitFor(() => expect(album.open).toHaveBeenCalled());
+		expect(screen.getByTestId('unified-album-page')).toBeInTheDocument();
+		expect(screen.queryByTestId('unified-palette')).toBeNull();
 		expect(get(pendingLibraryIntentStore)).toBeNull();
 	});
 

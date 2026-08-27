@@ -107,4 +107,7 @@
 		text-align: left;
 		cursor: pointer;
 	}
+	button.follow:hover {
+		color: var(--accent2);
+	}
 </style>

@@ -136,6 +136,7 @@ class ScriptedSession implements CoordinatedBrowseSession {
     method: "browse" | "load" | "pop";
     options: Record<string, unknown>;
   }> = [];
+  public readonly sessionScope = "scripted-session";
 
   public constructor(private readonly script: BrowseResult[]) {}
 
@@ -203,9 +204,24 @@ describe("AlbumActionResolver", () => {
       )
     ).resolves.toEqual({
       actions: [
-        { label: "Play Now", semantic: "play-now", itemKey: "play-now" },
-        { label: "Add Next", semantic: "add-next", itemKey: "add-next" },
-        { label: "Queue", semantic: "queue", itemKey: "queue" },
+        {
+          label: "Play Now",
+          semantic: "play-now",
+          itemKey: "play-now",
+          hierarchy: "artists",
+        },
+        {
+          label: "Add Next",
+          semantic: "add-next",
+          itemKey: "add-next",
+          hierarchy: "artists",
+        },
+        {
+          label: "Queue",
+          semantic: "queue",
+          itemKey: "queue",
+          hierarchy: "artists",
+        },
       ],
     });
     expect(session.calls.map((call) => call.method)).toEqual([
@@ -331,9 +347,24 @@ describe("AlbumActionResolver", () => {
 
     await expect(resolver.resolve(session, album(), "zone-1")).resolves.toEqual({
       actions: [
-        { label: "Play Now", semantic: "play-now", itemKey: "play-now" },
-        { label: "Add Next", semantic: "add-next", itemKey: "add-next" },
-        { label: "Queue", semantic: "queue", itemKey: "queue" },
+        {
+          label: "Play Now",
+          semantic: "play-now",
+          itemKey: "play-now",
+          hierarchy: "search",
+        },
+        {
+          label: "Add Next",
+          semantic: "add-next",
+          itemKey: "add-next",
+          hierarchy: "search",
+        },
+        {
+          label: "Queue",
+          semantic: "queue",
+          itemKey: "queue",
+          hierarchy: "search",
+        },
       ],
     });
     expect(session.calls.map((call) => call.method)).toEqual([

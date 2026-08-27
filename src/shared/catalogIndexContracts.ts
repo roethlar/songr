@@ -32,6 +32,8 @@ export interface CatalogIndexArtist {
   name: string;
   knownAlbumCount: number;
   countComplete: boolean;
+  /** Opaque image key harvested from the Artists hierarchy; served as-is. */
+  imageKeyHint?: string;
 }
 
 /**
@@ -141,6 +143,9 @@ export function buildCatalogIndexResponse(
       name: artist.exactName,
       knownAlbumCount: boundCounts.get(artist.localId) ?? 0,
       countComplete,
+      ...(artist.imageKeyHint !== undefined
+        ? { imageKeyHint: artist.imageKeyHint }
+        : {}),
     })
   );
   const albums = snapshot.albums.map(
@@ -539,12 +544,11 @@ export function normalizeCatalogIndexResponse(
     const artist = plainDataRecord(candidate);
     if (
       !artist ||
-      !hasExactKeys(artist, [
-        "localId",
-        "name",
-        "knownAlbumCount",
-        "countComplete",
-      ]) ||
+      !hasExactKeys(
+        artist,
+        ["localId", "name", "knownAlbumCount", "countComplete"],
+        ["imageKeyHint"]
+      ) ||
       !isCatalogLocalId(artist.localId) ||
       artistIds.has(artist.localId) ||
       !isBoundedDisplayText(artist.name) ||
@@ -555,12 +559,18 @@ export function normalizeCatalogIndexResponse(
     ) {
       return null;
     }
+    const hasImageHint = Object.prototype.hasOwnProperty.call(
+      artist,
+      "imageKeyHint"
+    );
+    if (hasImageHint && !isBoundedOpaqueText(artist.imageKeyHint)) return null;
     artistIds.add(artist.localId);
     artists.push({
       localId: artist.localId,
       name: artist.name,
       knownAlbumCount: artist.knownAlbumCount,
       countComplete: artist.countComplete,
+      ...(hasImageHint ? { imageKeyHint: artist.imageKeyHint as string } : {}),
     });
   }
   for (const boundArtistId of boundCounts.keys()) {

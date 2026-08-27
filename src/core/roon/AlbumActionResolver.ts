@@ -46,11 +46,20 @@ export class AlbumActionResolutionError extends Error {
   }
 }
 
+/**
+ * The Roon browse hierarchy an action's item key was resolved against. Keys
+ * are only meaningful within the hierarchy/session that produced them, so
+ * this must travel with the item key to execution time.
+ */
+export type AlbumActionBrowseHierarchy = "search" | "artists";
+
 export interface ResolvedAlbumAction {
   readonly label: string;
   readonly semantic: AlbumActionSemantic;
   /** Ephemeral Roon authority; retained only inside the server operation. */
   readonly itemKey: string;
+  /** Hierarchy this itemKey must be executed against. */
+  readonly hierarchy: AlbumActionBrowseHierarchy;
 }
 
 export interface ResolvedAlbumActions {
@@ -551,7 +560,7 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
     session: CoordinatedBrowseSession,
     zoneId: string,
     initial: BrowseItem,
-    hierarchy: "search" | "artists"
+    hierarchy: AlbumActionBrowseHierarchy
   ): Promise<ResolvedAlbumAction[]> {
     let cursor = initial;
     for (let depth = 0; depth < MAX_ACTION_DEPTH; depth += 1) {
@@ -573,7 +582,7 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
           typeof item.itemKey === "string" &&
           item.itemKey.length > 0
       );
-      if (leaves.length > 0) return this.normalizeLeaves(leaves);
+      if (leaves.length > 0) return this.normalizeLeaves(leaves, hierarchy);
 
       const nested = this.structuralRows(result.items).filter(
         (item) => item.hint === "action_list"
@@ -597,6 +606,7 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
     zoneId: string
   ): CoordinatedBrowseSession {
     const zoned: CoordinatedBrowseSession = {
+      sessionScope: session.sessionScope,
       browse: (options) => session.browse({ ...options, zoneId }),
       load: (options) => session.load({ ...options, zoneId }),
       pop: (options) => session.pop({ ...options, zoneId }),
@@ -604,7 +614,10 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
     return Object.freeze(zoned);
   }
 
-  private normalizeLeaves(leaves: readonly BrowseItem[]): ResolvedAlbumAction[] {
+  private normalizeLeaves(
+    leaves: readonly BrowseItem[],
+    hierarchy: AlbumActionBrowseHierarchy
+  ): ResolvedAlbumAction[] {
     if (leaves.length === 0 || leaves.length > ALBUM_ACTION_MAX_CHOICES) {
       throw new AlbumActionResolutionError(
         "NO_SUPPORTED_ACTIONS",
@@ -637,6 +650,7 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
           label,
           semantic: this.semantic(label),
           itemKey,
+          hierarchy,
         })
       );
     }

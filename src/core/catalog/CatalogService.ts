@@ -31,6 +31,7 @@ import {
 import { repairEncoding } from "../../shared/repairEncoding";
 import { BrowseItem, BrowseResult } from "../../shared/types";
 import {
+  BrowseSessionCoordinatorError,
   CatalogSessionHandle,
   CoordinatedBrowseSession,
 } from "../roon/BrowseSessionCoordinator";
@@ -38,6 +39,7 @@ import {
   DiscographyResolution,
   DiscographyResolver,
 } from "../roon/DiscographyResolver";
+import { RoonTimeoutError } from "../roon/errors";
 import { CatalogPersistence } from "./CatalogPersistence";
 import {
   CatalogReconciliationError,
@@ -107,6 +109,55 @@ export interface CatalogSelectedArtistResult {
   readonly albums: readonly Readonly<AlbumRef>[];
 }
 
+/**
+ * A batch of album→artist bindings computed somewhere other than this
+ * service and handed back here for publication.
+ *
+ * The batch is self-describing about the state it was computed against,
+ * because the computation happens off to the side and takes time: by the
+ * moment it lands, the catalog may have rescanned, the operator may have
+ * paired a different Core, or the connection may have dropped and returned.
+ * Nothing inside the batch is trusted on its own.
+ *
+ * `provenCoreId` is the identity of the Core the rows were actually read
+ * from, as reported by the *caller's own live connection*. It is a proof,
+ * not a label. A caller must pass what its connection told it — never a
+ * Core id echoed back from a request, read out of a stored preference, or
+ * copied from the `coreId` argument it is about to pass alongside. The
+ * rows a provider channel computes bindings from are Core-side rows, and
+ * the same row identifier names something different on a different Core;
+ * a batch that cannot prove where it came from is therefore unpublishable,
+ * not merely suspect.
+ */
+export interface CatalogArtistAlbumBindingBatch {
+  /** Core identity proven by the caller's live connection. */
+  readonly provenCoreId: string;
+  /** The published snapshot revision the bindings were computed against. */
+  readonly expectedRevision: number;
+  /**
+   * The invalidation generation observed when the pass *started*. Optional
+   * only because a caller that computed its batch inside a single
+   * uninterrupted turn has nothing older to declare; a pass that spans
+   * many round trips must capture `getInvalidationGeneration` up front and
+   * pass it, or a disconnect during the pass goes undetected — the
+   * revision alone does not move on a disconnect.
+   */
+  readonly expectedInvalidationGeneration?: number;
+  /** Album local ID → artist local ID, both within the ingesting Core. */
+  readonly bindings: ReadonlyMap<string, string>;
+}
+
+export interface CatalogArtistAlbumBindingResult {
+  /** True when at least one binding changed and a new revision published. */
+  readonly published: boolean;
+  /** The revision after ingestion; unchanged when nothing published. */
+  readonly revision: number;
+  /** Albums whose binding this batch changed. */
+  readonly boundAlbums: number;
+  /** Albums the batch named that already carried the requested binding. */
+  readonly alreadyBound: number;
+}
+
 export interface CatalogServiceOptions {
   pageSize?: number;
   maxItemsPerHierarchy?: number;
@@ -114,6 +165,7 @@ export interface CatalogServiceOptions {
   createLocalId?: () => string;
   persistence?: CatalogPersistence;
   auxiliaryArtistResolver?: CatalogAuxiliaryArtistResolver;
+  catalogSessionIdleMs?: number;
 }
 
 export const CATALOG_PERSISTENCE_VERSION = 3 as const;
@@ -201,9 +253,27 @@ const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 5_000;
 const DEFAULT_MAX_ITEMS_PER_HIERARCHY = 100_000;
 const ABSOLUTE_MAX_ITEMS_PER_HIERARCHY = 1_000_000;
+const AUXILIARY_ARTIST_FAILURE_TTL_MS = 60_000;
+const DEFAULT_CATALOG_SESSION_IDLE_MS = 5 * 60 * 1_000;
 const CONTROL_CHARACTER = /\p{Cc}/u;
 const CANONICAL_TIMESTAMP =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+
+/**
+ * A negative-cache entry is valid only for the exact catalog revision and
+ * invalidation generation whose load failed; a publish or disconnect in
+ * between supersedes it.
+ */
+interface AuxiliaryArtistFailure {
+  readonly failedAt: number;
+  readonly revision: number;
+  readonly invalidationGeneration: number;
+}
+
+interface RetainedCatalogSession {
+  readonly handle: CatalogSessionHandle;
+  idleTimer?: ReturnType<typeof setTimeout>;
+}
 
 /**
  * In-memory, Core-scoped catalog read model.
@@ -223,12 +293,29 @@ export class CatalogService {
   private readonly createLocalId: () => string;
   private readonly persistence?: CatalogPersistence;
   private readonly auxiliaryArtistResolver: CatalogAuxiliaryArtistResolver;
+  private readonly catalogSessionIdleMs: number;
   private readonly cores = new Map<string, CoreCatalogState>();
   private readonly inFlightScans = new Map<string, Promise<CatalogScanResult>>();
   private catalogSessionTail: Promise<void> = Promise.resolve();
+  private readonly retainedCatalogSessions = new Map<
+    string,
+    RetainedCatalogSession
+  >();
   private readonly inFlightAuxiliaryArtistLoads = new Map<
     string,
     Promise<CatalogSelectedArtistResult | null>
+  >();
+  /**
+   * Short-lived negative cache for auxiliary artist loads: one failed
+   * resolution suppresses repeat resolver invocations for up to one minute,
+   * so a stalled Core cannot be flooded by page reopens. Only genuine
+   * resolver/browse failures are stamped, fenced to the catalog state the
+   * load started from; an explicit scan clears it and a later success
+   * removes the entry.
+   */
+  private readonly auxiliaryArtistFailures = new Map<
+    string,
+    AuxiliaryArtistFailure
   >();
 
   public constructor(
@@ -244,6 +331,8 @@ export class CatalogService {
     this.persistence = options.persistence;
     this.auxiliaryArtistResolver =
       options.auxiliaryArtistResolver ?? new DiscographyResolver();
+    this.catalogSessionIdleMs =
+      options.catalogSessionIdleMs ?? DEFAULT_CATALOG_SESSION_IDLE_MS;
     this.validateConfiguration();
   }
 
@@ -392,6 +481,30 @@ export class CatalogService {
     }
     this.assertPersistenceHealthy(state);
 
+    const failureKey = `${coreId}${artistLocalId}`;
+    const failure = this.auxiliaryArtistFailures.get(failureKey);
+    if (failure) {
+      const stillCurrent =
+        failure.invalidationGeneration === state.invalidationGeneration &&
+        failure.revision === (snapshot?.revision ?? -1);
+      // A backward clock correction must expire, never extend, the entry.
+      const age = this.now() - failure.failedAt;
+      if (
+        stillCurrent &&
+        age >= 0 &&
+        age < AUXILIARY_ARTIST_FAILURE_TTL_MS
+      ) {
+        return this.artistAlbumsFromSnapshot(
+          coreId,
+          state,
+          snapshot,
+          artistLocalId,
+          limit
+        );
+      }
+      this.auxiliaryArtistFailures.delete(failureKey);
+    }
+
     const loadKey = JSON.stringify([coreId, artistLocalId, expectedRevision]);
     const existing = this.inFlightAuxiliaryArtistLoads.get(loadKey);
     if (existing) {
@@ -419,6 +532,7 @@ export class CatalogService {
     };
     void load.then(clear, clear);
     const publication = await load;
+    this.auxiliaryArtistFailures.delete(failureKey);
     return publication
       ? this.artistAlbumsResponse(
           publication.status,
@@ -445,6 +559,8 @@ export class CatalogService {
     this.assertCoreId(coreId);
     const state = this.getOrCreateState(coreId);
     state.invalidationGeneration += 1;
+    const retained = this.retainedCatalogSessions.get(coreId);
+    if (retained) this.enqueueRetainedCatalogRelease(coreId, retained);
     if (state.snapshot) {
       state.freshness = "stale";
       state.staleReason = "core-disconnected";
@@ -557,6 +673,246 @@ export class CatalogService {
     });
   }
 
+  /**
+   * The fence value a caller must capture *before* it starts computing a
+   * binding batch, so that a disconnect part-way through the computation is
+   * detectable at ingestion time. A disconnect does not move the snapshot
+   * revision — it only preserves the keyless context and stops in-flight
+   * work from publishing — so the revision alone cannot see it.
+   *
+   * Reading never materializes Core state: an unknown Core has published
+   * nothing and cannot have been invalidated, so it reads as generation 0.
+   */
+  public getInvalidationGeneration(coreId: string): number {
+    this.assertCoreId(coreId);
+    return this.cores.get(coreId)?.invalidationGeneration ?? 0;
+  }
+
+  /**
+   * Ingest a batch of album→artist bindings computed elsewhere and publish
+   * them as the ordinary `album.artistLocalId` fact — the same fact the
+   * in-session artist load writes when a reader drills into an artist.
+   *
+   * There is deliberately no record of *which* channel wrote a binding.
+   * Freshness is decided by snapshot revision, never by provenance: a later
+   * pass overwrites an earlier one for every album it names, and the
+   * in-session load may overwrite any of them on the next drill. A marker
+   * saying "a batch wrote this" would be a licence to protect a stale fact
+   * against a fresher one, so none is kept, and the descriptors this method
+   * publishes are indistinguishable from drill-written ones.
+   *
+   * Four fences apply, in order, and all of them drop the batch **whole**
+   * rather than partially:
+   *
+   * 1. *Provenance.* The Core the rows were proven to come from must be the
+   *    Core the bindings would land on. Album and artist local IDs are
+   *    catalog UUIDs scoped to one Core's snapshot; landing a batch proven
+   *    against Core A on Core B would bind by coincidence of UUID reuse.
+   * 2. *Invalidation.* A rescan, Core swap, or disconnect between the pass
+   *    starting and this commit running discards the batch, exactly as it
+   *    discards an in-flight scan or a selected-artist reconciliation.
+   * 3. *Revision.* A batch computed against revision R applies only while
+   *    the snapshot still sits at R. It is never merged forward onto a
+   *    newer snapshot: the newer snapshot may have renumbered the very rows
+   *    the batch names. Reading the snapshot inside the commit (not before
+   *    it) is what makes that check honest under concurrency.
+   * 4. *Membership.* Every named album and every named artist must be
+   *    present in that snapshot, or the whole batch is refused. Per-entry
+   *    skipping was rejected: everywhere else in this file an orphan
+   *    binding is a hard failure of the whole publication (the scan
+   *    candidate check and the persisted-envelope check both refuse rather
+   *    than prune), and a partially-applied batch would leave the catalog
+   *    in a state no pass ever computed. A batch that names rows the
+   *    snapshot does not have was computed against a different world, and
+   *    the honest answer is to recompute it, not to salvage part of it.
+   *
+   * The bindings land only in this Core's snapshot and this Core's
+   * persistence file. No Core-neutral store holds one, so a read under any
+   * other Core simply misses instead of returning another Core's answer.
+   * A batch that changes nothing publishes nothing, so re-ingesting an
+   * identical pass is free.
+   */
+  public async ingestArtistAlbumBindings(
+    coreId: string,
+    batch: CatalogArtistAlbumBindingBatch
+  ): Promise<CatalogArtistAlbumBindingResult> {
+    this.assertCoreId(coreId);
+    this.assertCoreId(batch.provenCoreId);
+    // Fence 1 runs before anything is loaded or locked: a batch that cannot
+    // prove its origin must not even reach the Core's commit queue.
+    if (batch.provenCoreId !== coreId) {
+      throw new CatalogServiceError(
+        "IDENTITY_CONFLICT",
+        "Binding batch was proven against a different Core than it would land on"
+      );
+    }
+    const expectedRevision = this.readExpectedRevision(batch.expectedRevision);
+    const expectedGeneration = this.readExpectedGeneration(
+      batch.expectedInvalidationGeneration
+    );
+    const bindings = this.readArtistAlbumBindings(batch.bindings);
+    await this.start(coreId);
+    const state = this.getOrCreateState(coreId);
+    this.assertPersistenceHealthy(state);
+    const invalidationGeneration =
+      expectedGeneration ?? state.invalidationGeneration;
+    return this.enqueueCommit(state, async () => {
+      if (state.invalidationGeneration !== invalidationGeneration) {
+        throw new CatalogServiceError(
+          "INVALID_MERGE",
+          "Binding ingestion was invalidated before publication"
+        );
+      }
+      this.assertPersistenceHealthy(state);
+      const current = state.snapshot;
+      if (!current || current.coreId !== coreId) {
+        // No snapshot means there is no Core-scoped state for the bindings
+        // to live in; the proven Core cannot be matched against anything.
+        throw new CatalogServiceError(
+          "IDENTITY_CONFLICT",
+          "Binding ingestion Core did not match the catalog snapshot Core"
+        );
+      }
+      this.assertExpectedRevision(current, expectedRevision);
+      const artistLocalIds = new Set(
+        current.artists
+          .filter((artist) => artist.coreId === coreId)
+          .map((artist) => artist.localId)
+      );
+      const albumLocalIds = new Set(
+        current.albums
+          .filter((album) => album.coreId === coreId)
+          .map((album) => album.localId)
+      );
+      for (const [albumLocalId, artistLocalId] of bindings) {
+        if (
+          !albumLocalIds.has(albumLocalId) ||
+          !artistLocalIds.has(artistLocalId)
+        ) {
+          throw new CatalogServiceError(
+            "INVALID_MERGE",
+            "Binding batch named an album or artist absent from the snapshot"
+          );
+        }
+      }
+      let boundAlbums = 0;
+      const albums = current.albums.map((album) => {
+        const artistLocalId = bindings.get(album.localId);
+        if (artistLocalId === undefined) return album;
+        if (album.artistLocalId === artistLocalId) return album;
+        boundAlbums += 1;
+        return { ...album, artistLocalId };
+      });
+      if (boundAlbums === 0) {
+        return Object.freeze({
+          published: false,
+          revision: current.revision,
+          boundAlbums: 0,
+          alreadyBound: bindings.size,
+        });
+      }
+      const snapshot = this.createSnapshot(state, {
+        coreId,
+        updatedAt: new Date(this.readClock()).toISOString(),
+        ...(current.lastCompleteScanAt
+          ? { lastCompleteScanAt: current.lastCompleteScanAt }
+          : {}),
+        artists: current.artists,
+        albums,
+      });
+      await this.persistSnapshot(coreId, state, snapshot);
+      // Disk is already ahead of memory here, so a disconnect that landed
+      // during the write cannot retract the batch — it downgrades the
+      // published state to stale, exactly as a scan or a selected-artist
+      // merge does at the same point.
+      const invalidatedDuringPersistence =
+        state.invalidationGeneration !== invalidationGeneration;
+      this.commitSnapshot(state, snapshot);
+      if (invalidatedDuringPersistence) {
+        state.freshness = "stale";
+        state.staleReason = "core-disconnected";
+      }
+      this.logger.info(
+        {
+          coreId,
+          revision: snapshot.revision,
+          boundAlbums,
+          batchSize: bindings.size,
+        },
+        "Catalog artist-album bindings published"
+      );
+      return Object.freeze({
+        published: true,
+        revision: snapshot.revision,
+        boundAlbums,
+        alreadyBound: bindings.size - boundAlbums,
+      });
+    });
+  }
+
+  /**
+   * The declared generation is a fence, not a value with meaning of its
+   * own: any well-formed non-negative integer is acceptable here, and a
+   * value that does not match the Core's current generation is rejected
+   * later by the commit, where the comparison is race-free.
+   */
+  private readExpectedGeneration(value: unknown): number | undefined {
+    if (value === undefined) return undefined;
+    if (
+      typeof value !== "number" ||
+      !Number.isSafeInteger(value) ||
+      value < 0
+    ) {
+      throw new CatalogServiceError(
+        "INVALID_QUERY",
+        "Binding batch invalidation generation is invalid"
+      );
+    }
+    return value;
+  }
+
+  /**
+   * Shape-check the batch before any state is touched. Membership in the
+   * snapshot is a separate, later question — this only establishes that
+   * every identifier is a catalog local ID, so a malformed batch cannot
+   * reach the commit queue and cannot be mistaken for a membership failure.
+   * A map keyed by album makes "one album, one binding" structural: a pass
+   * cannot ask for an album to be bound to two artists at once.
+   */
+  private readArtistAlbumBindings(
+    value: ReadonlyMap<string, string>
+  ): ReadonlyMap<string, string> {
+    if (!(value instanceof Map)) {
+      throw new CatalogServiceError(
+        "INVALID_QUERY",
+        "Binding batch is not a map of album to artist local IDs"
+      );
+    }
+    for (const [albumLocalId, artistLocalId] of value) {
+      if (!isCatalogLocalId(albumLocalId) || !isCatalogLocalId(artistLocalId)) {
+        throw new CatalogServiceError(
+          "INVALID_QUERY",
+          "Binding batch contains an invalid local ID"
+        );
+      }
+    }
+    return new Map(value);
+  }
+
+  /**
+   * Run one unit of server-driven browse work on the shared catalog FIFO and
+   * its retained session. Every in-process catalog consumer (scans,
+   * auxiliary artist loads, playlist reads) serializes here, so no second
+   * tail can race the coordinator's singleton catalog lease.
+   */
+  public runCatalogBrowse<T>(
+    coreId: string,
+    work: (session: CoordinatedBrowseSession) => Promise<T>
+  ): Promise<T> {
+    this.assertCoreId(coreId);
+    return this.runCatalogSession(coreId, work);
+  }
+
   /** Scan both public catalog hierarchies and atomically publish on success. */
   public scan(coreId: string): Promise<CatalogScanResult> {
     const existing = this.inFlightScans.get(coreId);
@@ -575,6 +931,8 @@ export class CatalogService {
   private async performScan(coreId: string): Promise<CatalogScanResult> {
     await this.start(coreId);
     const state = this.getOrCreateState(coreId);
+    // An explicit refresh re-arms auxiliary resolution immediately.
+    this.clearAuxiliaryArtistFailures(coreId);
     this.assertPersistenceHealthy(state);
     const invalidationGeneration = state.invalidationGeneration;
     const baseSnapshot = state.snapshot;
@@ -835,6 +1193,37 @@ export class CatalogService {
     });
   }
 
+  /**
+   * Stamp a genuine resolver/browse failure, fenced to the revision and
+   * invalidation generation the load started from: a publish or disconnect
+   * in between supersedes the write.
+   */
+  private recordAuxiliaryArtistFailure(
+    coreId: string,
+    artistLocalId: string,
+    expectedRevision: number,
+    expectedInvalidationGeneration: number
+  ): void {
+    const state = this.getOrCreateState(coreId);
+    if (state.invalidationGeneration !== expectedInvalidationGeneration) {
+      return;
+    }
+    if (state.snapshot?.revision !== expectedRevision) return;
+    this.auxiliaryArtistFailures.set(`${coreId}${artistLocalId}`, {
+      failedAt: this.now(),
+      revision: expectedRevision,
+      invalidationGeneration: expectedInvalidationGeneration,
+    });
+  }
+
+  private clearAuxiliaryArtistFailures(coreId: string): void {
+    for (const key of [...this.auxiliaryArtistFailures.keys()]) {
+      if (key.startsWith(`${coreId}`)) {
+        this.auxiliaryArtistFailures.delete(key);
+      }
+    }
+  }
+
   private async performAuxiliaryArtistLoad(
     coreId: string,
     artistLocalId: string,
@@ -863,10 +1252,28 @@ export class CatalogService {
           "Auxiliary artist is not safely resolvable"
         );
       }
-      return this.auxiliaryArtistResolver.resolve(session, artist);
+      // Only genuine resolver/browse failures may poison the negative cache;
+      // the revision/staleness rejections above must never suppress retries.
+      try {
+        return await this.auxiliaryArtistResolver.resolve(session, artist);
+      } catch (error) {
+        this.recordAuxiliaryArtistFailure(
+          coreId,
+          artistLocalId,
+          expectedRevision,
+          expectedInvalidationGeneration
+        );
+        throw error;
+      }
     });
     if (resolution === null) return null;
     if (resolution.kind !== "resolved") {
+      this.recordAuxiliaryArtistFailure(
+        coreId,
+        artistLocalId,
+        expectedRevision,
+        expectedInvalidationGeneration
+      );
       throw new CatalogServiceError(
         "AUXILIARY_ARTIST_UNAVAILABLE",
         "Auxiliary artist could not be resolved uniquely"
@@ -904,35 +1311,108 @@ export class CatalogService {
     coreId: string,
     work: (session: CoordinatedBrowseSession) => Promise<T>
   ): Promise<T> {
-    let handle: CatalogSessionHandle | undefined;
+    const retained = this.acquireRetainedCatalogSession(coreId);
     let value: T | undefined;
     let failed = false;
     let primaryError: unknown;
     try {
-      handle = this.coordinator.acquireCatalog(coreId);
-      value = await this.coordinator.runCatalog(coreId, handle, work);
+      value = await this.coordinator.runCatalog(coreId, retained.handle, work);
     } catch (error) {
       failed = true;
       primaryError = error;
     }
 
-    if (handle) {
-      try {
-        await this.coordinator.releaseCatalog(coreId, handle);
-      } catch (error) {
-        if (!failed) {
-          failed = true;
-          primaryError = error;
-        } else {
-          this.logger.warn(
-            { err: error, coreId },
-            "Catalog session cleanup also failed after catalog work"
-          );
-        }
-      }
+    if (failed && this.isCatalogSessionLoss(primaryError)) {
+      await this.releaseRetainedCatalogSession(coreId, retained);
+    } else {
+      this.scheduleRetainedCatalogIdle(coreId, retained);
     }
     if (failed) throw primaryError;
     return value as T;
+  }
+
+  /**
+   * Reuse the Core's singleton catalog lease across serialized calls so
+   * session-scoped observations (the discography resolver's artist locators)
+   * survive between them. The lease is released after an idle window, on
+   * session loss, and on Core disconnect; the coordinator's physical session
+   * cap still applies at acquire time.
+   */
+  private acquireRetainedCatalogSession(coreId: string): RetainedCatalogSession {
+    const existing = this.retainedCatalogSessions.get(coreId);
+    if (existing) {
+      this.clearRetainedCatalogIdle(existing);
+      return existing;
+    }
+    const retained: RetainedCatalogSession = {
+      handle: this.coordinator.acquireCatalog(coreId),
+    };
+    this.retainedCatalogSessions.set(coreId, retained);
+    return retained;
+  }
+
+  private scheduleRetainedCatalogIdle(
+    coreId: string,
+    retained: RetainedCatalogSession
+  ): void {
+    if (this.retainedCatalogSessions.get(coreId) !== retained) return;
+    this.clearRetainedCatalogIdle(retained);
+    retained.idleTimer = setTimeout(() => {
+      retained.idleTimer = undefined;
+      this.enqueueRetainedCatalogRelease(coreId, retained);
+    }, this.catalogSessionIdleMs);
+    retained.idleTimer.unref?.();
+  }
+
+  private clearRetainedCatalogIdle(retained: RetainedCatalogSession): void {
+    if (retained.idleTimer) clearTimeout(retained.idleTimer);
+    retained.idleTimer = undefined;
+  }
+
+  /** Release on the shared tail so an idle expiry never races an acquire. */
+  private enqueueRetainedCatalogRelease(
+    coreId: string,
+    retained: RetainedCatalogSession
+  ): void {
+    const run = this.catalogSessionTail.then(() =>
+      this.releaseRetainedCatalogSession(coreId, retained)
+    );
+    this.catalogSessionTail = run.then(
+      () => undefined,
+      () => undefined
+    );
+  }
+
+  private async releaseRetainedCatalogSession(
+    coreId: string,
+    retained: RetainedCatalogSession
+  ): Promise<void> {
+    if (this.retainedCatalogSessions.get(coreId) !== retained) return;
+    this.retainedCatalogSessions.delete(coreId);
+    this.clearRetainedCatalogIdle(retained);
+    try {
+      await this.coordinator.releaseCatalog(coreId, retained.handle);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, coreId },
+        "Retained catalog session release failed"
+      );
+    }
+  }
+
+  /**
+   * A timeout or a coordinator session-loss error means the retained lease is
+   * dead (its channel was quarantined on timeout); drop it so the next caller
+   * reacquires instead of failing on the stale generation.
+   */
+  private isCatalogSessionLoss(error: unknown): boolean {
+    if (error instanceof RoonTimeoutError) return true;
+    return (
+      error instanceof BrowseSessionCoordinatorError &&
+      (error.code === "SESSION_LOST" ||
+        error.code === "STALE_GENERATION" ||
+        error.code === "INVALID_HANDLE")
+    );
   }
 
   private artistAlbumsFromSnapshot(
@@ -1829,6 +2309,15 @@ export class CatalogService {
       if (allIds.has(localId)) throw this.invalidPersisted("duplicate local ID");
       allIds.add(localId);
     }
+    // Persisted bindings are revalidated against the very snapshot they
+    // arrive with, never trusted on their age. A binding naming an album is
+    // structurally impossible to orphan — the binding is a field *on* the
+    // album row, so it dies with it — which leaves the artist side, checked
+    // here. An orphan is not pruned but refuses the whole envelope: rows and
+    // their bindings are written atomically as one snapshot, so an orphan
+    // means the file no longer describes any state this service published.
+    // Rescanning the Core and rebinding from scratch is cheap; serving a
+    // read model that has been edited underneath us is not.
     if (
       albums.some(
         (album) => album.artistLocalId && !artistIds.has(album.artistLocalId)

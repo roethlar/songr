@@ -31,14 +31,20 @@ test('artist editorial sections and the related-artist child work in every prese
 		await expect(toggle).toHaveText('Show less');
 
 		// Relationship families in delivered order; rows without a follow
-		// target render as plain text.
+		// target render as plain text. The collapsed state holds the
+		// reserved two rows (q1-1); the user-initiated "Show all" reveals
+		// the remaining family.
 		await expect(page.getByTestId('unified-artist-relationships')).toContainText(
 			'Similar artists'
 		);
-		await expect(page.getByTestId('unified-artist-relationships')).toContainText('Influenced');
 		await expect(page.getByTestId('unified-artist-relationships')).toContainText(
 			'Unlinked Artist'
 		);
+		await expect(page.getByTestId('unified-artist-relationships')).not.toContainText(
+			'Influenced'
+		);
+		await page.getByTestId('unified-artist-relationships-toggle').click();
+		await expect(page.getByTestId('unified-artist-relationships')).toContainText('Influenced');
 		await expect(page.getByTestId('unified-artist-relationships-follow-0-0')).toHaveText(
 			'Kindred Artist'
 		);

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
+	import TransportIcon from '$lib/components/TransportIcon.svelte';
 	import { get } from 'svelte/store';
 	import { nowPlayingOverlayStore, closeNowPlayingOverlay } from '$lib/stores/nowPlayingOverlayStore';
 	import { nowPlayingList } from '$lib/stores/nowPlayingStore';
@@ -378,21 +379,21 @@
 						onclick={previous}
 						disabled={!canPrev || commandInFlight}
 						aria-label="Previous"
-					>⏮</button>
+					><TransportIcon kind="previous" size={20} /></button>
 					<button
 						type="button"
 						class="np-ctrl primary"
 						onclick={playPause}
 						disabled={!canPlay || commandInFlight}
 						aria-label={isPlaying ? 'Pause' : 'Play'}
-					>{isPlaying ? '⏸' : '▶'}</button>
+					><TransportIcon kind={isPlaying ? 'pause' : 'play'} size={24} /></button>
 					<button
 						type="button"
 						class="np-ctrl"
 						onclick={next}
 						disabled={!canNext || commandInFlight}
 						aria-label="Next"
-					>⏭</button>
+					><TransportIcon kind="next" size={20} /></button>
 				</div>
 
 				{#if volumeOutput?.volume}
@@ -588,7 +589,9 @@
 		border-radius: 999px;
 		width: 44px;
 		height: 44px;
-		font-size: 1.1rem;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
 		cursor: pointer;
 	}
 	.np-ctrl:disabled {
@@ -601,7 +604,6 @@
 		color: var(--songr-on-accent);
 		width: 56px;
 		height: 56px;
-		font-size: 1.4rem;
 	}
 
 	.np-vol-slider,
