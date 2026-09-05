@@ -7,11 +7,15 @@ import {
 	normalizeLibraryAlbumSelectRequest,
 	normalizeLibraryAlbumVersionFailedEvent,
 	normalizeLibraryAlbumVersionsEvent,
+	DEGRADE_WINDOW_MS,
 	type LibraryAlbumCorrelation,
 	type LibraryAlbumOpenRequest,
+	type LibraryAlbumOpenTarget,
 	type LibraryAlbumTrack,
 	type LibraryAlbumVersionSummary
 } from '@shared/libraryAlbumContracts';
+import type { CollectionDrillOpenFailureDetail } from '@shared/collectionDrillContracts';
+import type { LibraryRowReference } from '@shared/libraryRootsContracts';
 import { emitWithBoundedAck, type BoundedAckSocket } from '$lib/socket/emit';
 import { createSecureOpaqueId } from '$lib/secureOpaqueId';
 
@@ -34,10 +38,24 @@ export type LibraryAlbumVersionState = Omit<LibraryAlbumVersionSummary, 'trackCo
 	readonly error: string | null;
 };
 
+/**
+ * What a live album page acts by: Roon's own rows, named by their references.
+ *
+ * `albumRef` is the row the page IS. `playRef` is the level's single verb row —
+ * Roon renders "Play Album" as an ordinary row, and browsing that row with a
+ * zone bound is what yields the four action leaves (measured on the owner's
+ * Core, `.agents/state.md` 2026-09-03). It is null unless there is exactly one
+ * such row, because two would make "Play album" a guess.
+ */
+export interface LibraryAlbumLiveBinding {
+	readonly albumRef: LibraryRowReference;
+	readonly playRef: LibraryRowReference | null;
+	readonly trackRefs: readonly LibraryRowReference[];
+}
+
 export interface LibraryAlbumState {
 	readonly phase: LibraryAlbumPhase;
 	readonly activeTab: LibraryAlbumTab;
-	readonly albumLocalId: string | null;
 	readonly generation: number | null;
 	readonly requestId: string | null;
 	readonly operationId: string | null;
@@ -46,16 +64,55 @@ export interface LibraryAlbumState {
 	readonly artist: string | null;
 	readonly title: string | null;
 	readonly versions: readonly LibraryAlbumVersionState[];
+	/** True when the server built this page from catalog data, not live browse. */
+	readonly degraded: boolean;
 	readonly selectedVersionId: string | null;
 	readonly actionsAvailable: boolean;
+	/**
+	 * Whether the WHOLE-ALBUM verbs can act, separately from the track rows.
+	 *
+	 * The two are one answer on a catalog page and may differ on a live one:
+	 * Roon renders the album's Play as a row of the level like any other, and a
+	 * level that carries no such row — or two — leaves nothing unambiguous for
+	 * "Play album" to be, while every track row still carries its own reference
+	 * and still works. Rather than disable a working track list to describe a
+	 * missing header button, the page is told about the two separately, so
+	 * neither ever renders an enabled control that cannot act.
+	 */
+	readonly albumActionsAvailable: boolean;
 	readonly orderedTracks: readonly LibraryAlbumTrack[];
+	/**
+	 * The live references this page's controls act by, or null on a catalog
+	 * page (`.agents/plans/library-live-view.md` Slice 2).
+	 *
+	 * `trackRefs` is parallel to `orderedTracks` by position, not by the
+	 * track's `index`: both come from the same level read, in the same order,
+	 * and pairing them any other way would be a second statement about which
+	 * row is which — the only way the two could ever disagree.
+	 */
+	readonly live: LibraryAlbumLiveBinding | null;
 	readonly code: string | null;
 	readonly error: string | null;
+	/**
+	 * Set only when a collection-opened page could not find its row again:
+	 * which half of the locator refused, why, and how many rows it saw. The
+	 * surface words these two halves differently — a missing collection means
+	 * the library no longer carries that genre or composer, a missing entry
+	 * means the album left it — so the structured answer travels rather than
+	 * one sentence for both.
+	 */
+	readonly collectionFailure: CollectionDrillOpenFailureDetail | null;
 	readonly transitionedAt: number;
 }
 
 export interface LibraryAlbumOpenInput {
-	readonly albumLocalId: string;
+	/**
+	 * What to open: a catalog album by local id, or a genre/composer drill row
+	 * by its own keyless locator. A collection row has no catalog identity and
+	 * one is never minted for it, so the page it opens is named by the locator
+	 * and by nothing else.
+	 */
+	readonly target: LibraryAlbumOpenTarget;
 	readonly tabId: string;
 	/** Generation from the live unified session claim. */
 	readonly generation: number;
@@ -106,7 +163,14 @@ interface ActivePage {
 }
 
 const ACK_TIMEOUT_MS = 5_000;
-const RESOLVING_TIMEOUT_MS = 30_000;
+export const RESOLVING_TIMEOUT_MS = 30_000;
+/**
+ * Transport slack only, never used by the server. The backend's worst-case
+ * terminal event lands by `resolvingDeadlineAt + DEGRADE_WINDOW_MS`; arming
+ * the client's open safety timer beyond that keeps listeners attached long
+ * enough for a degraded publication emitted just under the cap to arrive.
+ */
+export const DEGRADE_DELIVERY_SLACK_MS = 2_000;
 
 function boundedDuration(value: number, label: string): number {
 	if (!Number.isSafeInteger(value) || value <= 0 || value > 5 * 60_000) {
@@ -183,7 +247,7 @@ export class LibraryAlbumController {
 		const request = normalizeLibraryAlbumOpenRequest({
 			requestId,
 			tabId: input.tabId,
-			albumLocalId: input.albumLocalId,
+			target: input.target,
 			generation: input.generation
 		});
 		if (!request) return { started: false, reason: 'invalid' };
@@ -212,7 +276,6 @@ export class LibraryAlbumController {
 		this.#publish({
 			...this.#idleState(),
 			phase: 'opening',
-			albumLocalId: request.albumLocalId,
 			generation: request.generation,
 			requestId: request.requestId
 		});
@@ -251,6 +314,7 @@ export class LibraryAlbumController {
 			activeTab: 'details',
 			selectedVersionId: versionId,
 			actionsAvailable: false,
+			albumActionsAvailable: false,
 			orderedTracks: Object.freeze([]) as readonly LibraryAlbumTrack[],
 			versions: this.#updateVersion(versionId, {
 				phase: 'loading',
@@ -259,6 +323,7 @@ export class LibraryAlbumController {
 			}),
 			code: null,
 			error: null,
+			collectionFailure: null,
 			transitionedAt: this.#now()
 		});
 		this.#armTimer(page, this.#ackTimeoutMs, () => this.#handleSelectAckTimeout(page, versionId));
@@ -309,6 +374,100 @@ export class LibraryAlbumController {
 		this.#publish(this.#idleState());
 	}
 
+	/**
+	 * The live arm (`.agents/plans/library-live-view.md` Slice 2).
+	 *
+	 * WHY THIS PRODUCES THE SAME STATE THE SOCKET PATH DOES, rather than a
+	 * second shape beside it. `UnifiedAlbumPage` is the album page — its
+	 * pagination, its focus handling, its action wiring, its hero. A live page
+	 * that carried a different shape would have to be a second album page, and
+	 * a second album page is where the two quietly stop agreeing about what an
+	 * album looks like. So the level Roon returned is turned into the state
+	 * this controller already publishes, and the page never learns which arm
+	 * it is rendering.
+	 *
+	 * WHAT IS DELIBERATELY ABSENT ON A LIVE PAGE. There is no version list: the
+	 * reference names one album, and Roon's other editions of it are other rows
+	 * with their own references, not versions of this one. `versions` is
+	 * therefore empty rather than carrying an invented single entry — which is
+	 * also what keeps the version-exact editorial surface, bound to a catalog
+	 * identity this page does not have, off a page that could not back it.
+	 */
+	public beginLive(): void {
+		if (this.#disposed) return;
+		// A live open displaces any retained catalog page, and displacing one
+		// means telling the server, not dropping the handle on the floor.
+		this.#retirePage(false);
+		this.#publish({
+			...this.#idleState(),
+			phase: 'opening',
+			transitionedAt: this.#now()
+		});
+	}
+
+	/**
+	 * Publish one opened level as this page.
+	 *
+	 * Pure: it reads nothing and awaits nothing, so there is no window here in
+	 * which a level could arrive over a page that has already moved on. The
+	 * caller owns that fence, because the caller owns the read.
+	 */
+	public adoptLiveLevel(input: {
+		readonly albumRef: LibraryRowReference;
+		readonly title: string;
+		readonly artist: string | null;
+		readonly rows: readonly {
+			readonly ref: LibraryRowReference;
+			readonly title: string;
+			readonly kind: string;
+		}[];
+	}): void {
+		if (this.#disposed) return;
+		this.#retirePage(false);
+		const verbRows = input.rows.filter((row) => row.kind === 'action');
+		const trackRows = input.rows.filter((row) => row.kind !== 'action');
+		const orderedTracks: LibraryAlbumTrack[] = trackRows.map((row, position) => ({
+			// Roon's own order IS the album's play order, and the position in
+			// it is the only index there is. Nothing here reads a track number
+			// out of the title: a title is text, and this is a position.
+			index: position,
+			title: row.title
+		}));
+		const live: LibraryAlbumLiveBinding = Object.freeze({
+			albumRef: input.albumRef,
+			// Exactly one, or none. Two verb rows would make the header's
+			// "Play album" a choice between them that nobody can make, and the
+			// honest answer is a disabled button, not an arbitrary one.
+			playRef: verbRows.length === 1 ? verbRows[0].ref : null,
+			trackRefs: Object.freeze(trackRows.map((row) => row.ref))
+		});
+		this.#publish({
+			...this.#idleState(),
+			phase: 'details',
+			activeTab: 'details',
+			title: input.title,
+			artist: input.artist,
+			actionsAvailable: orderedTracks.length > 0,
+			albumActionsAvailable: live.playRef !== null,
+			orderedTracks: frozenTracks(orderedTracks),
+			live,
+			transitionedAt: this.#now()
+		});
+	}
+
+	/** The live read had no page to give, in the reader's own words. */
+	public failLive(code: string, error: string): void {
+		if (this.#disposed) return;
+		this.#retirePage(false);
+		this.#publish({
+			...this.#idleState(),
+			phase: 'failed',
+			code,
+			error,
+			transitionedAt: this.#now()
+		});
+	}
+
 	public dispose(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
@@ -320,7 +479,6 @@ export class LibraryAlbumController {
 		return Object.freeze({
 			phase: 'idle' as const,
 			activeTab: 'details' as const,
-			albumLocalId: null,
 			generation: null,
 			requestId: null,
 			operationId: null,
@@ -328,11 +486,15 @@ export class LibraryAlbumController {
 			artist: null,
 			title: null,
 			versions: Object.freeze([]) as readonly LibraryAlbumVersionState[],
+			degraded: false,
 			selectedVersionId: null,
 			actionsAvailable: false,
 			orderedTracks: Object.freeze([]) as readonly LibraryAlbumTrack[],
+			albumActionsAvailable: false,
+			live: null,
 			code: null,
 			error: null,
+			collectionFailure: null,
 			transitionedAt: this.#now()
 		});
 	}
@@ -432,9 +594,23 @@ export class LibraryAlbumController {
 			resolvingDeadlineAt: ack.data.resolvingDeadlineAt,
 			transitionedAt: this.#now()
 		});
-		this.#armTimer(page, this.#resolvingTimeoutMs, () =>
-			this.#failPage(page, 'RESOLUTION_TIMEOUT', 'The album page did not open in time')
+		// The server may spend one bounded degrade window past its own
+		// deadline building a catalog-backed page, so the client safety net
+		// must outlast that plus delivery. It stays a safety net: the backend
+		// remains the source of the terminal outcome.
+		this.#armTimer(
+			page,
+			this.#resolvingTimeoutMs + DEGRADE_WINDOW_MS + DEGRADE_DELIVERY_SLACK_MS,
+			() => this.#handleOpenTimeout(page)
 		);
+	}
+
+	#handleOpenTimeout(page: ActivePage): void {
+		if (this.#page !== page) return;
+		// A page published server-side but never delivered here would stay
+		// retained; retire it before #failPage detaches the listeners.
+		if (page.operationId !== null) this.#emitCancel(page);
+		this.#failPage(page, 'RESOLUTION_TIMEOUT', 'The album page did not open in time');
 	}
 
 	#cancelLateAcceptance(page: ActivePage, value: unknown): void {
@@ -479,12 +655,17 @@ export class LibraryAlbumController {
 			...this.#state,
 			phase: 'versions',
 			activeTab: versions.length === 1 ? 'details' : 'versions',
-			artist: event.artist,
+			// A page with no artist keeps null here rather than an empty string:
+			// the surface renders no artist line at all, and every
+			// artist-dependent affordance reads the null and stands down.
+			artist: event.artist ?? null,
 			title: event.title,
 			versions,
+			degraded: event.degraded === true,
 			selectedVersionId: null,
 			code: null,
 			error: null,
+			collectionFailure: null,
 			transitionedAt: this.#now()
 		});
 		if (versions.length === 1) this.select(versions[0].versionId);
@@ -535,6 +716,9 @@ export class LibraryAlbumController {
 			activeTab: 'details',
 			selectedVersionId: event.versionId,
 			actionsAvailable: event.actionsAvailable,
+			// A catalog page's two answers are one answer: the same retained
+			// version authority backs the header verbs and the track rows.
+			albumActionsAvailable: event.actionsAvailable,
 			orderedTracks: tracks,
 			versions: this.#updateVersion(event.versionId, {
 				...event.versionSummary,
@@ -565,7 +749,13 @@ export class LibraryAlbumController {
 		if (!expected) return;
 		const event = normalizeLibraryAlbumFailedEvent(value, expected);
 		if (!event) return;
-		this.#failPage(page, event.code, event.error, event.code === 'CANCELED');
+		this.#failPage(
+			page,
+			event.code,
+			event.error,
+			event.code === 'CANCELED',
+			event.collectionFailure ?? null
+		);
 	}
 
 	#handleDisconnect(page: ActivePage): void {
@@ -599,7 +789,13 @@ export class LibraryAlbumController {
 		});
 	}
 
-	#failPage(page: ActivePage, code: string, error: string, canceled = false): void {
+	#failPage(
+		page: ActivePage,
+		code: string,
+		error: string,
+		canceled = false,
+		collectionFailure: CollectionDrillOpenFailureDetail | null = null
+	): void {
 		if (this.#page !== page) return;
 		this.#detachListeners(page);
 		this.#clearPageTimer(page);
@@ -609,6 +805,7 @@ export class LibraryAlbumController {
 			phase: canceled ? 'canceled' : 'failed',
 			code,
 			error,
+			collectionFailure,
 			transitionedAt: this.#now()
 		});
 	}

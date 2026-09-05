@@ -15,13 +15,13 @@ const bootstrap = () => {
 
     const shutdown = createShutdownHandler({ context, logger });
 
-    process.on("SIGINT", () => void shutdown("SIGINT"));
-    process.on("SIGTERM", () => void shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
 
     // When the desktop shell forked us, its death closes our IPC channel and
     // we shut down with it. No IPC channel (appliance install) means no-op.
     attachParentDisconnectWatchdog({
-      onDisconnect: () => void shutdown("parent-disconnect"),
+      onDisconnect: () => shutdown("parent-disconnect"),
       logger,
     });
   } catch (error) {

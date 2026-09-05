@@ -5,6 +5,20 @@ import {
 	commandFeedbackStore,
 	clearCommandFeedback
 } from '../../stores/commandFeedbackStore';
+
+const retirementSpies = vi.hoisted(() => ({
+	classic: vi.fn(),
+	library: vi.fn()
+}));
+vi.mock('../../stores/classicBrowseSessionStore', () => ({
+	classicBrowseSessionClient: {
+		retireServerSession: retirementSpies.classic
+	}
+}));
+vi.mock('../../stores/libraryRootsStore', () => ({
+	retireLibraryGeneration: retirementSpies.library
+}));
+
 import { registerSocketHandlers } from '../register';
 
 // A minimal fake socket that records on/off registrations and lets tests
@@ -69,6 +83,8 @@ beforeEach(() => {
 	}));
 	setSocketStatus('connecting');
 	clearCommandFeedback();
+	retirementSpies.classic.mockClear();
+	retirementSpies.library.mockClear();
 });
 
 afterEach(() => {
@@ -173,6 +189,47 @@ describe('registerSocketHandlers — connectivity transitions', () => {
 		expect(fakeSocket.listenerCount('connect')).toBe(0);
 		expect(fakeSocket.listenerCount('disconnect')).toBe(0);
 		expect(fakeSocket.listenerCount('connect_error')).toBe(0);
+		expect(fakeSocket.listenerCount('classic-session:retired')).toBe(0);
+		expect(fakeSocket.listenerCount('library-session:retired')).toBe(0);
 		expect(fakeSocket.managerListenerCount('reconnect_failed')).toBe(0);
+	});
+
+	it('validates passive retirement events before forwarding them', () => {
+		cleanup = registerSocketHandlers();
+		fakeSocket.fire('classic-session:retired', {
+			contract: 'classic-session-retired-v1',
+			tabId: 'tab-1',
+			session: { handleId: 'handle-1', generation: 4 },
+			reason: 'SESSION_LOST',
+			extra: true
+		});
+		fakeSocket.fire('library-session:retired', {
+			contract: 'library-session-retired-v1',
+			coreId: 'core-1',
+			retired: 'generation-1',
+			reason: 'invented'
+		});
+		expect(retirementSpies.classic).not.toHaveBeenCalled();
+		expect(retirementSpies.library).not.toHaveBeenCalled();
+
+		fakeSocket.fire('classic-session:retired', {
+			contract: 'classic-session-retired-v1',
+			tabId: 'tab-1',
+			session: { handleId: 'handle-1', generation: 4 },
+			reason: 'SESSION_LOST'
+		});
+		const libraryEvent = {
+			contract: 'library-session-retired-v1' as const,
+			coreId: 'core-1',
+			retired: 'generation-1',
+			reason: 'session-lost' as const
+		};
+		fakeSocket.fire('library-session:retired', libraryEvent);
+
+		expect(retirementSpies.classic).toHaveBeenCalledWith({
+			handleId: 'handle-1',
+			generation: 4
+		});
+		expect(retirementSpies.library).toHaveBeenCalledWith(libraryEvent);
 	});
 });

@@ -4,6 +4,15 @@
  * authority, or action authority ever cross this boundary.
  */
 
+import {
+  normalizeCollectionDrillOpenFailure,
+  normalizeCollectionDrillOpenLocator,
+} from "./collectionDrillContracts";
+import type {
+  CollectionDrillOpenFailureDetail,
+  CollectionDrillOpenLocator,
+} from "./collectionDrillContracts";
+
 export const ALBUM_DETAIL_MAX_TRACKS = 500;
 
 export const LIBRARY_ALBUM_ID_MAX_LENGTH = 128;
@@ -11,6 +20,14 @@ export const LIBRARY_ALBUM_TEXT_MAX_LENGTH = 256;
 export const LIBRARY_ALBUM_ERROR_MAX_LENGTH = 1024;
 export const LIBRARY_ALBUM_MAX_TRACKS = ALBUM_DETAIL_MAX_TRACKS;
 export const LIBRARY_ALBUM_MAX_VERSIONS = 32;
+
+/**
+ * Bounded extra window the server may spend building a catalog-backed album
+ * page after live browse timed out. It is an absolute cap measured from the
+ * page's own resolving deadline, never a fresh window, and the client's open
+ * safety timer is armed strictly beyond it.
+ */
+export const DEGRADE_WINDOW_MS = 10_000;
 
 export const LIBRARY_ALBUM_OPEN_ERROR_CODES = [
   "INVALID_REQUEST",
@@ -59,10 +76,30 @@ export interface LibraryAlbumVersionSummary {
   isBanned?: boolean;
 }
 
+/**
+ * What an album page is being asked to open.
+ *
+ * One kind, and it names no stored record: `collection` carries a genre or
+ * composer drill's own keyless locator, and the page is built by re-walking
+ * that drill.
+ *
+ * There used to be a second, `album`, naming a saved catalog record by a
+ * controller-minted local id. It died with the catalog
+ * (`.agents/plans/library-live-view.md` Slice 4). It stays a tagged union
+ * rather than collapsing to the locator, because every reader asks the tag
+ * before it assumes a shape, and because a request that named two things at
+ * once would have to be arbitrated — and there is no honest arbitration
+ * between two ways of naming an album.
+ */
+export type LibraryAlbumOpenTarget = {
+  kind: "collection";
+  locator: CollectionDrillOpenLocator;
+};
+
 export interface LibraryAlbumOpenRequest {
   requestId: string;
   tabId: string;
-  albumLocalId: string;
+  target: LibraryAlbumOpenTarget;
   generation: number;
 }
 
@@ -113,13 +150,39 @@ export interface LibraryAlbumCorrelation {
   resolvingDeadlineAt: number;
 }
 
+/**
+ * WHY THE ARTIST IS OPTIONAL ON BOTH PAGE EVENTS.
+ *
+ * A catalog-opened album always has one: it is minted under an artist, and the
+ * page names that artist. A collection-opened album may have none. Its page is
+ * built from a genre or composer drill row, and such a row renders a title and
+ * — sometimes — a credit line. When the row rendered no credit there is
+ * nothing to show, and a genre or a composer is NOT an artist, so neither may
+ * be substituted into the position. Nor may the credit be looked up in the
+ * catalog to find "the real" artist: that is the title+artist join this plan
+ * deleted.
+ *
+ * So the field is absent when the page has no artist, and it is never the
+ * empty string — an empty artist would render as a blank line where a name
+ * belongs, which claims the page looked and found nothing rather than that it
+ * never had one to look for. Absent is recorded as absent, the same rule the
+ * drill resolver already follows. Every artist-dependent affordance reads the
+ * absence and declares itself unavailable rather than offering what it cannot
+ * do.
+ */
 export interface LibraryAlbumVersionsEvent {
   requestId: string;
   operationId: string;
   generation: number;
-  artist: string;
+  /** Absent when the page has no artist at all; never the empty string. */
+  artist?: string;
   title: string;
   versions: readonly LibraryAlbumVersionSummary[];
+  /**
+   * Present only when live browse timed out and the page was built from the
+   * locally cached catalog instead. Never `false` — absent means live.
+   */
+  degraded?: true;
 }
 
 export interface LibraryAlbumResolvedEvent {
@@ -127,7 +190,8 @@ export interface LibraryAlbumResolvedEvent {
   operationId: string;
   generation: number;
   versionId: string;
-  artist: string;
+  /** Absent when the page has no artist at all; never the empty string. */
+  artist?: string;
   title: string;
   /** True only when public Browse authority can back album/track actions. */
   actionsAvailable: boolean;
@@ -143,6 +207,16 @@ export interface LibraryAlbumFailedEvent {
   resolvingDeadlineAt: number;
   error: string;
   code: LibraryAlbumFailureCode;
+  /**
+   * Present only on a `collection` open that could not find its row again:
+   * which half of the locator refused, why, and how many rows it saw. The
+   * surface says different things about each half — a missing collection means
+   * the library no longer carries that genre or composer, a missing entry
+   * means the album left it — and the count is checked against the reason by
+   * `normalizeCollectionDrillOpenFailure`, so there is nowhere here to put a
+   * fabricated number.
+   */
+  collectionFailure?: CollectionDrillOpenFailureDetail;
 }
 
 export interface LibraryAlbumVersionFailedEvent extends LibraryAlbumFailedEvent {
@@ -157,8 +231,6 @@ export type LibraryAlbumCancelAck =
   | { success: true; data: { claimed: boolean } }
   | { success: false; error: string; code: "INVALID_REQUEST" };
 
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 const CONTROL_CHARACTER = /\p{Cc}/u;
 
@@ -212,10 +284,6 @@ function isOpaqueId(value: unknown): value is string {
   );
 }
 
-function isLocalId(value: unknown): value is string {
-  return typeof value === "string" && UUID.test(value);
-}
-
 function isGeneration(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
@@ -231,6 +299,20 @@ function isBoundedText(value: unknown, maxLength: number): value is string {
     value.length <= maxLength &&
     value.trim() === value &&
     !CONTROL_CHARACTER.test(value)
+  );
+}
+
+/**
+ * An artist that is either a real name or genuinely absent.
+ *
+ * Note what is NOT accepted: the empty string. A page with no artist omits the
+ * field; a page that sent `""` would be claiming it looked for a name and
+ * found a blank one. `isBoundedText` already rejects the empty string, so this
+ * only widens the domain by `undefined`.
+ */
+function isOptionalArtist(value: unknown): boolean {
+  return (
+    value === undefined || isBoundedText(value, LIBRARY_ALBUM_TEXT_MAX_LENGTH)
   );
 }
 
@@ -379,9 +461,29 @@ export function normalizeLibraryAlbumVersionSummary(
 const LIBRARY_ALBUM_OPEN_KEYS = [
   "requestId",
   "tabId",
-  "albumLocalId",
+  "target",
   "generation",
 ] as const;
+
+/**
+ * One open target, exactly one kind, and nothing beside the kind's own field.
+ *
+ * The exact-key check is what keeps a stale client's request out: a record
+ * carrying anything besides `kind` and `locator` — an `albumLocalId` from a
+ * build that still had a catalog, say — is refused rather than read past.
+ */
+export function normalizeLibraryAlbumOpenTarget(
+  value: unknown
+): LibraryAlbumOpenTarget | null {
+  const record = plainDataRecord(value);
+  if (!record) return null;
+  if (record.kind === "collection") {
+    if (!hasExactKeys(record, ["kind", "locator"])) return null;
+    const locator = normalizeCollectionDrillOpenLocator(record.locator);
+    return locator ? { kind: "collection", locator } : null;
+  }
+  return null;
+}
 
 export function normalizeLibraryAlbumOpenRequest(
   value: unknown
@@ -393,15 +495,16 @@ export function normalizeLibraryAlbumOpenRequest(
       !hasExactKeys(record, [...LIBRARY_ALBUM_OPEN_KEYS]) ||
       !isOpaqueId(record.requestId) ||
       !isOpaqueId(record.tabId) ||
-      !isLocalId(record.albumLocalId) ||
       !isGeneration(record.generation)
     ) {
       return null;
     }
+    const target = normalizeLibraryAlbumOpenTarget(record.target);
+    if (!target) return null;
     return {
       requestId: record.requestId,
       tabId: record.tabId,
-      albumLocalId: record.albumLocalId,
+      target,
       generation: record.generation,
     };
   } catch {
@@ -594,18 +697,17 @@ export function normalizeLibraryAlbumVersionsEvent(
     const record = plainDataRecord(value);
     if (
       !record ||
-      !hasExactKeys(record, [
-        "requestId",
-        "operationId",
-        "generation",
-        "artist",
-        "title",
-        "versions",
-      ]) ||
+      // `degraded` is the one permitted extra key; every other unknown key is
+      // still rejected outright.
+      !hasOnlyKeys(
+        record,
+        ["requestId", "operationId", "generation", "title", "versions"],
+        ["degraded", "artist"]
+      ) ||
       record.requestId !== expected.requestId ||
       record.operationId !== expected.operationId ||
       record.generation !== expected.generation ||
-      !isBoundedText(record.artist, LIBRARY_ALBUM_TEXT_MAX_LENGTH) ||
+      !isOptionalArtist(record.artist) ||
       !isBoundedText(record.title, LIBRARY_ALBUM_TEXT_MAX_LENGTH)
     ) {
       return null;
@@ -616,9 +718,14 @@ export function normalizeLibraryAlbumVersionsEvent(
           requestId: expected.requestId,
           operationId: expected.operationId,
           generation: expected.generation,
-          artist: record.artist,
+          ...(record.artist === undefined
+            ? {}
+            : { artist: record.artist as string }),
           title: record.title,
           versions,
+          // Only the literal marker survives; `false` and anything else is
+          // dropped rather than carried as a truthy value.
+          ...(record.degraded === true ? { degraded: true as const } : {}),
         }
       : null;
   } catch {
@@ -635,22 +742,25 @@ export function normalizeLibraryAlbumResolvedEvent(
     const record = plainDataRecord(value);
     if (
       !record ||
-      !hasExactKeys(record, [
-        "requestId",
-        "operationId",
-        "generation",
-        "versionId",
-        "artist",
-        "title",
-        "actionsAvailable",
-        "versionSummary",
-        "orderedTracks",
-      ]) ||
+      !hasOnlyKeys(
+        record,
+        [
+          "requestId",
+          "operationId",
+          "generation",
+          "versionId",
+          "title",
+          "actionsAvailable",
+          "versionSummary",
+          "orderedTracks",
+        ],
+        ["artist"]
+      ) ||
       record.requestId !== expected.requestId ||
       record.operationId !== expected.operationId ||
       record.generation !== expected.generation ||
       !isOpaqueId(record.versionId) ||
-      !isBoundedText(record.artist, LIBRARY_ALBUM_TEXT_MAX_LENGTH) ||
+      !isOptionalArtist(record.artist) ||
       !isBoundedText(record.title, LIBRARY_ALBUM_TEXT_MAX_LENGTH) ||
       typeof record.actionsAvailable !== "boolean"
     ) {
@@ -667,7 +777,9 @@ export function normalizeLibraryAlbumResolvedEvent(
           operationId: expected.operationId,
           generation: expected.generation,
           versionId: record.versionId,
-          artist: record.artist,
+          ...(record.artist === undefined
+            ? {}
+            : { artist: record.artist as string }),
           title: record.title,
           actionsAvailable: record.actionsAvailable,
           versionSummary,
@@ -697,7 +809,9 @@ export function normalizeLibraryAlbumFailedEvent(
     const record = plainDataRecord(value);
     if (
       !record ||
-      !hasExactKeys(record, [...LIBRARY_ALBUM_FAILED_KEYS]) ||
+      !hasOnlyKeys(record, [...LIBRARY_ALBUM_FAILED_KEYS], [
+        "collectionFailure",
+      ]) ||
       record.requestId !== expected.requestId ||
       record.operationId !== expected.operationId ||
       record.generation !== expected.generation ||
@@ -707,6 +821,15 @@ export function normalizeLibraryAlbumFailedEvent(
     ) {
       return null;
     }
+    let collectionFailure: CollectionDrillOpenFailureDetail | undefined;
+    if (record.collectionFailure !== undefined) {
+      const detail = normalizeCollectionDrillOpenFailure(record.collectionFailure);
+      // A malformed detail fails the whole event rather than being dropped: a
+      // failure that silently loses its stage would be reported to the reader
+      // as the generic "could not open", which is a different claim.
+      if (!detail) return null;
+      collectionFailure = detail;
+    }
     const failed: LibraryAlbumFailedEvent = {
       requestId: expected.requestId,
       operationId: expected.operationId,
@@ -714,6 +837,7 @@ export function normalizeLibraryAlbumFailedEvent(
       resolvingDeadlineAt: expected.resolvingDeadlineAt,
       error: record.error,
       code: record.code,
+      ...(collectionFailure ? { collectionFailure } : {}),
     };
     return failed;
   } catch {

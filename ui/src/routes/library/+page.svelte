@@ -4,9 +4,10 @@
 	import { page } from '$app/state';
 	import {
 		buildUnifiedRootPageState,
-		normalizeLibraryPageStateEnvelope,
 		type LibraryViewActivationCause
 	} from '$lib/libraryPageState';
+	import { decodeLibraryRoute, encodeLibraryRoute } from '$lib/libraryRoute';
+	import { libraryPageStateFromRoute } from '$lib/libraryRouteState';
 	import {
 		clearPendingLibraryPageStateWrite,
 		consumeSelfAuthoredLibraryPageState,
@@ -22,21 +23,31 @@
 	import UnifiedLibraryMode from './UnifiedLibraryMode.svelte';
 
 	let mounted = false;
-	let observedPageState: App.PageState = page.state;
+	function pageStateFromUrl(url: URL = page.url) {
+		const route = decodeLibraryRoute(url);
+		return route === null ? buildUnifiedRootPageState() : libraryPageStateFromRoute(route);
+	}
+
+	function currentLibraryUrl(): URL {
+		const browserUrl = new URL(window.location.href);
+		return browserUrl.pathname === '/library' || browserUrl.pathname.startsWith('/library/')
+			? browserUrl
+			: page.url;
+	}
+
+	let observedPageUrl = page.url.href;
 	let committedActivation: CommittedLibraryModeActivation = {
 		cause: 'initial',
-		pageState: normalizeLibraryPageStateEnvelope(page.state) ?? buildUnifiedRootPageState()
+		pageState: pageStateFromUrl()
 	};
 	let registeredLifecycle: LibraryModeLifecycle | null = null;
 	let initialNavigationHandled = false;
 
-	function commitActivation(cause: LibraryViewActivationCause): void {
-		const normalized = normalizeLibraryPageStateEnvelope(page.state);
-		const pageState = normalized ?? buildUnifiedRootPageState();
+	function commitActivation(cause: LibraryViewActivationCause, url: URL = page.url): void {
+		const pageState = pageStateFromUrl(url);
 		registeredLifecycle?.suspend();
 		committedActivation = { cause, pageState };
 		registeredLifecycle?.resume(committedActivation);
-		if (!normalized) replaceLibraryPageState(pageState);
 	}
 
 	setContext(LIBRARY_MODE_ACTIVATION_CONTEXT, {
@@ -57,17 +68,24 @@
 	afterNavigate(() => {
 		if (!mounted || initialNavigationHandled) return;
 		initialNavigationHandled = true;
-		if (!normalizeLibraryPageStateEnvelope(page.state)) {
+		const route = decodeLibraryRoute(page.url);
+		const current = `${page.url.pathname}${page.url.search}`;
+		if (route === null || encodeLibraryRoute(route) !== current) {
 			replaceLibraryPageState(committedActivation.pageState);
 		}
 	});
 
 	$effect(() => {
-		const currentPageState = page.state;
-		if (!mounted || currentPageState === observedPageState) return;
-		observedPageState = currentPageState;
-		if (consumeSelfAuthoredLibraryPageState(currentPageState)) return;
-		commitActivation('history-pop');
+		// SvelteKit republishes `page` for shallow traversal, but its URL can
+		// still describe the route that mounted this static fallback. The
+		// address bar is authoritative for these same-document Library pages.
+		void page.url.href;
+		const currentUrl = mounted ? currentLibraryUrl() : page.url;
+		const currentPageUrl = currentUrl.href;
+		if (!mounted || currentPageUrl === observedPageUrl) return;
+		observedPageUrl = currentPageUrl;
+		if (consumeSelfAuthoredLibraryPageState(currentUrl)) return;
+		commitActivation('history-pop', currentUrl);
 	});
 
 	onMount(() => {

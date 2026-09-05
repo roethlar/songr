@@ -1,7 +1,6 @@
 import { BrowseSessionCoordinatorError } from "../../../core/roon/BrowseSessionCoordinator";
 import type {
   UnifiedSongActionRequest,
-  UnifiedSongRelationshipRequest,
 } from "../../../shared/unifiedSearchContracts";
 import { registerUnifiedSearchSocket } from "../unifiedSearch";
 
@@ -114,15 +113,6 @@ function clearRequest() {
   };
 }
 
-function relationshipRequest(): UnifiedSongRelationshipRequest {
-  return {
-    requestId: "relationship-request-1",
-    tabId: "tab-1",
-    session: { handleId: "handle-1", generation: 7 },
-    resultId: "opaque-song-key",
-  };
-}
-
 describe("Unified search socket adapter", () => {
   let socket: FakeSocket;
   let coordinator: {
@@ -149,9 +139,6 @@ describe("Unified search socket adapter", () => {
   };
   let zones: {
     getZone: jest.Mock;
-  };
-  let songRelationships: {
-    resolve: jest.Mock;
   };
 
   beforeEach(() => {
@@ -224,94 +211,14 @@ describe("Unified search socket adapter", () => {
     zones = {
       getZone: jest.fn(() => zone),
     };
-    songRelationships = {
-      resolve: jest.fn().mockResolvedValue({
-        songTitle: "Dear Theodosia",
-        albums: [
-          {
-            albumLocalId: "album-1",
-            artistLocalId: "artist-1",
-            title: "Hamilton",
-            artist: "Orlando Ballet Chorus",
-            editionText: "",
-          },
-        ],
-        composerLabels: [],
-      }),
-    };
     registerUnifiedSearchSocket(socket as never, {
       coordinator: coordinator as never,
       browseService: browseService as never,
       zones: zones as never,
       songActionResolver: resolver,
-      songRelationships,
       getCoreId: () => "core-1",
       logger: logger as never,
     });
-  });
-
-  it("looks up relationships from the retained server title and rechecks the result", async () => {
-    const ack = jest.fn();
-
-    await socket.trigger(
-      "unified-search:relationship",
-      relationshipRequest(),
-      ack
-    );
-
-    expect(songRelationships.resolve).toHaveBeenCalledWith(
-      "core-1",
-      "Dear Theodosia",
-      "Orlando Ballet Chorus"
-    );
-    expect(coordinator.resolveClassicPublishedItemBinding).toHaveBeenCalledTimes(
-      2
-    );
-    expect(ack).toHaveBeenCalledWith({
-      success: true,
-      data: {
-        requestId: "relationship-request-1",
-        session: { handleId: "handle-1", generation: 7 },
-        resultId: "opaque-song-key",
-        songTitle: "Dear Theodosia",
-        albums: [
-          {
-            albumLocalId: "album-1",
-            artistLocalId: "artist-1",
-            title: "Hamilton",
-            artist: "Orlando Ballet Chorus",
-            editionText: "",
-          },
-        ],
-        composerLabels: [],
-      },
-    });
-  });
-
-  it("drops a relationship result when the retained song changes during lookup", async () => {
-    const ack = jest.fn();
-    coordinator.resolveClassicPublishedItemBinding
-      .mockReturnValueOnce({
-        authorityGeneration: 11,
-        item: rawSong,
-      })
-      .mockReturnValueOnce({
-        authorityGeneration: 12,
-        item: { ...rawSong, itemKey: "replacement-key" },
-      });
-
-    await socket.trigger(
-      "unified-search:relationship",
-      relationshipRequest(),
-      ack
-    );
-
-    expect(ack).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        code: "STALE_RESULT",
-      })
-    );
   });
 
   it("clears the old authority before searching and publishes opaque song IDs", async () => {

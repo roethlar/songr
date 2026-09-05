@@ -1,7 +1,7 @@
 import { BrowseService } from '../BrowseService';
 import { RoonClient } from '../RoonClient';
 import { Logger } from 'pino';
-import { CoreUnpairedError, RoonTimeoutError } from '../errors';
+import { CoreUnpairedError, RoonBrowseError, RoonTimeoutError } from '../errors';
 import { DEFAULT_ROON_CALL_TIMEOUT_MS } from '../timeout';
 import type { BrowseOptions, BrowsePopOptions } from '../../../shared/types';
 
@@ -104,6 +104,21 @@ describe('BrowseService', () => {
       const lateSettlement = observer.mock.calls[0][0];
       refreshCallback(false, { action: 'list', list: { level: 0, count: 0 } });
       await expect(lateSettlement).resolves.toBeUndefined();
+    });
+  });
+
+  describe('Roon refusals', () => {
+    it('carries the refusal string Roon answered with, typed, instead of flattening it', async () => {
+      mockBrowseApi.browse.mockImplementation((_options: unknown, callback: Function) => {
+        callback('InvalidItemKey', undefined);
+      });
+
+      const pending = service.browse({ hierarchy: 'artists', itemKey: 'dead' });
+      await expect(pending).rejects.toBeInstanceOf(RoonBrowseError);
+      await expect(pending).rejects.toMatchObject({
+        roonCode: 'InvalidItemKey',
+        invalidatesItemKeys: true
+      });
     });
   });
 
@@ -887,7 +902,7 @@ describe('BrowseService', () => {
 
       await expect(
         service.search({ input: 'hamilton', multiSessionKey: 'sess' })
-      ).rejects.toThrow('browse failed');
+      ).rejects.toThrow(/browse failed|refused by Roon/u);
     });
 
     it('still tolerates a failed category while other results survive (rev-3)', async () => {

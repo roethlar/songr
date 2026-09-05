@@ -3,62 +3,69 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/svelte';
 import { writable } from 'svelte/store';
 
 import UnifiedPalette from '../UnifiedPalette.svelte';
-import {
-	CATALOG_CAPABILITIES,
-	INCOMPLETE_ARTIST_COUNTS_CAPABILITIES,
-	type LibraryArtistEntry,
-	type LibraryAlbumEntry,
-	type LibraryIndexState
-} from '$lib/stores/libraryIndexStore';
+import type { LibraryArtistEntry, LibraryAlbumEntry } from '$lib/libraryEntries';
+import type { LibraryRootsState } from '$lib/stores/libraryRootsStore';
 import type { NamedCountsState } from '$lib/stores/unifiedNamedCountsStore';
 import type {
 	PaletteSearchState,
 	unifiedPaletteSearchStore
 } from '$lib/stores/unifiedPaletteSearchStore';
 import { NO_RELEASE_DATES_REASON } from '$lib/unifiedLibrarySorts';
-import { syntheticStatus } from '$lib/stores/__tests__/libraryIndexFixtures';
 
-function artist(name: string, albumCount: number, i: number): LibraryArtistEntry {
+/** A live Artists row, as the roots store publishes it. */
+function artist(
+	name: string,
+	albumCount: number | undefined,
+	i: number
+): LibraryArtistEntry {
 	return {
-		id: `art-${i}`,
+		id: `live:art-${i}`,
 		name,
 		searchKey: name.toLowerCase(),
-		albumCount,
-		countComplete: true,
-		catalogLocalId: `art-${i}`
+		...(albumCount === undefined ? {} : { albumCount }),
+		liveRef: { generation: 'gen-1', token: `art-${i}` }
 	};
 }
 
+/** A live Albums row, as the roots store publishes it. */
 function album(title: string, artistName: string, i: number): LibraryAlbumEntry {
 	return {
-		id: `alb-${i}`,
+		id: `live:alb-${i}`,
 		title,
 		artist: artistName,
 		searchKey: `${title.toLowerCase()} ${artistName.toLowerCase()}`,
-		catalogLocalId: `alb-${i}`
+		liveRef: { generation: 'gen-1', token: `alb-${i}` }
 	};
 }
 
-function readyIndex(over: Partial<LibraryIndexState> = {}): LibraryIndexState {
+function readyRoots(over: Partial<LibraryRootsState> = {}): LibraryRootsState {
 	const artists = [
 		artist('Bowie Prime', 40, 0),
 		artist('Bowie Second', 2, 1),
 		...Array.from({ length: 10 }, (_, i) => artist(`Bowie Extra ${i}`, 1, i + 2)),
 		artist('Someone Else', 5, 20)
 	];
+	const albums = [
+		album('Bowie Tribute', 'Someone Else', 0),
+		album('Quiet Album', 'Someone Else', 1)
+	];
 	return {
 		phase: 'ready',
-		source: 'catalog',
+		generation: 'gen-1',
 		coreId: 'core-a',
-		revision: 1,
-		status: syntheticStatus(),
+		readAt: '2026-09-04T00:00:00.000Z',
 		artists,
-		albums: [album('Bowie Tribute', 'Someone Else', 0), album('Quiet Album', 'Someone Else', 1)],
+		albums,
+		artistRows: [],
+		albumRows: [],
 		artistBuckets: [],
 		albumBuckets: [],
-		capabilities: CATALOG_CAPABILITIES,
-		truncated: false,
+		artistCount: artists.length,
+		albumCount: albums.length,
+		unavailable: null,
 		error: null,
+		retirementRevision: 0,
+		retirementReason: null,
 		...over
 	};
 }
@@ -91,7 +98,7 @@ function idleSearch(): PaletteSearchState {
 }
 
 function mountPalette(options: {
-	index?: LibraryIndexState;
+	roots?: LibraryRootsState;
 	genres?: NamedCountsState;
 	composers?: NamedCountsState;
 	search?: PaletteSearchState;
@@ -100,6 +107,8 @@ function mountPalette(options: {
 	const searchStore = writable<PaletteSearchState>(options.search ?? idleSearch());
 	const onClose = vi.fn();
 	const onDrill = vi.fn();
+	const onOpenLiveArtist = vi.fn();
+	const onOpenLiveAlbum = vi.fn();
 	const onSong = vi.fn();
 	const onBrowseResult = vi.fn();
 	const onBrowseCategory = vi.fn();
@@ -107,7 +116,7 @@ function mountPalette(options: {
 	const onSearch = vi.fn();
 	const result = render(UnifiedPalette, {
 		props: {
-			index: options.index ?? readyIndex(),
+			roots: options.roots ?? readyRoots(),
 			genres: options.genres ?? EMPTY_NAMED,
 			composers: options.composers ?? EMPTY_NAMED,
 			searchStore: searchStore as unknown as typeof unifiedPaletteSearchStore,
@@ -115,6 +124,8 @@ function mountPalette(options: {
 			selectedRowId: null,
 			onClose,
 			onDrill,
+			onOpenLiveArtist,
+			onOpenLiveAlbum,
 			onSong,
 			onBrowseResult,
 			onBrowseCategory,
@@ -127,6 +138,8 @@ function mountPalette(options: {
 		searchStore,
 		onClose,
 		onDrill,
+		onOpenLiveArtist,
+		onOpenLiveAlbum,
 		onSong,
 		onBrowseResult,
 		onBrowseCategory,
@@ -190,7 +203,9 @@ describe('UnifiedPalette — instant sections', () => {
 		expect(bowieRow).toBeDefined();
 		expect(bowieRow?.textContent).toContain('40 albums');
 		await fireEvent.click(bowieRow!);
-		expect(harness.onDrill).toHaveBeenCalledWith({ kind: 'artist', localId: 'art-0' });
+		expect(harness.onOpenLiveArtist).toHaveBeenCalledWith(
+			expect.objectContaining({ id: 'live:art-0', name: 'Bowie Prime' })
+		);
 	});
 
 	it('pluralizes artist album counts on the count, not on a fixed noun', async () => {
@@ -254,7 +269,7 @@ describe('UnifiedPalette — instant sections', () => {
 	it('keeps large instant-result totals ungrouped like the prototype', () => {
 		mountPalette({
 			seed: 'matching',
-			index: readyIndex({
+			roots: readyRoots({
 				albums: Array.from({ length: 1_001 }, (_, i) =>
 					album(`Matching Album ${i}`, 'Someone Else', i)
 				)
@@ -272,20 +287,17 @@ describe('UnifiedPalette — instant sections', () => {
 		const rows = screen.getAllByTestId('unified-palette-row');
 		const albumRow = rows.find((el) => el.textContent?.includes('Quiet Album'));
 		await fireEvent.click(albumRow!);
-		expect(harness.onDrill).toHaveBeenCalledWith({ kind: 'album', localId: 'alb-1' });
+		expect(harness.onOpenLiveAlbum).toHaveBeenCalledWith(
+			expect.objectContaining({ id: 'live:alb-1', title: 'Quiet Album' })
+		);
 	});
 
-	it('shows a grouped album once with its version count', () => {
-		mountPalette({
-			seed: 'quiet',
-			index: readyIndex({
-				albums: [{ ...album('Quiet Album', 'Someone Else', 1), versionCount: 3 }]
-			})
-		});
+	it('shows an album row under the credit Roon printed, and nothing else', () => {
+		mountPalette({ seed: 'quiet' });
 
 		const rows = screen.getAllByTestId('unified-palette-row');
 		const albumRow = rows.find((el) => el.textContent?.includes('Quiet Album'));
-		expect(albumRow?.querySelector('.p2')).toHaveTextContent('Someone Else · 3 versions');
+		expect(albumRow?.querySelector('.p2')).toHaveTextContent('Someone Else');
 	});
 });
 
@@ -304,10 +316,20 @@ describe('UnifiedPalette — smart filters', () => {
 		expect(harness.onApplyFilter).toHaveBeenCalledWith('>30 albums');
 	});
 
-	it('gates count filters on incomplete Roon artist-count coverage', () => {
-		mountPalette({
+	it('counts a filter over the live roots, skipping rows Roon gave no count', async () => {
+		// Two artists carry a count of one; a third carries none at all. The
+		// uncounted row must not be reported as matching "exactly one album" —
+		// absent is not zero and it is not one either.
+		const harness = mountPalette({
 			seed: 'one album',
-			index: readyIndex({ capabilities: INCOMPLETE_ARTIST_COUNTS_CAPABILITIES })
+			roots: readyRoots({
+				artists: [
+					artist('Counted One', 1, 0),
+					artist('Counted Also One', 1, 1),
+					artist('No Count At All', undefined, 2),
+					artist('Counted Nine', 9, 3)
+				]
+			})
 		});
 
 		const rows = screen.getAllByTestId('unified-palette-row');
@@ -315,10 +337,10 @@ describe('UnifiedPalette — smart filters', () => {
 			el.textContent?.includes('Artists with exactly one album')
 		);
 		expect(filterRow).toBeDefined();
-		expect(filterRow).toBeDisabled();
-		expect(filterRow?.textContent).toContain(
-			INCOMPLETE_ARTIST_COUNTS_CAPABILITIES.countFiltersDisabledReason
-		);
+		expect(filterRow).not.toBeDisabled();
+		expect(filterRow?.textContent).toContain('2 artists');
+		await fireEvent.click(filterRow!);
+		expect(harness.onApplyFilter).toHaveBeenCalledWith('one album');
 	});
 
 	it('always renders year expressions disabled with the no-release-dates reason', () => {
@@ -336,7 +358,7 @@ describe('UnifiedPalette — async coordinated section', () => {
 	it('renders every song as an actionable opaque row without artwork matching', async () => {
 		const harness = mountPalette({
 			seed: 'bowie',
-			index: readyIndex({
+			roots: readyRoots({
 				albums: [
 					{
 						...album('Scary Monsters', 'David Bowie', 0),
@@ -598,14 +620,16 @@ describe('UnifiedPalette — keyboard', () => {
 
 		await fireEvent.keyDown(input(), { key: 'ArrowDown' });
 		await fireEvent.keyDown(input(), { key: 'Enter' });
-		expect(harness.onDrill).toHaveBeenCalled();
+		expect(harness.onOpenLiveArtist).toHaveBeenCalled();
 	});
 
 	it('Enter with no explicit selection activates the first enabled row', async () => {
 		const harness = mountPalette({ seed: 'quiet album' });
 
 		await fireEvent.keyDown(input(), { key: 'Enter' });
-		expect(harness.onDrill).toHaveBeenCalledWith({ kind: 'album', localId: 'alb-1' });
+		expect(harness.onOpenLiveAlbum).toHaveBeenCalledWith(
+			expect.objectContaining({ id: 'live:alb-1' })
+		);
 	});
 
 	it('Escape closes; backdrop click closes; palette click does not', async () => {
@@ -620,6 +644,23 @@ describe('UnifiedPalette — keyboard', () => {
 		await fireEvent.click(input());
 		expect(harness.onClose).toHaveBeenCalledTimes(2);
 	});
+
+	it('Escape closes even when focus is on a TRY seed button, not the input', async () => {
+		const harness = mountPalette();
+
+		// Clicking a TRY seed sets `query`, which swaps the seed list out for
+		// the search-results view — the clicked button is removed from the
+		// DOM, so the browser moves focus to `document.body`. Dispatching on
+		// `window` (rather than the now-detached button) is what actually
+		// models that: a per-element keydown handler could never see this,
+		// only a window-level listener can.
+		const seed = screen.getAllByTestId('unified-palette-seed')[0];
+		await fireEvent.click(seed);
+		expect(harness.onClose).not.toHaveBeenCalled();
+
+		await fireEvent.keyDown(window, { key: 'Escape' });
+		expect(harness.onClose).toHaveBeenCalledTimes(1);
+	});
 });
 
 describe('UnifiedPalette — keystroke budget at 40k entries (plan §3.2)', () => {
@@ -630,7 +671,7 @@ describe('UnifiedPalette — keystroke budget at 40k entries (plan §3.2)', () =
 		const albums = Array.from({ length: 40_000 }, (_, i) =>
 			album(`Album ${i}${i % 500 === 0 ? ' zephyr' : ''}`, `Artist ${i}`, i)
 		);
-		mountPalette({ index: readyIndex({ artists, albums }) });
+		mountPalette({ roots: readyRoots({ artists, albums }) });
 
 		const started = performance.now();
 		await fireEvent.input(input(), { target: { value: 'zephyr' } });

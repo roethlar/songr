@@ -7,11 +7,7 @@ import {
 	__setRouterInitialized,
 	pushState
 } from '../../../test/app-stubs/navigation';
-import {
-	buildLibraryPageStateEnvelope,
-	buildUnifiedLibraryPageState,
-	buildUnifiedRootPageState
-} from '$lib/libraryPageState';
+import { __setTestPage } from '../../../test/app-stubs/state.svelte';
 import { libraryViewHostStore } from '$lib/stores/libraryViewHostStore';
 
 vi.mock('../UnifiedLibraryMode.svelte', async () => ({
@@ -19,18 +15,11 @@ vi.mock('../UnifiedLibraryMode.svelte', async () => ({
 }));
 
 import LibraryPage from '../+page.svelte';
-
-const browseState = () =>
-	buildUnifiedLibraryPageState({
-		scope: 'browse',
-		collectionDrill: null,
-		itemTarget: null,
-		filterText: 'Bowie',
-		surpriseSeed: null
-	});
+import DeepLibraryPage from '../[...path]/+page.svelte';
 
 describe('Unified-only Library host', () => {
 	beforeEach(() => {
+		window.history.replaceState({}, '', '/');
 		__resetNavigation('http://localhost/library');
 	});
 
@@ -39,8 +28,7 @@ describe('Unified-only Library host', () => {
 	});
 
 	it('mounts Unified directly and publishes it as the active shell mode', async () => {
-		const state = browseState();
-		__resetNavigation('http://localhost/library', buildLibraryPageStateEnvelope(state));
+		__resetNavigation('http://localhost/library/browse?search=Bowie');
 		const { getByTestId } = render(LibraryPage);
 
 		await waitFor(() => expect(getByTestId('unified-host-probe')).toBeInTheDocument());
@@ -50,34 +38,50 @@ describe('Unified-only Library host', () => {
 		expect(__getNavigationLog()).toEqual([]);
 	});
 
-	it('replaces retired Classic page state with the Unified root', async () => {
-		__resetNavigation('http://localhost/library', {
-			library: {
-				libraryView: 'classic',
-				schemaVersion: 1,
-				snapshot: { context: { hierarchy: 'browse' }, history: [], forward: [] }
-			}
-		} as unknown as App.PageState);
+	it('uses the same host for a deep Library address', async () => {
+		__resetNavigation('http://localhost/library/artists/Nornir%20Trio');
+		const { getByTestId } = render(DeepLibraryPage);
+
+		await waitFor(() => expect(getByTestId('unified-host-probe')).toBeInTheDocument());
+		expect(get(libraryViewHostStore).activeMode).toBe('unified');
+	});
+
+	it('canonicalizes the Library root alias after router initialization', async () => {
+		__resetNavigation('http://localhost/library');
 		__setRouterInitialized(false);
 		const { getByTestId } = render(LibraryPage);
 
 		await waitFor(() => expect(__getNavigationLog()).toHaveLength(1));
-		expect(__getNavigationLog()[0]).toMatchObject({
+		expect(__getNavigationLog()[0]).toEqual({
 			operation: 'replaceState',
-			state: { library: { libraryView: 'unified', snapshot: { scope: 'artists' } } }
+			url: 'http://localhost/library/artists',
+			state: {}
 		});
 		expect(getByTestId('unified-host-probe')).toHaveAttribute('data-scope', 'artists');
 	});
 
-	it('restores a valid shallow Unified entry as a history-pop activation', async () => {
-		__resetNavigation(
-			'http://localhost/library',
-			buildLibraryPageStateEnvelope(buildUnifiedRootPageState('artists'))
-		);
+	it('restores a URL-only shallow entry as a history-pop activation', async () => {
+		__resetNavigation('http://localhost/library/artists');
 		const { getByTestId } = render(LibraryPage);
 		await waitFor(() => expect(getByTestId('unified-host-probe')).toBeInTheDocument());
 
-		pushState('', buildLibraryPageStateEnvelope(browseState()));
+		pushState('/library/browse?search=Bowie', {});
+		await waitFor(() =>
+			expect(getByTestId('unified-host-probe')).toHaveAttribute('data-cause', 'history-pop')
+		);
+		expect(getByTestId('unified-host-probe')).toHaveAttribute('data-scope', 'browse');
+	});
+
+	it('uses the address bar when a shallow pop republishes the mounted route URL', async () => {
+		__resetNavigation('http://localhost/library/artists');
+		const { getByTestId } = render(LibraryPage);
+		await waitFor(() => expect(getByTestId('unified-host-probe')).toBeInTheDocument());
+
+		window.history.replaceState({}, '', '/library/browse?search=Bowie');
+		// This is the live static-fallback shape: SvelteKit republishes page
+		// state, but page.url still names the route that mounted the host.
+		__setTestPage('http://localhost/library/artists', {});
+
 		await waitFor(() =>
 			expect(getByTestId('unified-host-probe')).toHaveAttribute('data-cause', 'history-pop')
 		);

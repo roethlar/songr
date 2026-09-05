@@ -284,10 +284,13 @@ describe('Unified-only layout', () => {
 			)
 		);
 
+		// The seek bar is a pointer-drag scrubber, so a plain click is a
+		// press and release at the same x — there is no `onclick` path.
 		const seek = container.querySelector('[aria-label="Seek"]') as HTMLElement;
 		seek.getBoundingClientRect = () =>
 			({ left: 0, width: 100, top: 0, right: 100, bottom: 3, height: 3, x: 0, y: 0, toJSON() {} }) as DOMRect;
-		await fireEvent.click(seek, { clientX: 50 });
+		await fireEvent.pointerDown(seek, { pointerId: 1, button: 0, clientX: 50 });
+		await fireEvent.pointerUp(window, { pointerId: 1, clientX: 50 });
 		await waitFor(() =>
 			expect(emitWithAck).toHaveBeenCalledWith(
 				fakeSocket,
@@ -296,6 +299,54 @@ describe('Unified-only layout', () => {
 				expect.any(Object)
 			)
 		);
+	});
+
+	// Issue #13: the control carried a slider's ARIA contract but was wired to
+	// `onclick` alone, so a press-and-drag did nothing until release and then
+	// jumped once. A drag must scrub, and must survive straying off a strip
+	// only a few pixels tall.
+	it('scrubs on a pointer drag and sends exactly one seek, at the release position', async () => {
+		seedTransport();
+		const { container } = renderLayout();
+		vi.mocked(emitWithAck).mockClear();
+
+		const seek = container.querySelector('[aria-label="Seek"]') as HTMLElement;
+		seek.getBoundingClientRect = () =>
+			({ left: 0, width: 100, top: 0, right: 100, bottom: 3, height: 3, x: 0, y: 0, toJSON() {} }) as DOMRect;
+
+		await fireEvent.pointerDown(seek, { pointerId: 7, button: 0, clientX: 10 });
+		await fireEvent.pointerMove(window, { pointerId: 7, clientX: 40 });
+		// Off the strip vertically, as a real drag on a 3px target is.
+		await fireEvent.pointerMove(window, { pointerId: 7, clientX: 75, clientY: -60 });
+		// The thumb follows the pointer, not the server position.
+		expect(seek).toHaveAttribute('aria-valuenow', '180');
+		expect(vi.mocked(emitWithAck).mock.calls).toHaveLength(0);
+
+		await fireEvent.pointerUp(window, { pointerId: 7, clientX: 75, clientY: -60 });
+
+		const seeks = vi
+			.mocked(emitWithAck)
+			.mock.calls.filter(([, event]) => event === 'transport:seek');
+		expect(seeks).toHaveLength(1);
+		expect(seeks[0][2]).toEqual({ zone_id: 'zone-a', seconds: 180 });
+	});
+
+	it('abandons a cancelled drag without seeking', async () => {
+		seedTransport();
+		const { container } = renderLayout();
+		vi.mocked(emitWithAck).mockClear();
+
+		const seek = container.querySelector('[aria-label="Seek"]') as HTMLElement;
+		seek.getBoundingClientRect = () =>
+			({ left: 0, width: 100, top: 0, right: 100, bottom: 3, height: 3, x: 0, y: 0, toJSON() {} }) as DOMRect;
+
+		await fireEvent.pointerDown(seek, { pointerId: 3, button: 0, clientX: 10 });
+		await fireEvent.pointerMove(window, { pointerId: 3, clientX: 90 });
+		await fireEvent.pointerCancel(window, { pointerId: 3, clientX: 90 });
+
+		expect(
+			vi.mocked(emitWithAck).mock.calls.filter(([, event]) => event === 'transport:seek')
+		).toHaveLength(0);
 	});
 
 	it('opens grouping and ungroups every output after the first', async () => {

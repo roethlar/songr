@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { BrowseItem } from '@shared/types';
+	import { shouldHandleLibraryAnchorClick } from '$lib/libraryPageNavigation';
 	import {
 		browseItemOpensActions,
 		type UnifiedBrowseState
@@ -11,7 +12,8 @@
 		onForward,
 		onItem,
 		onLoadMore,
-		onSearchPrompt
+		onSearchPrompt,
+		hrefForItem = () => null
 	}: {
 		state: UnifiedBrowseState;
 		onBack: () => void;
@@ -19,6 +21,7 @@
 		onItem: (item: BrowseItem) => void;
 		onLoadMore: () => void;
 		onSearchPrompt: () => void;
+		hrefForItem?: (item: BrowseItem) => string | null;
 	} = $props();
 
 	const result = $derived(state.result);
@@ -42,6 +45,14 @@
 	function activate(item: BrowseItem): void {
 		if (item.inputPrompt) onSearchPrompt();
 		else onItem(item);
+	}
+
+	function followItem(event: MouseEvent, href: string | null, item: BrowseItem): void {
+		if (href !== null) {
+			if (!shouldHandleLibraryAnchorClick(event)) return;
+			event.preventDefault();
+		}
+		activate(item);
 	}
 </script>
 
@@ -106,8 +117,12 @@
 		{/if}
 		<div class="browse-list" data-testid="unified-browse-list">
 			{#each items as item, index (`${index}:${item.title}:${item.subtitle ?? ''}`)}
-				<button
-					type="button"
+				{@const href = state.phase === 'loading' ? null : hrefForItem(item)}
+				<svelte:element
+					this={href === null ? 'button' : 'a'}
+					role={href === null ? 'button' : 'link'}
+					type={href === null ? 'button' : undefined}
+					{href}
 					class="browse-row"
 					data-testid="unified-browse-row"
 					aria-label={item.inputPrompt
@@ -116,7 +131,7 @@
 							? `Open actions for ${item.title}`
 							: `Open ${item.title}`}
 					disabled={state.phase === 'loading'}
-					onclick={() => activate(item)}
+					onclick={(event: MouseEvent) => followItem(event, href, item)}
 				>
 					<span class="browse-icon" aria-hidden="true">{rowIcon(item)}</span>
 					<span class="browse-primary">{item.title}</span>
@@ -128,7 +143,7 @@
 								? 'ACTIONS'
 								: 'OPEN'}
 					</span>
-				</button>
+				</svelte:element>
 			{/each}
 		</div>
 		{#if canLoadMore}
@@ -251,6 +266,8 @@
 		font: inherit;
 		text-align: left;
 		cursor: pointer;
+		color: inherit;
+		text-decoration: none;
 	}
 
 	.browse-row:hover {

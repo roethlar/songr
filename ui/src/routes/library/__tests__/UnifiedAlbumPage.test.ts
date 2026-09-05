@@ -29,6 +29,7 @@ function sheetState(overrides: Partial<LibraryAlbumState> = {}): LibraryAlbumSta
 		versions: [],
 		selectedVersionId: null,
 		actionsAvailable: false,
+		albumActionsAvailable: false,
 		orderedTracks: [],
 		code: null,
 		error: null,
@@ -55,6 +56,7 @@ function resolvedState(trackCount = 2): LibraryAlbumState {
 		],
 		selectedVersionId: VERSION_A,
 		actionsAvailable: true,
+		albumActionsAvailable: true,
 		orderedTracks: Array.from({ length: trackCount }, (_value, index) => ({
 			index,
 			title: `Track ${index + 1}`
@@ -69,7 +71,7 @@ function actionState(overrides: Partial<ActionState> = {}): ActionState {
 function makeHarness(
 	initialSheet: LibraryAlbumState,
 	initialAction: ActionState = actionState(),
-	zones: readonly { zoneId: string; name: string }[] = [{ zoneId: 'zone-1', name: 'Kitchen' }],
+	zoneId: string | null = 'zone-1',
 	focusSongTitle: string | null = null,
 	extraProps: Record<string, unknown> = {}
 ) {
@@ -118,7 +120,7 @@ function makeHarness(
 		props: {
 			controller,
 			actionController,
-			zones,
+			zoneId,
 			focusSongTitle,
 			backLabel: 'Albums',
 			...callbacks,
@@ -295,6 +297,20 @@ describe('UnifiedAlbumPage', () => {
 		expect(screen.getByTestId('unified-album-tab-details')).toHaveClass('on');
 	});
 
+	it('names no version on an album that has exactly one and no edition text', () => {
+		const base = resolvedState();
+		makeHarness({
+			...base,
+			versions: [{ ...base.versions[0], editionText: '' }]
+		});
+
+		// There is nothing to choose between, so "Version 1" would be a label
+		// for a distinction the album does not have (owner, 2026-09-02).
+		const heading = screen.getByTestId('unified-album-selected-version');
+		expect(heading).not.toHaveTextContent(/Version 1/u);
+		expect(heading.querySelector('strong')).toBeNull();
+	});
+
 	it('renders source, date, duration, availability, and play-state metadata on the shared page', async () => {
 		const base = resolvedState();
 		const version = {
@@ -400,6 +416,20 @@ describe('UnifiedAlbumPage', () => {
 		);
 	});
 
+	it('names catalog-backed data on a degraded page, and stays silent otherwise', async () => {
+		const harness = makeHarness(resolvedState());
+		expect(screen.queryByTestId('unified-album-degraded')).toBeNull();
+
+		harness.sheetStore.update((state) => ({ ...state, degraded: true }));
+		await waitFor(() =>
+			expect(screen.getByTestId('unified-album-degraded')).toHaveTextContent(
+				"Live browse isn't answering"
+			)
+		);
+		// Non-blocking: the tracks the catalog supplied still render.
+		expect(screen.getByTestId('unified-album-tracks')).toBeInTheDocument();
+	});
+
 	it('surfaces failures with a retry affordance', async () => {
 		const harness = makeHarness(
 			sheetState({ phase: 'failed', code: 'OPEN_FAILED', error: 'The album read failed' })
@@ -411,7 +441,7 @@ describe('UnifiedAlbumPage', () => {
 		expect(harness.onRetry).toHaveBeenCalledTimes(1);
 	});
 
-	it('renders the resolved album and starts single-zone actions directly', async () => {
+	it('renders the resolved album and starts actions on the selected zone', async () => {
 		const harness = makeHarness(resolvedState());
 
 		expect(screen.getByTestId('unified-album-title')).toHaveTextContent('Debut');
@@ -456,6 +486,7 @@ describe('UnifiedAlbumPage', () => {
 				artist: 'Lio-Marcus Mendel',
 				title: 'Hamilton',
 				actionsAvailable: false,
+				albumActionsAvailable: false,
 				orderedTracks: [
 					{ index: 0, title: 'Alexander Hamilton' },
 					{ index: 1, title: 'Satisfied' }
@@ -474,24 +505,29 @@ describe('UnifiedAlbumPage', () => {
 		expect(harness.onBeginAction).not.toHaveBeenCalled();
 	});
 
-	it('routes multi-zone actions through the zone picker', async () => {
-		const harness = makeHarness(resolvedState(), actionState(), [
-			{ zoneId: 'zone-1', name: 'Kitchen' },
-			{ zoneId: 'zone-2', name: 'Office' }
-		]);
+	it('never asks which zone — every action goes to the selected one (issue #12)', async () => {
+		const harness = makeHarness(resolvedState(), actionState(), 'zone-2');
 
 		await fireEvent.click(screen.getByTestId('unified-track-queue-0'));
-		expect(harness.onBeginAction).not.toHaveBeenCalled();
-		const picker = screen.getByTestId('unified-album-zone-picker');
-		expect(picker).toHaveTextContent('Queue “Track 1” on');
-
-		await fireEvent.click(screen.getByRole('button', { name: 'Office' }));
-		expect(harness.onBeginAction).toHaveBeenCalledWith(
+		expect(harness.onBeginAction).toHaveBeenNthCalledWith(
+			1,
 			{ index: 0, title: 'Track 1' },
 			'zone-2',
 			'queue'
 		);
+		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		expect(harness.onBeginAction).toHaveBeenNthCalledWith(2, null, 'zone-2', 'play-now');
 		expect(screen.queryByTestId('unified-album-zone-picker')).toBeNull();
+	});
+
+	it('disables every action while no zone is selectable', async () => {
+		const harness = makeHarness(resolvedState(), actionState(), null);
+
+		expect(screen.getByTestId('unified-album-play')).toBeDisabled();
+		expect(screen.getByTestId('unified-album-queue')).toBeDisabled();
+		expect(screen.getByTestId('unified-track-queue-0')).toBeDisabled();
+		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		expect(harness.onBeginAction).not.toHaveBeenCalled();
 	});
 
 	it('pages long track lists and resets paging when a new album resolves', async () => {
@@ -527,7 +563,7 @@ describe('UnifiedAlbumPage', () => {
 		makeHarness(
 			resolvedState(250),
 			actionState(),
-			[{ zoneId: 'zone-1', name: 'Kitchen' }],
+			'zone-1',
 			'  TRACK   151 '
 		);
 
@@ -557,7 +593,7 @@ describe('UnifiedAlbumPage', () => {
 		makeHarness(
 			{ ...state, orderedTracks: tracks },
 			actionState(),
-			[{ zoneId: 'zone-1', name: 'Kitchen' }],
+			'zone-1',
 			'Home'
 		);
 
@@ -574,7 +610,7 @@ describe('UnifiedAlbumPage', () => {
 		makeHarness(
 			{ ...state, orderedTracks: tracks },
 			actionState(),
-			[{ zoneId: 'zone-1', name: 'Kitchen' }],
+			'zone-1',
 			'So What'
 		);
 
@@ -593,7 +629,7 @@ describe('UnifiedAlbumPage', () => {
 		makeHarness(
 			{ ...state, orderedTracks: tracks },
 			actionState(),
-			[{ zoneId: 'zone-1', name: 'Kitchen' }],
+			'zone-1',
 			'So What'
 		);
 
@@ -609,7 +645,7 @@ describe('UnifiedAlbumPage', () => {
 		makeHarness(
 			{ ...state, orderedTracks: tracks },
 			actionState(),
-			[{ zoneId: 'zone-1', name: 'Kitchen' }],
+			'zone-1',
 			'Home'
 		);
 
@@ -651,6 +687,37 @@ describe('UnifiedAlbumPage', () => {
 		);
 	});
 
+	it('shows the action Retry control only for a permitted failed attempt', async () => {
+		const onRetryAction = vi.fn();
+		const permitted = makeHarness(
+			resolvedState(),
+			actionState({ phase: 'failed', error: 'The session retired' }),
+			'zone-1',
+			null,
+			{ actionRetryAvailable: true, onRetryAction }
+		);
+
+		await fireEvent.click(screen.getByTestId('unified-album-action-retry'));
+		expect(onRetryAction).toHaveBeenCalledTimes(1);
+		permitted.unmount();
+
+		const ordinaryFailure = makeHarness(
+			resolvedState(),
+			actionState({ phase: 'failed', error: 'The zone rejected the action' })
+		);
+		expect(screen.queryByTestId('unified-album-action-retry')).toBeNull();
+		ordinaryFailure.unmount();
+
+		makeHarness(
+			resolvedState(),
+			actionState({ phase: 'outcome-unknown', error: 'The action may have executed' }),
+			'zone-1',
+			null,
+			{ actionRetryAvailable: true, onRetryAction }
+		);
+		expect(screen.queryByTestId('unified-album-action-retry')).toBeNull();
+	});
+
 	it('suppresses the row index when every track on the page carries its own ordinal', () => {
 		makeHarness(
 			sheetState({
@@ -658,6 +725,7 @@ describe('UnifiedAlbumPage', () => {
 				artist: 'Miles Davis',
 				title: "'Round About Midnight",
 				actionsAvailable: true,
+				albumActionsAvailable: true,
 				orderedTracks: [
 					{ index: 0, title: "1. 'Round Midnight" },
 					{ index: 1, title: '2. Ah-Leu-Cha' }
@@ -678,6 +746,7 @@ describe('UnifiedAlbumPage', () => {
 				artist: 'Miles Davis',
 				title: "'Round About Midnight",
 				actionsAvailable: true,
+				albumActionsAvailable: true,
 				orderedTracks: [
 					{ index: 0, title: "1. 'Round Midnight" },
 					{ index: 1, title: 'A Plain Title' }
@@ -730,7 +799,7 @@ describe('UnifiedAlbumPage', () => {
 				]
 			},
 			actionState(),
-			[],
+			null,
 			null,
 			{ editorial: ready }
 		);
@@ -743,7 +812,7 @@ describe('UnifiedAlbumPage', () => {
 
 	it('offers exact-track info only on single-version pages and reports the zero-based position', async () => {
 		const onOpenTrackInfo = vi.fn();
-		const first = makeHarness(resolvedState(3), actionState(), [], null, { onOpenTrackInfo });
+		const first = makeHarness(resolvedState(3), actionState(), null, null, { onOpenTrackInfo });
 		await fireEvent.click(screen.getByTestId('unified-track-info-2'));
 		expect(onOpenTrackInfo).toHaveBeenCalledWith(2);
 		first.unmount();
@@ -765,168 +834,27 @@ describe('UnifiedAlbumPage', () => {
 				]
 			},
 			actionState(),
-			[],
+			null,
 			null,
 			{ onOpenTrackInfo }
 		);
 		expect(screen.queryByTestId('unified-track-info-0')).toBeNull();
 	});
 
-	it('opens the track child view from public data alone', async () => {
+	it('opens the track child view from the page’s own public data', async () => {
 		const onOpenTrackInfo = vi.fn();
-		const onEditorialBack = vi.fn();
-		makeHarness(resolvedState(3), actionState(), [], null, {
+		const onCloseTrackInfo = vi.fn();
+		makeHarness(resolvedState(3), actionState(), null, null, {
 			onOpenTrackInfo,
-			onEditorialBack
+			onCloseTrackInfo
 		});
-		// No editorial at all (public build): the child still opens with
-		// the page's own exact track title (ri5-2).
+		// The child opens with the page's own exact track title (ri5-2) —
+		// which is exactly what the address names.
 		await fireEvent.click(screen.getByTestId('unified-track-info-1'));
 		expect(screen.getByTestId('unified-album-track-info').textContent).toContain('Track 2');
-		expect(screen.queryByTestId('unified-album-track-credits')).toBeNull();
 		await fireEvent.click(screen.getByTestId('unified-album-track-info-back'));
-		expect(onEditorialBack).toHaveBeenCalledTimes(1);
+		expect(onCloseTrackInfo).toHaveBeenCalledTimes(1);
 		expect(screen.queryByTestId('unified-album-track-info')).toBeNull();
 	});
 
-	it('layers exact-track credits onto the public child view', async () => {
-		const trackView = {
-			phase: 'ready',
-			requestId: 'r-3',
-			sessionId: 's-1',
-			generation: 4,
-			view: {
-				kind: 'track',
-				title: 'Track 2',
-				subtitle: 'Debut',
-				sections: {
-					description: {
-						text: 'A three-part suite for piano.',
-						source: 'Rovi',
-						language: 'en'
-					}
-				},
-				creditGroups: [
-					{
-						label: 'Composer',
-						credits: [{ role: '', name: 'Björk', followTarget: 'bt-9' }]
-					}
-				]
-			},
-			code: null,
-			section: null,
-			retryable: false,
-			error: null
-		};
-		makeHarness(resolvedState(3), actionState(), [], null, {
-			editorial: trackView,
-			onOpenTrackInfo: vi.fn()
-		});
-		await fireEvent.click(screen.getByTestId('unified-track-info-1'));
-		expect(screen.getByTestId('unified-album-track-info').textContent).toContain('Track 2');
-		expect(
-			screen.getByTestId('unified-album-track-credits-group-0').textContent
-		).toContain('Björk');
-		// The Work description rides the same exact track (Slice 6).
-		expect(screen.getByTestId('unified-album-track-description-text').textContent).toBe(
-			'A three-part suite for piano.'
-		);
-		// The album's own sections make way for the track child view.
-		expect(screen.queryByTestId('unified-album-review')).toBeNull();
-		expect(screen.queryByTestId('unified-album-credits')).toBeNull();
-	});
-
-	it('names the performer back destination from the live child context', async () => {
-		const followed = {
-			phase: 'ready',
-			requestId: 'r-4',
-			sessionId: 's-1',
-			generation: 4,
-			view: {
-				kind: 'artist',
-				title: 'Björk',
-				sections: {}
-			},
-			code: null,
-			section: null,
-			retryable: false,
-			error: null
-		};
-		makeHarness(resolvedState(3), actionState(), [], null, {
-			editorial: followed,
-			onOpenTrackInfo: vi.fn()
-		});
-		// Follow context: the performer was reached from a live track child.
-		await fireEvent.click(screen.getByTestId('unified-track-info-0'));
-		expect(
-			screen.getByTestId('unified-album-credit-performer-back').textContent?.trim()
-		).toBe('Back to track credits');
-	});
-
-	it('shows a followed credit performer with a way back to the album view', async () => {
-		const followed = {
-			phase: 'ready',
-			requestId: 'r-2',
-			sessionId: 's-1',
-			generation: 4,
-			view: {
-				kind: 'artist',
-				title: 'Olaf Otto Becker',
-				sections: {
-					biography: { text: 'A recording engineer.', source: 'AllMusic', language: 'en' }
-				}
-			},
-			code: null,
-			section: null,
-			retryable: false,
-			error: null
-		};
-		const onEditorialBack = vi.fn();
-		makeHarness(resolvedState(), actionState(), [], null, {
-			editorial: followed,
-			onEditorialBack
-		});
-		expect(screen.getByTestId('unified-album-credit-performer').textContent).toContain(
-			'Olaf Otto Becker'
-		);
-		expect(
-			screen.getByTestId('unified-album-performer-biography-text').textContent
-		).toBe('A recording engineer.');
-		// The album's own sections make way for the followed performer.
-		expect(screen.queryByTestId('unified-album-review')).toBeNull();
-		expect(screen.queryByTestId('unified-album-credits')).toBeNull();
-		await fireEvent.click(screen.getByTestId('unified-album-credit-performer-back'));
-		expect(onEditorialBack).toHaveBeenCalledTimes(1);
-	});
-
-	it('shows the editorial review inside Details and nothing without one', () => {
-		const ready = {
-			phase: 'ready',
-			requestId: 'r-1',
-			sessionId: 's-1',
-			generation: 4,
-			view: {
-				kind: 'album',
-				title: 'Debut',
-				subtitle: 'Björk',
-				sections: {
-					review: { text: 'A confident debut.', source: 'AllMusic', language: 'en' }
-				},
-				attribution: [{ text: 'AllMusic' }]
-			},
-			code: null,
-			section: null,
-			retryable: false,
-			error: null
-		};
-		const first = makeHarness(resolvedState(), actionState(), [], null, { editorial: ready });
-		expect(screen.getByTestId('unified-album-review-text').textContent).toBe(
-			'A confident debut.'
-		);
-		first.unmount();
-		// No enrichment: the Details tab renders no editorial surface at all.
-		makeHarness(resolvedState());
-		expect(screen.queryByTestId('unified-album-review')).toBeNull();
-		expect(screen.queryByTestId('unified-album-review-failed')).toBeNull();
-	});
 });

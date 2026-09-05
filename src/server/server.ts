@@ -4,39 +4,29 @@ import { AppConfig } from "../config/env";
 import { Logger } from "pino";
 import { createHttpApp } from "./http/app";
 import { attachSocketServer, SocketContext } from "./socket";
-import {
-  loadWorkspaceFeatureLayer,
-  WorkspaceFeatureLayer,
-} from "./workspaceFeatures";
 import { RoonClient } from "../core/roon/RoonClient";
 
 import { TransportService } from "../core/roon/TransportService";
 import { BrowseService } from "../core/roon/BrowseService";
+import {
+  BrowseCanaryService,
+  browseCanaryProbeHealth,
+  type CoreHealthVerdict,
+} from "../core/roon/BrowseCanaryService";
+import { CorePressureBreaker } from "../core/roon/CorePressureBreaker";
 import { ImageService } from "../core/roon/ImageService";
 import { RecentlyPlayedService } from "../core/recently-played/RecentlyPlayedService";
 import { FavoritesService } from "../core/favorites/FavoritesService";
 import { BrowseSessionCoordinator } from "../core/roon/BrowseSessionCoordinator";
-import { PublicSongResolverService } from "../core/roon/PublicSongResolverService";
-import { EditorialItemSessionService } from "../core/roon/EditorialItemSessionService";
-import { PublicSongSelectionRegistry } from "../core/roon/PublicSongSelectionRegistry";
 import { AlbumActionResolver } from "../core/roon/AlbumActionResolver";
 import { AlbumActionService } from "../core/roon/AlbumActionService";
-import {
-  LibraryAlbumResolver,
-  LibraryAlbumService,
-
-} from "../core/roon/LibraryAlbumService";
-import { FileCatalogPersistence } from "../core/catalog/CatalogPersistence";
-import { CatalogService } from "../core/catalog/CatalogService";
-import { CatalogLifecycle } from "./CatalogLifecycle";
+import { LibraryAlbumService } from "../core/roon/LibraryAlbumService";
+import { LibraryBrowseSession } from "../core/library/LibraryBrowseSession";
+import { LibraryReadPacing } from "../core/library/LibraryReadPacing";
+import { LiveLibrarySession } from "../core/library/LiveLibrarySession";
+import { CoreLifecycle } from "./CoreLifecycle";
 import { attachListeningHandshake } from "./listeningHandshake";
-import { ensureInitialCatalogScan } from "./initialCatalogScan";
-import {
-  isFeatureLayerInstalled,
-  loadLibraryFeatureLayer,
-  type CatalogBrowseRunner,
-  type LibraryFeatureLayer,
-} from "./libraryFeatures";
+import { removeRetiredCatalogStore } from "./removeRetiredCatalogStore";
 
 export interface ServerContext {
   readonly httpServer: http.Server;
@@ -44,13 +34,15 @@ export interface ServerContext {
   readonly roonClient: RoonClient;
   readonly transportService: TransportService;
   readonly recentlyPlayedService: RecentlyPlayedService;
-  readonly catalogService: CatalogService;
-  readonly libraryFeatures: LibraryFeatureLayer;
-  readonly workspaceFeatures: WorkspaceFeatureLayer;
   readonly albumActionService: AlbumActionService;
   readonly libraryAlbumService: LibraryAlbumService;
-  readonly editorialItemService: EditorialItemSessionService;
-  readonly catalogLifecycle: CatalogLifecycle;
+  readonly coreLifecycle: CoreLifecycle;
+  /** The live view of Roon's library; holds nothing on disk. */
+  readonly liveLibrary: LiveLibrarySession;
+  /** The post-connect load trial's canary, or null when it is switched off. */
+  readonly browseCanary: BrowseCanaryService | null;
+  /** The B5 admission gate over background Core work; always present. */
+  readonly corePressureBreaker: CorePressureBreaker;
   /**
    * httpServer.listen() is deferred until RecentlyPlayedService.start
    * resolves (so the API can't serve epoch-0 sentinel snapshots).
@@ -67,6 +59,12 @@ export const startServer = (
   config: AppConfig,
   logger: Logger
 ): ServerContext => {
+  // An upgrading install still has the saved catalog on disk. It is removed
+  // here, once, before anything else starts: nothing reads it any more, and
+  // leaving megabytes of a retired library model in the data directory would
+  // invite a future reader to believe it were state.
+  removeRetiredCatalogStore(config.retiredCatalogPath, logger);
+
   // Instantiate RoonClient
   const roonClient = new RoonClient({
     tokenPath: config.roonTokenPath,
@@ -76,110 +74,135 @@ export const startServer = (
   // Instantiate services
   const transportService = new TransportService(roonClient, logger);
   const browseService = new BrowseService(roonClient, logger);
+  // The post-connect load trial's wedge detector
+  // (`.agents/plans/core-wedge-postconnect.md` §A0). It ships on, so an
+  // ordinary install has one; `ROON_BROWSE_CANARY=0` is the emergency valve
+  // and leaves no canary object at all rather than a dormant one that could be
+  // started by mistake.
+  // B5's shared admission gate over background Core work
+  // (`.agents/plans/core-wedge-postconnect.md`). Built unconditionally, unlike
+  // the canary: an install that switched the canary off still needs its
+  // background workloads shed when the Core stops answering them.
+  const corePressureBreaker = new CorePressureBreaker({
+    probe: browseService,
+    logger,
+    baselineP95Ms: config.browseCanaryBaselineP95Ms,
+  });
+  // Rate control needs an authority that is not its own samples before it
+  // will freeze a latency baseline, and it needs to tell a re-pair of the
+  // same Core from a different one. Both facts live out here, so both are
+  // handed out as registrations. A build with no canary registers nothing
+  // and the verdict stays `unknown` forever, which is the conservative
+  // answer. The walk's pacing controller is the listener today; the binding
+  // sweep's governor was the other one, and it went with the sweep.
+  const coreHealthListeners: Array<
+    (coreId: string, health: CoreHealthVerdict) => void
+  > = [];
+  const corePairingListeners: Array<(coreId: string | null) => void> = [];
+  const announceCoreHealth = (
+    coreId: string,
+    health: CoreHealthVerdict
+  ): void => {
+    for (const listener of coreHealthListeners) listener(coreId, health);
+  };
+  const announceCorePairing = (coreId: string | null): void => {
+    for (const listener of corePairingListeners) listener(coreId);
+  };
+  const browseCanary = config.browseCanaryEnabled
+    ? new BrowseCanaryService({
+        browse: browseService,
+        logger,
+        baselineP95Ms: config.browseCanaryBaselineP95Ms,
+        // The canary is the breaker's latency and timeout evidence. It stays
+        // ignorant of the breaker; the wiring is here.
+        onProbeSettled: (result) => {
+          const coreId = roonClient.getCoreInfo()?.id;
+          if (coreId === undefined || coreId === null) return;
+          // The same probe, read twice: the breaker wants evidence for its
+          // trip rule, the governor wants a verdict about right now. They read
+          // one threshold, so they cannot disagree about what "slow" means.
+          announceCoreHealth(
+            coreId,
+            browseCanaryProbeHealth(result, browseCanary?.thresholdMs() ?? null)
+          );
+          if (result.outcome === "answered") {
+            corePressureBreaker.reportLatency(coreId, {
+              source: "browse-canary",
+              latencyMs: result.latencyMs,
+            });
+            return;
+          }
+          corePressureBreaker.reportPressure(coreId, {
+            source: "browse-canary",
+            kind: result.outcome === "timed-out" ? "timeout" : "connection-lost",
+          });
+        },
+      })
+    : null;
+  if (browseCanary) {
+    // Handed to the breaker rather than the other way round: the breaker
+    // owns the half-open probe, so it is the breaker that has to be able to
+    // silence the fixed-rate one for the whole open interval.
+    corePressureBreaker.attachCanary(browseCanary);
+  }
   const browseSessionCoordinator = new BrowseSessionCoordinator(browseService);
-  const catalogService = new CatalogService(browseSessionCoordinator, logger, {
-    persistence: new FileCatalogPersistence({ directory: config.catalogPath }),
-  });
-  const publicSongSelectionRegistry = new PublicSongSelectionRegistry();
-  // Manual playlist reads ride the public Browse playlist path on the catalog
-  // service's own serialized session, so every in-process catalog consumer
-  // shares one FIFO and one singleton lease instead of racing a second tail.
-  const runCatalogBrowse: CatalogBrowseRunner = (coreId, work) =>
-    catalogService.runCatalogBrowse(coreId, work);
-  // The extended library features (Playlists, Most Played, library date
-  // ordering, album detail fallback, song relationships) live behind one
-  // interface and are loaded once, here. A build that does not carry them
-  // still starts: every capability answer then reports the features as
-  // absent, with the reason, and the library serves without them.
-  const libraryFeatures = loadLibraryFeatureLayer({
-    config,
+  // Every in-process library consumer shares one FIFO and one singleton lease
+  // instead of racing a second tail. This used to belong to the catalog
+  // service, which happened to own the mechanism the live view actually needed;
+  // it was lifted out whole when the catalog was deleted
+  // (`.agents/plans/library-live-view.md` Slice 4).
+  const libraryBrowseSession = new LibraryBrowseSession(
+    browseSessionCoordinator,
+    logger
+  );
+  // The live view of Roon's own library (`.agents/plans/library-live-view.md`
+  // Slice 1). Roots and opens use the publication session; count checks use a
+  // second retained session because re-rooting either hierarchy invalidates
+  // that session's keys. It holds nothing on disk.
+  const libraryReadPacing = new LibraryReadPacing({ logger });
+  const liveLibrary = new LiveLibrarySession({
+    runBrowse: (coreId, work) => libraryBrowseSession.run(coreId, work),
+    runCountBrowse: (coreId, work) =>
+      libraryBrowseSession.runCount(coreId, work),
+    publication: browseSessionCoordinator,
+    pacing: libraryReadPacing,
     logger,
-    catalog: catalogService,
-    selectionRegistry: publicSongSelectionRegistry,
-    getCoreAddress: () => roonClient.getCoreAddress(),
-    runCatalogBrowse,
   });
-  // The optional workspace layer follows the same absence mechanics: a build
-  // without it attaches nothing to any socket and the server serves on.
-  const workspaceFeatures = loadWorkspaceFeatureLayer({
-    logger,
-    getCoreId: () => roonClient.getCoreInfo()?.id ?? null,
-    getCoreAddress: () => roonClient.getCoreAddress(),
-    getZones: () =>
-      transportService.getZones().map((zone) => ({
-        zoneId: zone.zone_id,
-        name: zone.display_name ?? "",
-        outputs: (zone.outputs ?? []).map((output) => ({
-          outputId: output.output_id,
-          name: output.display_name ?? "",
-        })),
-      })),
-    onZonesChanged: (listener) => {
-      transportService.on("zone-updated", listener);
-      transportService.on("zone-removed", listener);
-      return () => {
-        transportService.off("zone-updated", listener);
-        transportService.off("zone-removed", listener);
-      };
-    },
-    onCoreChanged: (listener) => {
-      roonClient.on("core-status", listener);
-      return () => {
-        roonClient.off("core-status", listener);
-      };
-    },
+  coreHealthListeners.push((coreId, health) => {
+    libraryReadPacing.noteHealth(coreId, health);
   });
-  const publicSongResolverService = new PublicSongResolverService({
-    coordinator: browseSessionCoordinator,
-    browseService,
-    selectionRegistry: publicSongSelectionRegistry,
-    sourceVerifier: libraryFeatures.songSourceVerifier,
-    zones: transportService,
+  corePairingListeners.push((coreId) => {
+    if (coreId === null) {
+      libraryReadPacing.onCoreUnpaired();
+      return;
+    }
+    libraryReadPacing.onCorePaired(coreId);
+  });
+  // Registered before the read that it governs: on a trip the admission is
+  // revoked before anything else unwinds, so a recovery cannot let a read
+  // straight back in at the rate that tripped it.
+  corePressureBreaker.register({
+    workload: "library-roots",
+    suspend: (coreId) => libraryReadPacing.onBreakerOpen(coreId),
+    resume: (coreId) => libraryReadPacing.onBreakerClose(coreId),
   });
   const libraryAlbumService = new LibraryAlbumService(
     browseSessionCoordinator,
-    catalogService,
-    new LibraryAlbumResolver(),
-    logger,
-    {
-      ...(libraryFeatures.albumDetailFallback
-        ? { fallbackResolver: libraryFeatures.albumDetailFallback }
-        : {}),
-      ...(libraryFeatures.albumVersionInventory
-        ? { versionInventory: libraryFeatures.albumVersionInventory }
-        : {}),
-    }
+    logger
   );
   const albumActionService = new AlbumActionService(
     browseSessionCoordinator,
     libraryAlbumService,
     transportService,
     new AlbumActionResolver(),
-    logger
-  );
-  // Editorial item sessions (rich-item plan §5.3). Without the feature
-  // layer's editorial port the service still mounts and acks every open
-  // with an honest FEATURE_UNAVAILABLE — the pages render no editorial
-  // surface at all in that build.
-  const editorialItemService = new EditorialItemSessionService({
-    ...(libraryFeatures.editorialItems
-      ? { port: libraryFeatures.editorialItems }
-      : {}),
-    ...(libraryFeatures.nativeProfileAuthority
-      ? { readAuthority: libraryFeatures.nativeProfileAuthority }
-      : {}),
     logger,
-  });
-  const catalogLifecycle = new CatalogLifecycle(
-    catalogService,
+    liveLibrary
+  );
+  const coreLifecycle = new CoreLifecycle(
     browseSessionCoordinator,
     logger,
     albumActionService,
-    libraryAlbumService,
-    // The feature layer refreshes its own snapshot on a schedule; shutting the
-    // catalog down stops it, so nothing it armed outlives the process.
-    libraryFeatures,
-    editorialItemService
+    libraryAlbumService
   );
   const imageService = new ImageService(
     roonClient,
@@ -212,26 +235,7 @@ export const startServer = (
     recentlyPlayedService,
     favoritesService,
     logger,
-    {
-      catalogService,
-      getDiagnosticCoreId: () => catalogLifecycle.getDiagnosticCoreId(),
-      nativeCatalog: libraryFeatures.catalog,
-      ...(libraryFeatures.mostPlayed
-        ? { mostPlayedDrills: libraryFeatures.mostPlayed }
-        : {}),
-      ...(libraryFeatures.playlistContents
-        ? { playlistContents: libraryFeatures.playlistContents }
-        : {}),
-      ...(libraryFeatures.playlistWrites
-        ? { playlistMutations: libraryFeatures.playlistWrites }
-        : {}),
-      ...(libraryFeatures.focusPlaylists
-        ? { focusPlaylists: libraryFeatures.focusPlaylists }
-        : {}),
-      ...(libraryFeatures.artistPortraits
-        ? { artistPortraits: libraryFeatures.artistPortraits }
-        : {}),
-    }
+    liveLibrary
   );
   const httpServer = http.createServer(app);
 
@@ -245,11 +249,8 @@ export const startServer = (
     browseService,
     albumActionService,
     libraryAlbumService,
-    editorialItemService,
+    liveLibrary,
     browseSessionCoordinator,
-    publicSongResolverService,
-    songRelationships: libraryFeatures.songRelationships,
-    workspaceFeatures,
     logger,
   });
 
@@ -280,44 +281,55 @@ export const startServer = (
       if (eventCoreId && currentCoreId && eventCoreId !== currentCoreId) {
         logger.warn(
           { eventCoreId, currentCoreId },
-          "Ignoring mismatched paired Core event for catalog lifecycle"
+          "Ignoring mismatched paired Core event for the Core lifecycle"
         );
         return;
       }
       const coreId = currentCoreId ?? eventCoreId;
       if (coreId) {
-        catalogLifecycle.corePaired(coreId);
-        // Backend startup is one of the extended-library refresh triggers
-        // (the others are the explicit catalog-refresh POST and the layer's
-        // own schedule, which this pull is what arms). It is single-flight
-        // inside the feature layer, failures land in the capability answer,
-        // and it is a no-op when the layer is absent.
-        libraryFeatures.catalog.requestRefresh(coreId);
-        // A build WITHOUT the layer has no refresh owner at all, and a
-        // fresh install would stay on "the catalog prepares" forever
-        // (public issue #1); this fires the first scan exactly then.
-        void ensureInitialCatalogScan(
-          {
-            featureLayerInstalled: isFeatureLayerInstalled(libraryFeatures),
-            start: (id) => catalogService.start(id),
-            currentCoreId: () => roonClient.getCoreInfo()?.id ?? null,
-            status: (id) => catalogService.getStatus(id),
-            scan: (id) => catalogService.scan(id),
-            logger,
-          },
-          coreId
+        // Stage boundary at default level: pairing is where the
+        // post-connect burst the trial measures begins
+        // (`.agents/plans/core-wedge-postconnect.md` §A0).
+        logger.info(
+          { stage: "pairing", coreId },
+          "Post-connect stage: Core paired"
         );
+        // Before anything is triggered. A re-pair to the SAME Core keeps an
+        // open breaker open (the known failure mode includes pressure-induced
+        // unpairs, so a re-pair is evidence for the open state, not against
+        // it); a different Core starts clean. Either way the answer has to
+        // exist before the refresh and scan triggers below ask it.
+        corePressureBreaker.onCorePaired(coreId);
+        announceCorePairing(coreId);
+        coreLifecycle.corePaired(coreId);
+        // The live library reads Roon's roots here, and only here, for the
+        // connect case. A re-pair to the same Core is still a new browse
+        // session, so every reference published under the old one is retired
+        // rather than carried across.
+        liveLibrary.connect(coreId);
       } else {
         logger.warn("Paired Core event omitted its Core identity");
       }
       transportService.start();
       imageService.start();
+      // The canary's run starts where the trial's clock does — a probe
+      // issued before there is a Core to answer it would only put an
+      // unpaired slot at the head of every window.
+      browseCanary?.start();
       zonesSubscribed = false;
       trySubscribeZones();
     }
 
     if (event.coreStatus === "unpaired") {
-      catalogLifecycle.coreUnpaired();
+      browseCanary?.stop();
+      // Probing stops — there is nothing to probe — but the open state and
+      // the backoff level are kept for the re-pair.
+      corePressureBreaker.onCoreUnpaired();
+      announceCorePairing(null);
+      coreLifecycle.coreUnpaired();
+      // Nothing about a Core that is gone may still be on offer: the snapshot
+      // is dropped and every published reference dies with it.
+      liveLibrary.disconnect("core-lost");
       zonesSubscribed = false;
       transportService.resetState();
       socketContext.io.emit("zones", { zones: [] });
@@ -461,13 +473,12 @@ export const startServer = (
     roonClient,
     transportService,
     recentlyPlayedService,
-    catalogService,
-    libraryFeatures,
-    workspaceFeatures,
     albumActionService,
     libraryAlbumService,
-    editorialItemService,
-    catalogLifecycle,
+    coreLifecycle,
+    liveLibrary,
+    browseCanary,
+    corePressureBreaker,
     requestShutdown: () => {
       shutdownRequested = true;
     },

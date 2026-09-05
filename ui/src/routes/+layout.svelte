@@ -44,10 +44,10 @@
 	import ZoneGroupingModal from '$lib/components/ZoneGroupingModal.svelte';
 	import { openZoneGrouping } from '$lib/stores/zoneGroupingStore';
 	import UnifiedQueuePanel from './library/UnifiedQueuePanel.svelte';
-	import { createOptimisticSeekBase, seekTargetForKey } from '$lib/seekKeys';
+	import { formatTime } from '$lib/formatTime';
+	import SeekBar from '$lib/components/SeekBar.svelte';
 	import type {
 		TransportControlRequest,
-		SeekRequest,
 		VolumeRequest,
 		ZoneOutput
 	} from '@shared/types';
@@ -238,64 +238,17 @@
 			0;
 		return duration > 0 ? Math.min(raw, duration) : raw;
 	});
-	const progress = $derived(duration > 0 ? Math.min(seekPosition / duration, 1) : 0);
 
-	function formatTime(seconds: number): string {
-		if (!seconds || seconds < 0) return '0:00';
-		const whole = Math.floor(seconds);
-		const m = Math.floor(whole / 60);
-		const s = whole % 60;
-		return `${m}:${String(s).padStart(2, '0')}`;
-	}
-
-	// Base for repeated seeks between 1 Hz server ticks (rev-8): a held
-	// arrow key must step from the last sent target, not the stale
-	// server position. Keyed by zone AND track identity (title +
-	// duration — the strongest identity the now-playing payload
-	// carries) so a track change mid-hold can't reuse the old track's
-	// absolute target.
-	const optimisticSeek = createOptimisticSeekBase();
+	// Zone + track identity for the seek bar's optimistic base: a held arrow
+	// key must step from the last target sent, not the stale server position,
+	// and a track change mid-hold must not reuse the old track's target.
+	// Title + duration is the strongest identity the now-playing payload
+	// carries.
 	const seekContext = $derived(
 		$selectedZoneStore
 			? `${$selectedZoneStore}::${nowPlaying?.title ?? ''}::${duration}`
 			: null
 	);
-
-	function sendSeek(seconds: number) {
-		if (!$selectedZoneStore) return;
-		const s = getLiveSocket();
-		if (s) {
-			const token = optimisticSeek.record(seekContext, seconds);
-			void emitWithAck(s, 'transport:seek', { zone_id: $selectedZoneStore, seconds } satisfies SeekRequest, {
-				feedback: { source: 'transport', command: 'transport:seek' }
-			}).then((res) => {
-				// A failed/disconnected seek must not leave a phantom base;
-				// token-guarded so an older failure never clears a newer
-				// pending seek.
-				if (!res?.success) optimisticSeek.invalidate(token);
-			});
-		}
-	}
-
-	function seekTo(e: MouseEvent) {
-		if (!canSeek || !duration) return;
-		const bar = e.currentTarget as HTMLElement;
-		const rect = bar.getBoundingClientRect();
-		const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-		sendSeek(Math.floor(fraction * duration));
-	}
-
-	function seekKeydown(e: KeyboardEvent) {
-		if (!canSeek || !duration) return;
-		const target = seekTargetForKey(
-			e.key,
-			optimisticSeek.base(seekContext, seekPosition),
-			duration
-		);
-		if (target === null) return;
-		e.preventDefault();
-		sendSeek(target);
-	}
 
 	// Volume control. We target the first output that has a volume control —
 	// fixed-volume DACs (most of yours) report no volume settings, so the
@@ -468,22 +421,13 @@
 				{formatTime(seekPosition)} / {formatTime(duration)}
 			</p>
 		</div>
-		<div
-			class="unified-seek"
-			class:seekable={canSeek}
-			role="slider"
-			tabindex={canSeek ? 0 : -1}
-			aria-label="Seek"
-			aria-valuemin={0}
-			aria-valuemax={Math.max(0, Math.floor(duration))}
-			aria-valuenow={Math.max(0, Math.min(Math.floor(seekPosition), Math.floor(duration)))}
-			aria-valuetext="{formatTime(seekPosition)} of {formatTime(duration)}"
-			aria-disabled={!canSeek}
-			onclick={seekTo}
-			onkeydown={seekKeydown}
-		>
-			<span style:width={`${progress * 100}%`}></span>
-		</div>
+		<SeekBar
+			variant="transport"
+			position={seekPosition}
+			{duration}
+			{canSeek}
+			contextKey={seekContext}
+		/>
 		<div class="unified-transport-controls">
 			<button type="button" onclick={previous} disabled={!canPrev || commandInFlight} aria-label="Previous"
 				><TransportIcon kind="previous" /></button
@@ -698,6 +642,11 @@
 	}
 
 	.play-bar {
+		/* The seek strip is pinned to this footer's bottom edge, so its
+		   interactive height is bounded by this padding — past it, the strip
+		   starts eating the transport-controls row. Declared next to the
+		   padding it derives from, and read by SeekBar. */
+		--seek-hit-height: 10px;
 		display: flex;
 		flex-shrink: 0;
 		align-items: center;
@@ -718,6 +667,7 @@
 
 	.play-bar.unified.pi-density {
 		padding: 14px 22px;
+		--seek-hit-height: 14px;
 	}
 
 	.unified-now-playing {
@@ -772,29 +722,6 @@
 	.unified-time {
 		color: var(--songr-dim);
 		font-size: 11px;
-	}
-
-	.unified-seek {
-		position: absolute;
-		inset: auto 0 0;
-		height: 3px;
-		background: var(--songr-hover);
-	}
-
-	.unified-seek.seekable {
-		cursor: pointer;
-	}
-
-	.unified-seek.seekable:hover,
-	.unified-seek:focus-visible {
-		height: 5px;
-		outline: 0;
-	}
-
-	.unified-seek span {
-		display: block;
-		height: 100%;
-		background: var(--songr-accent);
 	}
 
 	.unified-transport-controls {

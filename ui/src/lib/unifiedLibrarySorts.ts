@@ -2,11 +2,11 @@ import type {
 	LetterBucket,
 	LibraryAlbumEntry,
 	LibraryArtistEntry
-} from '$lib/stores/libraryIndexStore';
+} from '$lib/libraryEntries';
 import {
 	compareLibrarySearchKeys,
 	librarySortKey
-} from '$lib/stores/libraryIndexStore';
+} from '$lib/libraryEntries';
 import type {
 	UnifiedAlbumsSort,
 	UnifiedArtistsSort,
@@ -95,28 +95,61 @@ export function albumSortMenu(gate: DateFeatureGate = UNAVAILABLE_GATE): readonl
 	]);
 }
 
-/** Genre drill album menu; pre-native it carried no release-year entry at all. */
-export function genreDrillSortMenu(
-	gate: DateFeatureGate = UNAVAILABLE_GATE
-): readonly SortMenuEntry[] {
+/**
+ * The live Albums list's menu (`.agents/plans/library-live-view.md` Slice 2).
+ *
+ * NO RELEASE-YEAR ENTRY AND NO GENRE ENTRY, whatever the date features say —
+ * the same ruling the drill menus carry (Slice 8d). The Albums scope is Roon's
+ * own root now, and a row of it renders a title and a credit line and nothing
+ * else. There is no date on it to order by and no genre on it to group by, and
+ * this is structural rather than a matter of timing: an entry that said "not
+ * right now" would be waiting for something that is never coming. An offered
+ * sort that cannot order is a fabricated affordance, so it is absent.
+ */
+export function liveAlbumSortMenu(): readonly SortMenuEntry[] {
 	return Object.freeze([
 		{ id: 'az', label: 'A to Z' },
 		{ id: 'za', label: 'Z to A' },
 		{ id: 'by-artist', label: 'By artist' },
-		{ id: 'shuffle', label: 'Shuffle' },
-		...(gate.available ? RELEASE_YEAR_ENABLED_ENTRIES : [])
+		{ id: 'shuffle', label: 'Shuffle' }
 	]);
 }
 
-/** Artist drill album menu; the release-year slot mirrors the pre-native layout. */
-export function artistDrillSortMenu(
-	gate: DateFeatureGate = UNAVAILABLE_GATE
-): readonly SortMenuEntry[] {
+/**
+ * Genre drill album menu.
+ *
+ * NO RELEASE-YEAR ENTRY, at any gate setting (Slice 8d). These cards come from
+ * a live genre drill, and a drill row renders a title and a credit line and
+ * nothing else — no dates. The entry used to appear whenever the date features
+ * were available, which was true of the CATALOG and false of these cards: the
+ * menu offered an ordering it could not perform, and every card sorted equal.
+ * An offered sort that cannot order is a fabricated affordance, so it is gone
+ * rather than shown disabled — a disabled entry says "not right now", and this
+ * one is not a matter of timing. It comes back if and when the drill itself
+ * returns a date.
+ */
+export function genreDrillSortMenu(): readonly SortMenuEntry[] {
 	return Object.freeze([
 		{ id: 'az', label: 'A to Z' },
 		{ id: 'za', label: 'Z to A' },
-		{ id: 'shuffle', label: 'Shuffle' },
-		...(gate.available ? RELEASE_YEAR_ENABLED_ENTRIES : [releaseYearEntry(gate)])
+		{ id: 'by-artist', label: 'By artist' },
+		{ id: 'shuffle', label: 'Shuffle' }
+	]);
+}
+
+/**
+ * Artist drill album menu.
+ *
+ * No release-year entry either, and for the same reason (Slice 8d). This page
+ * now renders the walk's stored answer, and a stored walk entry carries the
+ * row's title, credit and artwork hint — no date. Both surfaces lose the sort
+ * together, because fixing one and leaving the other is worse than either.
+ */
+export function artistDrillSortMenu(): readonly SortMenuEntry[] {
+	return Object.freeze([
+		{ id: 'az', label: 'A to Z' },
+		{ id: 'za', label: 'Z to A' },
+		{ id: 'shuffle', label: 'Shuffle' }
 	]);
 }
 

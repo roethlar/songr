@@ -12,10 +12,10 @@
 	import { emitWithAck } from '$lib/socket/emit';
 	import { imageUrl } from '$lib/imageUrl';
 	import { hideOnError } from '$lib/actions/imageFallback';
-	import { createOptimisticSeekBase, seekTargetForKey } from '$lib/seekKeys';
+	import { formatTime } from '$lib/formatTime';
+	import SeekBar from '$lib/components/SeekBar.svelte';
 	import type {
 		TransportControlRequest,
-		SeekRequest,
 		ZoneOutput
 	} from '@shared/types';
 
@@ -51,17 +51,8 @@
 			0;
 		return duration > 0 ? Math.min(raw, duration) : raw;
 	});
-	const progress = $derived(duration > 0 ? Math.min(seekPosition / duration, 1) : 0);
 
 	let commandInFlight = $state(false);
-
-	function formatTime(seconds: number): string {
-		if (!seconds || seconds < 0) return '0:00';
-		const whole = Math.floor(seconds);
-		const m = Math.floor(whole / 60);
-		const s = whole % 60;
-		return `${m}:${String(s).padStart(2, '0')}`;
-	}
 
 	function getLiveSocket() {
 		const s = getSocket();
@@ -103,58 +94,14 @@
 		if (z) void sendCommand('transport:previous', { zone_id: z });
 	}
 
-	// Base for repeated seeks between 1 Hz server ticks (rev-8): a held
-	// arrow key must step from the last sent target, not the stale
-	// server position. Keyed by zone AND track identity (title +
-	// duration — the strongest identity the now-playing payload
-	// carries) so a track change mid-hold can't reuse the old track's
-	// absolute target.
-	const optimisticSeek = createOptimisticSeekBase();
+	// Zone + track identity for the seek bar's optimistic base: a held arrow
+	// key steps from the last target sent, not the stale server position, and
+	// a track change mid-hold cannot reuse the old track's target.
 	const seekContext = $derived(
 		$selectedZoneStore
 			? `${$selectedZoneStore}::${nowPlaying?.title ?? ''}::${duration}`
 			: null
 	);
-
-	function sendSeek(seconds: number) {
-		const z = get(selectedZoneStore);
-		if (!z) return;
-		const s = getLiveSocket();
-		if (s) {
-			const token = optimisticSeek.record(seekContext, seconds);
-			void emitWithAck(
-				s,
-				'transport:seek',
-				{ zone_id: z, seconds } satisfies SeekRequest,
-				{ feedback: { source: 'transport', command: 'transport:seek' } }
-			).then((res) => {
-				// A failed/disconnected seek must not leave a phantom base;
-				// token-guarded so an older failure never clears a newer
-				// pending seek.
-				if (!res?.success) optimisticSeek.invalidate(token);
-			});
-		}
-	}
-
-	function seekTo(e: MouseEvent) {
-		if (!canSeek || !duration) return;
-		const bar = e.currentTarget as HTMLElement;
-		const rect = bar.getBoundingClientRect();
-		const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-		sendSeek(Math.floor(fraction * duration));
-	}
-
-	function seekKeydown(e: KeyboardEvent) {
-		if (!canSeek || !duration) return;
-		const target = seekTargetForKey(
-			e.key,
-			optimisticSeek.base(seekContext, seekPosition),
-			duration
-		);
-		if (target === null) return;
-		e.preventDefault();
-		sendSeek(target);
-	}
 
 	function onBackdropClick(e: MouseEvent) {
 		// Click on the backdrop closes; clicks inside the dialog
@@ -351,22 +298,13 @@
 					>{nowPlaying.album}</button>
 				{/if}
 
-				<div
-					class="np-progress"
-					class:seekable={canSeek}
-					role="slider"
-					tabindex={canSeek ? 0 : -1}
-					aria-label="Seek"
-					aria-valuemin={0}
-					aria-valuemax={Math.max(0, Math.floor(duration))}
-					aria-valuenow={Math.max(0, Math.min(Math.floor(seekPosition), Math.floor(duration)))}
-					aria-valuetext="{formatTime(seekPosition)} of {formatTime(duration)}"
-					aria-disabled={!canSeek}
-					onclick={seekTo}
-					onkeydown={seekKeydown}
-				>
-					<div class="np-progress-fill" style="width: {progress * 100}%"></div>
-				</div>
+				<SeekBar
+					variant="overlay"
+					position={seekPosition}
+					{duration}
+					{canSeek}
+					contextKey={seekContext}
+				/>
 				<div class="np-times">
 					<span>{formatTime(seekPosition)}</span>
 					<span>{formatTime(duration)}</span>
@@ -540,30 +478,6 @@
 	.np-link:hover {
 		color: var(--songr-accent-bright);
 		text-decoration: underline;
-	}
-
-	.np-progress {
-		position: relative;
-		height: 6px;
-		background: var(--songr-hover);
-		border-radius: 3px;
-		margin-top: 1rem;
-		cursor: default;
-	}
-	.np-progress.seekable {
-		cursor: pointer;
-	}
-	.np-progress:focus-visible {
-		outline: 2px solid var(--songr-accent-bright);
-		outline-offset: 2px;
-	}
-	.np-progress-fill {
-		position: absolute;
-		left: 0;
-		top: 0;
-		bottom: 0;
-		background: var(--songr-accent);
-		border-radius: 3px;
 	}
 
 	.np-times {

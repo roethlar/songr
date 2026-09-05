@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount, tick, untrack } from 'svelte';
+	import { get } from 'svelte/store';
 	import {
 		LIBRARY_MODE_ACTIVATION_CONTEXT,
 		type CommittedLibraryModeActivation,
@@ -7,40 +8,58 @@
 	} from '$lib/libraryModeActivationContext';
 	import {
 		buildUnifiedLibraryPageState,
-		type UnifiedCollectionDrillTarget,
+		type BrowseBreadcrumb,
 		type UnifiedItemDetailTarget,
 		type UnifiedItemTarget,
 		type UnifiedLibraryDrillTarget,
+		type UnifiedLibraryPageState,
 		type UnifiedLibraryScope
 	} from '$lib/libraryPageState';
 	import { LibraryItemPageController } from '$lib/library/LibraryItemPageController';
 	import {
-		expectSelfAuthoredLibraryPageState,
-		pushLibraryPageState,
-		replaceLibraryPageState
+		expectSelfAuthoredLibraryPageState as expectLibraryRoute,
+		preflightLibraryPageState as preflightLibraryRoute,
+		pushLibraryPageState as pushLibraryRoute,
+		replaceLibraryPageState as replaceLibraryRoute,
+		shouldHandleLibraryAnchorClick,
+		type LibraryPageStateWriteResult
 	} from '$lib/libraryPageNavigation';
-	import { fetchCatalogStatus, loadCatalogArtistAlbums } from '$lib/api/client';
 	import {
-		classicBrowseSessionClient,
-		type ClassicBrowseSessionClaim
-	} from '$lib/stores/classicBrowseSessionStore';
+		encodeLibraryRoute,
+		type LibraryRoute,
+		type LibraryRouteAlbum,
+		type LibraryRouteBrowseStep
+	} from '$lib/libraryRoute';
+	import { browseBreadcrumbFor } from '$lib/library/browseSemantics';
+	import { libraryParentPageState, libraryRouteFromPageState } from '$lib/libraryRouteState';
 	import {
-		libraryIndexStore,
-		loadLibraryIndex,
-		resetLibraryIndex,
-		albumIdentityKey,
+	classicBrowseSessionClient,
+	type ClassicBrowseSessionClaim
+} from '$lib/stores/classicBrowseSessionStore';
+import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
+	import {
 		bucketLetterFor,
 		compareLibrarySearchKeys,
-		groupLibraryAlbums,
 		librarySortKey,
-		reconcileBrowseAlbumsToCatalog,
 		type LetterBucket,
-		type LibraryAlbumEntry
-	} from '$lib/stores/libraryIndexStore';
-	import { unifiedDrillStore } from '$lib/stores/unifiedDrillStore';
+		type LibraryAlbumEntry,
+		type LibraryArtistEntry
+	} from '$lib/libraryEntries';
+	import { libraryRootsStore, loadLibraryRoots } from '$lib/stores/libraryRootsStore';
+	import { fetchCoreStatus, openLibraryReference, openLibraryRoot } from '$lib/api/client';
+	import {
+		LiveLibraryPageController,
+		type LiveLibraryPageOpenInput
+	} from '$lib/library/LiveLibraryPageController';
+	import {
+		libraryAlbumStep,
+		type LibraryPathTarget,
+		type LibraryRenderingPath
+	} from '$lib/library/liveLibraryPath';
+	import type { LibraryRowReference } from '@shared/libraryRootsContracts';
+	import { swallowsTypedText } from '$lib/a11y/keyboardOwnership';
 	import { claimModalSurface } from '$lib/actions/focusTrap';
 	import { openSettingsMenu, settingsMenuOpen } from '$lib/stores/settingsMenuStore';
-	import { foldCatalogNameKey, libraryAlbumEntryFromAlbumRef } from '$lib/catalogNameMatch';
 	import {
 		registerUnifiedLibraryDensityRequestHandler,
 		unifiedLibraryPrefsStore,
@@ -48,10 +67,9 @@
 		type UnifiedLibraryDensity
 	} from '$lib/stores/unifiedLibraryPrefsStore';
 	import {
-		albumSortMenu,
+		liveAlbumSortMenu,
 		artistDrillSortMenu,
 		ARTIST_SORT_MENU,
-		genreDrillSortMenu,
 		GENRE_SORT_MENU,
 		isChronologicalAlbumSort,
 		namedCountBuckets,
@@ -78,9 +96,8 @@
 	import type { LibraryIntent } from '$lib/libraryIntent';
 	import { parseCountFilter } from '$lib/unifiedSmartFilters';
 	import { loadRecentlyPlayed, recentlyPlayedStore } from '$lib/stores/recentlyPlayedStore';
-	import { libraryScopeSlots, type ResolvedLibraryScopeSlots } from '@libraryFeatures';
-	import type { ScopeActionTarget } from '$lib/libraryFeatures/scopeSlotContract';
 	import { zonesStore } from '$lib/stores/zonesStore';
+	import { selectedZoneStore } from '$lib/stores/selectedZoneStore';
 	import { getSocket } from '$lib/socket/client';
 	import { getTabId } from '$lib/tabId';
 	import {
@@ -88,12 +105,11 @@
 		type LibraryAlbumSocket
 	} from '$lib/library/LibraryAlbumController';
 	import {
-		EditorialItemController,
-		type EditorialItemSocket
-	} from '$lib/library/EditorialItemController';
-	import { createCompositionBrowseController } from '$lib/library/CompositionBrowseController';
+		type CollectionDrillHierarchy,
+		type CollectionDrillOpenFailureDetail
+	} from '@shared/collectionDrillContracts';
+	import type { LibraryAlbumOpenTarget } from '@shared/libraryAlbumContracts';
 	import { UnifiedSongActionController } from '$lib/library/UnifiedSongActionController';
-	import { PublicSongActionController } from '$lib/library/PublicSongActionController';
 	import {
 		browseItemOpensActions,
 		createUnifiedBrowseActionController,
@@ -115,6 +131,7 @@
 	} from '$lib/unifiedSearchClient';
 	import {
 		AlbumActionController,
+		type AlbumActionBeginInput,
 		type AlbumActionSocket
 	} from '$lib/library/AlbumActionController';
 	import type { AlbumActionSemantic } from '@shared/albumActionContracts';
@@ -134,7 +151,9 @@
 		FavoriteType,
 		SearchResult
 	} from '@shared/types';
+	import type { LibraryLevelRow } from '@shared/libraryOpenContracts';
 	import UnifiedScopeViews from './UnifiedScopeViews.svelte';
+	import UnifiedLiveCollectionPage from './UnifiedLiveCollectionPage.svelte';
 	import UnifiedAlbumPage from './UnifiedAlbumPage.svelte';
 	import UnifiedArtistPage from './UnifiedArtistPage.svelte';
 	import UnifiedPalette from './UnifiedPalette.svelte';
@@ -177,21 +196,13 @@
 	const SURPRISE_CHIP: ScopeChip = { id: 'surprise', label: 'Surprise me' };
 
 	/**
-	 * Most played rides the native play-feature gate; Recently
-	 * added (Slice 5) rides the date-feature gate exactly like the
-	 * release-year sort; Playlists (Slice 7) rides the BASE native
-	 * capability (the playlist snapshot), not the date/play gates. Per the
-	 * 2026-07-24 owner correction an unavailable chip is absent, never
-	 * rendered disabled. Chip order is the build-v5 order: Most played,
-	 * then Playlists, before Surprise me; Recently added last.
+	 * Recently added (Slice 5) rides the date-feature gate exactly like the
+	 * release-year sort. Per the 2026-07-24 owner correction an unavailable
+	 * chip is absent, never rendered disabled.
 	 */
-	const MOST_PLAYED_CHIP: ScopeChip = { id: 'most-played', label: 'Most played' };
-	const PLAYLISTS_CHIP: ScopeChip = { id: 'playlists', label: 'Playlists' };
 	const RECENTLY_ADDED_CHIP: ScopeChip = { id: 'recently-added', label: 'Recently added' };
 	const ALL_SCOPE_CHIPS: readonly ScopeChip[] = [
 		...LEADING_SCOPE_CHIPS,
-		MOST_PLAYED_CHIP,
-		PLAYLISTS_CHIP,
 		SURPRISE_CHIP,
 		RECENTLY_ADDED_CHIP
 	];
@@ -235,10 +246,58 @@
 	}
 
 	let sortOpen = $state(false);
+	/** Wraps the root collection-scope Sort control for outside-click handling. */
+	let collectionSortWrap = $state<HTMLElement | null>(null);
 	/** Header wordmark: runic mark by default, Latin spelling once clicked. */
 	let brandShowsLatin = $state(false);
 	/** About panel: the only surface in this view carrying version provenance. */
 	let aboutOpen = $state(false);
+	/** About's toggle button and panel are not a shared wrapper (the panel
+	 *  renders as a header sibling), so outside-click detection needs both. */
+	let aboutButton = $state<HTMLElement | null>(null);
+	let aboutPanel = $state<HTMLElement | null>(null);
+
+	// Close Sort on an outside click or Escape, mirroring the zone-picker
+	// idiom in +layout.svelte: listeners attach only while open and are torn
+	// down by the effect's own cleanup.
+	$effect(() => {
+		if (!sortOpen) return;
+		const closeOnOutsidePointer = (event: PointerEvent) => {
+			const target = event.target as Node;
+			if (collectionSortWrap?.contains(target)) return;
+			sortOpen = false;
+		};
+		const closeOnEscape = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') sortOpen = false;
+		};
+		window.addEventListener('pointerdown', closeOnOutsidePointer);
+		window.addEventListener('keydown', closeOnEscape);
+		return () => {
+			window.removeEventListener('pointerdown', closeOnOutsidePointer);
+			window.removeEventListener('keydown', closeOnEscape);
+		};
+	});
+
+	// Same idiom for About; the button and panel are checked separately since
+	// neither wraps the other.
+	$effect(() => {
+		if (!aboutOpen) return;
+		const closeOnOutsidePointer = (event: PointerEvent) => {
+			const target = event.target as Node;
+			if (aboutButton?.contains(target)) return;
+			if (aboutPanel?.contains(target)) return;
+			aboutOpen = false;
+		};
+		const closeOnEscape = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') aboutOpen = false;
+		};
+		window.addEventListener('pointerdown', closeOnOutsidePointer);
+		window.addEventListener('keydown', closeOnEscape);
+		return () => {
+			window.removeEventListener('pointerdown', closeOnOutsidePointer);
+			window.removeEventListener('keydown', closeOnEscape);
+		};
+	});
 	const connectedLabel = $derived(
 		$socketStatusStore === 'connecting'
 			? 'Connecting…'
@@ -253,9 +312,6 @@
 
 	let {
 		sessionClient = classicBrowseSessionClient,
-		indexStore = libraryIndexStore,
-		loadIndex = loadLibraryIndex,
-		resetIndex = resetLibraryIndex,
 		prefsStore = unifiedLibraryPrefsStore,
 		genresStore = unifiedGenresStore,
 		composersStore = unifiedComposersStore,
@@ -268,36 +324,23 @@
 		favoritesDataStore = favoritesStore,
 		loadFavoritesData = loadFavorites,
 		removeFavoriteData = removeFavorite,
-		mostPlayedStore = libraryScopeSlots.mostPlayedStore,
-		loadMostPlayedData = libraryScopeSlots.loadMostPlayed,
-		mostPlayedReset = libraryScopeSlots.resetMostPlayed,
-		playlistsStore = libraryScopeSlots.playlistsStore,
-		loadPlaylistsData = libraryScopeSlots.loadPlaylists,
-		openPlaylistData = libraryScopeSlots.openPlaylist,
-		closePlaylistView = libraryScopeSlots.closePlaylist,
-		playlistsReset = libraryScopeSlots.resetPlaylists,
-		scopeSlots = libraryScopeSlots,
-		drillStore = unifiedDrillStore,
-		fetchStatus = fetchCatalogStatus,
+		rootsStore = libraryRootsStore,
+		loadRoots = loadLibraryRoots,
+		openLiveRef = openLibraryReference,
+		openLiveRoot = openLibraryRoot,
+		fetchCoreStatusData = fetchCoreStatus,
 		corePairedStore = isCorePaired,
-		hydrateArtistAlbums = loadCatalogArtistAlbums,
 		fetchFn = fetch,
 		albumController: suppliedAlbumController,
-		editorialController: suppliedEditorialController,
-		compositionController: suppliedCompositionController,
 		songActionController: suppliedSongActionController,
 		browseController: suppliedBrowseController,
 		browseActionController: suppliedBrowseActionController,
 		addFavoriteData = addFavorite,
 		songRelationshipClient = unifiedSearchClient,
 		albumActionController: suppliedAlbumActionController,
-		playlistActionController: suppliedPlaylistActionController,
 		getSocketClient = () => getSocket() as UnifiedConnectionSocket | null
 	}: {
 		sessionClient?: typeof classicBrowseSessionClient;
-		indexStore?: typeof libraryIndexStore;
-		loadIndex?: typeof loadLibraryIndex;
-		resetIndex?: typeof resetLibraryIndex;
 		prefsStore?: typeof unifiedLibraryPrefsStore;
 		genresStore?: typeof unifiedGenresStore;
 		composersStore?: typeof unifiedComposersStore;
@@ -310,36 +353,22 @@
 		favoritesDataStore?: typeof favoritesStore;
 		loadFavoritesData?: typeof loadFavorites;
 		removeFavoriteData?: typeof removeFavorite;
-		mostPlayedStore?: ResolvedLibraryScopeSlots['mostPlayedStore'];
-		loadMostPlayedData?: ResolvedLibraryScopeSlots['loadMostPlayed'];
-		mostPlayedReset?: ResolvedLibraryScopeSlots['resetMostPlayed'];
-		playlistsStore?: ResolvedLibraryScopeSlots['playlistsStore'];
-		loadPlaylistsData?: ResolvedLibraryScopeSlots['loadPlaylists'];
-		openPlaylistData?: ResolvedLibraryScopeSlots['openPlaylist'];
-		closePlaylistView?: ResolvedLibraryScopeSlots['closePlaylist'];
-		playlistsReset?: ResolvedLibraryScopeSlots['resetPlaylists'];
-		/**
-		 * The extended scope views this build carries, forwarded to
-		 * UnifiedScopeViews. Injected by tests that need the surface a build
-		 * without those views produces.
-		 */
-		scopeSlots?: Pick<ResolvedLibraryScopeSlots, 'mostPlayedView' | 'playlistsView'>;
-		drillStore?: typeof unifiedDrillStore;
-		fetchStatus?: typeof fetchCatalogStatus;
+		/** Roon's own two roots, the live view's only list source (Slice 2). */
+		rootsStore?: typeof libraryRootsStore;
+		loadRoots?: typeof loadLibraryRoots;
+		openLiveRef?: typeof openLibraryReference;
+		openLiveRoot?: typeof openLibraryRoot;
+		fetchCoreStatusData?: typeof fetchCoreStatus;
 		/** Pairing readiness, injected so tests can drive the retry. */
 		corePairedStore?: typeof isCorePaired;
-		hydrateArtistAlbums?: typeof loadCatalogArtistAlbums;
 		fetchFn?: typeof fetch;
 		albumController?: LibraryAlbumController;
-		editorialController?: EditorialItemController;
-		compositionController?: ReturnType<typeof createCompositionBrowseController>;
 		songActionController?: UnifiedSongActionController;
 		browseController?: UnifiedBrowseController;
 		browseActionController?: UnifiedBrowseActionController;
 		addFavoriteData?: (fetchFn: typeof fetch, payload: AddFavoriteRequest) => Promise<void>;
 		songRelationshipClient?: Pick<UnifiedSearchClient, 'relationship'>;
 		albumActionController?: AlbumActionController;
-		playlistActionController?: PublicSongActionController;
 		getSocketClient?: () => UnifiedConnectionSocket | null;
 	} = $props();
 
@@ -353,20 +382,25 @@
 		new AlbumActionController({
 			getSocket: () => getSocket() as unknown as AlbumActionSocket | null
 		});
+	// The live view's open page (`.agents/plans/library-live-view.md` Slice 2).
+	// It owns one page at a time — the same discipline `itemTarget` has — and
+	// it reads Roon rather than the catalog.
+	const livePageController = new LiveLibraryPageController({
+		heldRoot: (root) => {
+			const held = untrack(() => $rootsStore);
+			if (held.phase !== 'ready') return null;
+			return root === 'artists' ? held.artistRows : held.albumRows;
+		},
+		openRef: (ref) => openLiveRef(fetchFn, ref),
+		openRoot: (root) => openLiveRoot(fetchFn, root),
+		heldGeneration: () => untrack(() => $rootsStore).generation
+	});
 	// Item-page coordination (rich-item plan §5.2): its retirement hook is
 	// the single place a replaced or closed page's read/action authority is
 	// cancelled.
 	const itemPageController = new LibraryItemPageController({
 		onRetire: () => retireItemPageAuthority()
 	});
-	// Optional editorial enrichment for the live item page (plan Slice 3).
-	// The page never waits on it; no transport or an unavailable feature
-	// simply renders no editorial surface.
-	const editorialItemController =
-		untrack(() => suppliedEditorialController) ??
-		new EditorialItemController({
-			getSocket: () => getSocket() as unknown as EditorialItemSocket | null
-		});
 	const songActionController =
 		untrack(() => suppliedSongActionController) ?? new UnifiedSongActionController();
 	const browseController =
@@ -379,12 +413,6 @@
 		createUnifiedBrowseActionController({
 			isClaimCurrent: (activeClaim) => sessionClient.isClaimCurrent(activeClaim)
 		});
-	// Playlist-track actions resolve opaque source selections on demand. This
-	// controller is separate from the album sheet's catalog action lease.
-	const playlistActionController =
-		untrack(() => suppliedPlaylistActionController) ??
-		new PublicSongActionController();
-
 	const activationContext = getContext<LibraryModeActivationContext | undefined>(
 		LIBRARY_MODE_ACTIVATION_CONTEXT
 	);
@@ -392,10 +420,15 @@
 	let scope = $state<UnifiedLibraryScope>('artists');
 	let railTarget = $state<LetterBucket | null>(null);
 	/** Genre/composer album-list context (collection navigation). */
-	let collectionDrill = $state<UnifiedCollectionDrillTarget | null>(null);
-	let collectionRecordedHistory = false;
+	type EntryRelationship = 'owned' | 'restored' | 'transient';
 	/** First-class item page over the scope/collection context. */
 	let itemTarget = $state<UnifiedItemTarget | null>(null);
+	/**
+	 * Durable rendering route for a transitional catalog-backed item page.
+	 * The route is captured from the row the reader clicked; it never contains
+	 * the catalog id that happens to feed the current render.
+	 */
+	let legacyItemRoute: LibraryRoute | null = null;
 	/**
 	 * The originating artist's display name when the open item page is an
 	 * ALBUM opened from that artist's page (issue #6): `itemBackLabel`
@@ -405,7 +438,7 @@
 	 * `resetItemPage`, so a stale name never labels an unrelated page.
 	 */
 	let itemOriginName = $state<string | null>(null);
-	let itemRecordedHistory = false;
+	let itemEntryRelationship: EntryRelationship = 'transient';
 	/**
 	 * Live-pushed entry ownership for in-page child closes (ri8-1): a
 	 * child that pushed its own entry in this session exits by
@@ -414,8 +447,6 @@
 	 * neighbouring entries are unknown.
 	 */
 	let trackChildOwnsEntry = false;
-	let compositionSurfaceOwnsEntry = false;
-	let openCompositionOwnsEntry = false;
 	/** The element that opened the live item page; Back refocuses it (§4.3). */
 	let itemInvoker: HTMLElement | null = null;
 	/** Pane scroll position captured at item open, restored on Back. */
@@ -427,20 +458,6 @@
 	 */
 	let pendingPopReturnScrollTop: number | null = null;
 	let drillNotice = $state<string | null>(null);
-	/**
-	 * Roon-authoritative discography for the drilled artist, loaded through
-	 * the binding endpoint (plan: .agents/plans/artist-drill-binding.md).
-	 * The local index join is only the instant/offline fallback — display
-	 * strings are never the primary artist↔album join.
-	 */
-	let drillArtistOverlay = $state<{
-		artistLocalId: string;
-		albums: LibraryAlbumEntry[];
-		/** The Core had more albums than one page could carry (cr-1). */
-		truncated: boolean;
-	} | null>(null);
-	let drillArtistOverlayPhase = $state<'idle' | 'loading' | 'failed'>('idle');
-	let drillArtistOverlayFor = $state<string | null>(null);
 	/** Smart-filter page text (plan §3.2 slice 7); '' means no filter page. */
 	let filterText = $state('');
 	let paletteOpen = $state(false);
@@ -467,7 +484,17 @@
 	let albumSongFocusTitle = $state<string | null>(null);
 	let pane: HTMLDivElement | null = $state(null);
 	let claim: ClassicBrowseSessionClaim | null = null;
+	/**
+	 * Bumped whenever the claim is taken or dropped.
+	 *
+	 * `claim` itself stays non-reactive on purpose — it is read all over this
+	 * file, and making it a signal would re-run work that has nothing to do with
+	 * it. This is the one reactive fact about it: a surface-driven load can wait
+	 * for a claim to exist without every other reader waking up.
+	 */
+	let claimEpoch = $state(0);
 	let lifecycleGeneration = 0;
+	let activationGeneration = $state(0);
 	let resumed = $state(false);
 	let connectionSocket: UnifiedConnectionSocket | null = null;
 	let connectionListenersAttached = false;
@@ -487,194 +514,160 @@
 	const scopeScrollTops = new Map<UnifiedLibraryScope, number>();
 	/** Supersedes an in-flight `restorePaneScrollTop` retry loop. */
 	let paneScrollRestoreToken = 0;
-	/** Session generation captured when the album sheet opened its read. */
-	let sheetGeneration: number | null = null;
-	let hydrationCoreId: string | null = null;
-	let hydrationRevision: number | null = null;
-	const hydratedAlbumLocalIds = new Set<string>();
-
+	let albumReadSession: ClassicBrowseSessionRef | null = null;
+	type SheetActionIntent = Readonly<{
+		kind: 'reference' | 'page';
+		claim: ClassicBrowseSessionClaim;
+		lifecycle: number;
+		itemPageGeneration: number;
+		zoneId: string;
+		tabId: string;
+		desiredSemantic: AlbumActionSemantic | null;
+		ref?: LibraryRowReference;
+		referenceSource?: 'album' | 'live-collection';
+		trackIndex?: number | null;
+		pageId?: string;
+		versionId?: string;
+		track?: { readonly index: number; readonly title: string } | null;
+	}>;
+	type SheetActionAttempt = {
+		readonly intent: SheetActionIntent;
+		readonly gesture: number;
+		readonly session: ClassicBrowseSessionRef;
+		readonly requestId: string;
+		automaticReissueSpent: boolean;
+		reissueInFlight: boolean;
+	};
+	let sheetActionGesture = 0;
+	let sheetActionAttempt: SheetActionAttempt | null = null;
+	let retrySheetActionIntent: SheetActionIntent | null = null;
+	let sheetActionRetryAvailable = $state(false);
 	const sheetState = $derived($albumController);
+	const sheetActionState = $derived($sheetActionController);
 	const songActionState = $derived($songActionController);
 	const browseState = $derived($browseController);
 	const browseActionState = $derived($browseActionController);
-	const playlistActionState = $derived($playlistActionController);
 	const sheetZones = $derived(
 		$zonesStore.map((zone) => ({ zoneId: zone.zone_id, name: zone.display_name }))
 	);
+	/**
+	 * The one zone every library playback action targets (public issue #12):
+	 * whatever the zone picker currently holds, exactly as the Roon Remote app
+	 * behaves. No surface asks which zone any more.
+	 *
+	 * `+layout.svelte` keeps the selection pointing at a live zone — it returns
+	 * to the user's pin the moment that zone reappears and otherwise falls back
+	 * in memory only — so the first-zone floor below covers only the window
+	 * between zones arriving and that effect settling. No zones at all means
+	 * null, and every action button is disabled.
+	 */
+	const actionZoneId = $derived(
+		(sheetZones.some((zone) => zone.zoneId === $selectedZoneStore)
+			? $selectedZoneStore
+			: sheetZones[0]?.zoneId) ?? null
+	);
 
 	const prefs = $derived($prefsStore);
-	const index = $derived($indexStore);
+	const roots = $derived($rootsStore);
 	const favorites = $derived($favoritesDataStore);
-	/**
-	 * The native date-feature gate (Slice 4): the capability state machine's
-	 * answer, carried on the catalog index. Unavailable means the
-	 * release-year entries degrade to their pre-native presentation.
-	 */
-	const dateFeatureGate = $derived.by((): DateFeatureGate => {
-		const capabilities = index.capabilities;
-		return {
-			available: capabilities.dateFeatures,
-			...(capabilities.dateFeaturesDisabledReason !== undefined
-				? { reason: capabilities.dateFeaturesDisabledReason }
-				: {})
-		};
-	});
-	/**
-	 * The native play-feature gate: the capability state machine's
-	 * play answer, carried on the catalog index like the date answer.
-	 */
-	const playFeatureGate = $derived.by((): DateFeatureGate => {
-		const capabilities = index.capabilities;
-		return {
-			available: capabilities.playFeatures,
-			...(capabilities.playFeaturesDisabledReason !== undefined
-				? { reason: capabilities.playFeaturesDisabledReason }
-				: {})
-		};
-	});
-	/**
-	 * The native playlist-feature gate (Slice 7): the BASE native
-	 * capability answer (a compatible playlist snapshot), carried on the
-	 * catalog index like the date/play answers. The date/play gates do
-	 * NOT apply to the Playlists chip.
-	 */
-	const playlistFeatureGate = $derived.by((): DateFeatureGate => {
-		const capabilities = index.capabilities;
-		return {
-			available: capabilities.playlistFeatures,
-			...(capabilities.playlistFeaturesDisabledReason !== undefined
-				? { reason: capabilities.playlistFeaturesDisabledReason }
-				: {})
-		};
-	});
-	/**
-	 * The positive editorial-presence signal (q1-2): the catalog index
-	 * carries the capability state machine's answers, and the server's
-	 * editorial read gate requires exactly the date + state-filter
-	 * features. Editorial DOM and editorial opens exist only while this
-	 * holds — the public build (absent layer answers all-false) and a
-	 * browse fallback never render an editorial surface, not even a
-	 * skeleton, at any transport phase.
-	 */
-	const editorialFeatureAvailable = $derived(
-		index.capabilities.dateFeatures && index.capabilities.stateFilterFeatures
+
+	// ---- Which of the two sources THIS surface reads (Slice 2) ---------
+	//
+	// `.agents/plans/library-live-view.md` moved the Artists and Albums lists,
+	// the pages under them, and the smart-filter page onto Roon's own roots.
+	// Everything else — the genre and composer drills, the catalog item pages a
+	// restored address can still name — reads the catalog index until its own
+	// slice moves it.
+	//
+	// This is ONE answer, derived once, because the alternative is a surface
+	// whose rows come from one source and whose count, rail and readiness come
+	// from the other. That is how a list of 1,679 artists ends up under the
+	// heading "0 TOTAL": not a wrong number, but two sources disagreeing in
+	// public.
+	//
+	// TYPING DOES NOT CHANGE THE SOURCE. The smart-filter page runs over the
+	// live roots this surface already holds, so `filterText` is not a clause
+	// here: a reader who types a count filter and clears it again is looking at
+	// the same list throughout, and the filter counts what the list shows.
+	const liveScopeActive = $derived(
+		(scope === 'artists' || scope === 'albums') &&
+			(itemTarget === null || itemTarget.kind === 'live')
 	);
+	/** The rows this surface lists, and the buckets and counts that describe them. */
+	const listArtists = $derived(roots.artists);
+	const listAlbums = $derived(roots.albums);
+	const listArtistBuckets = $derived(roots.artistBuckets);
+	const listAlbumBuckets = $derived(roots.albumBuckets);
+	const surfacePhase = $derived.by((): 'loading' | 'error' | 'ready' | 'idle' => {
+		// A live item page owns its own opening/error/ready state. Do not let
+		// either backing list gate hide it while its route is being restored.
+		if (itemTarget?.kind === 'live') return 'ready';
+		if (roots.phase === 'ready') return 'ready';
+		if (roots.phase === 'loading') return 'loading';
+		if (roots.phase === 'error' || roots.phase === 'unavailable') return 'error';
+		return 'idle';
+	});
+	const surfaceError = $derived(roots.error);
 	/**
-	 * The chip row, build-v5 order: Most played exists only while play
-	 * features do, Playlists only while the base native capability serves
-	 * the playlist snapshot, Recently added only while date features do.
+	 * The chip row: Recently added exists only while date features do.
 	 */
 	const scopeChips = $derived.by((): readonly ScopeChip[] => [
 		...LEADING_SCOPE_CHIPS,
-		...(playFeatureGate.available ? [MOST_PLAYED_CHIP] : []),
-		...(playlistFeatureGate.available ? [PLAYLISTS_CHIP] : []),
-		SURPRISE_CHIP,
-		...(dateFeatureGate.available ? [RECENTLY_ADDED_CHIP] : [])
+		SURPRISE_CHIP
 	]);
 	/**
-	 * A persisted chronological sort outlives the feature: when the date
-	 * features drop away, rendering falls back to A–Z rather than showing a
-	 * blank or dishonest ordering.
+	 * A persisted chronological sort outlives the surface that could perform it.
+	 *
+	 * Every album list this mode renders — the Albums scope (Roon's own root,
+	 * Slice 2), the artist page and the genre drill — shows rows carrying a
+	 * title and a credit line and no date. So a sort saved when one of them
+	 * could order by year falls back to A–Z rather than selecting an entry the
+	 * menu no longer offers and an order nothing can perform.
 	 */
 	function resolveAlbumOrder<T extends string>(sort: T): T | 'az' {
-		return isChronologicalAlbumSort(sort) && !dateFeatureGate.available ? 'az' : sort;
+		return isChronologicalAlbumSort(sort) ? 'az' : sort;
 	}
 	const sortMenu = $derived(
-		scope === 'albums' ? albumSortMenu(dateFeatureGate) : (SORT_MENUS[scope] ?? null)
+		scope === 'albums' ? liveAlbumSortMenu() : (SORT_MENUS[scope] ?? null)
 	);
 	const sortValue = $derived(
 		sortMenu ? resolveAlbumOrder(prefs.sorts[scope as SortableUnifiedScope]) : null
 	);
-	const drillSortMenu = $derived(
-		itemTarget?.kind === 'artist'
-			? artistDrillSortMenu(dateFeatureGate)
-			: collectionDrill?.kind === 'genre'
-				? genreDrillSortMenu(dateFeatureGate)
-				: null
-	);
-	const drillSortValue = $derived(
-		itemTarget?.kind === 'artist'
-			? resolveAlbumOrder(prefs.sorts.artist)
-			: collectionDrill?.kind === 'genre'
-				? resolveAlbumOrder(prefs.sorts.genre)
-				: null
-	);
-	const drillViewSorts = $derived({
-		...prefs.sorts,
-		albums:
-			itemTarget?.kind === 'artist'
-				? resolveAlbumOrder(prefs.sorts.artist)
-				: collectionDrill?.kind === 'genre'
-					? resolveAlbumOrder(prefs.sorts.genre)
-					: resolveAlbumOrder(prefs.sorts.albums)
-	});
 	const viewSorts = $derived({
 		...prefs.sorts,
 		albums: resolveAlbumOrder(prefs.sorts.albums)
 	});
-	const drillState = $derived($drillStore);
-	const drillStoreAlbums = $derived.by((): LibraryAlbumEntry[] =>
-		reconcileBrowseAlbumsToCatalog(drillState.albums, index.albums)
-			.sort((left, right) => compareLibrarySearchKeys(left.searchKey, right.searchKey))
-	);
-	const drillRailBuckets = $derived.by((): readonly LetterBucket[] => {
-		if (
-			collectionDrill?.kind !== 'genre' ||
-			itemTarget !== null ||
-			!drillState.loaded ||
-			drillSortValue === 'shuffle' ||
-			drillSortValue === null ||
-			isChronologicalAlbumSort(drillSortValue)
-		) {
-			return [];
-		}
-		const sorted = sortAlbums(drillStoreAlbums, drillSortValue, shuffleSeed);
-		const buckets: LetterBucket[] = [];
-		for (const [index, album] of sorted.entries()) {
-			const searchKey =
-				drillSortValue === 'by-artist' ? librarySortKey(album.artist) : album.searchKey;
-			const letter = bucketLetterFor(searchKey);
-			const last = buckets[buckets.length - 1];
-			if (last?.letter === letter) last.count += 1;
-			else buckets.push({ letter, start: index, count: 1 });
-		}
-		return buckets;
+	const liveCollectionSorts = $derived({
+		...viewSorts,
+		albums: resolveAlbumOrder(prefs.sorts.genre)
 	});
-
-	// ---- Most played (Slice 11) ----------------------------------------
-	// One all-time snapshot carries native performers/releases by exact
-	// listening time and selected-profile tracks by play count.
-	const mostPlayed = $derived($mostPlayedStore);
-
 	/** Header count, verbatim per approved prototype `head(...)` calls. */
 	const scopeSummary = $derived.by(() => {
 		switch (scope) {
 			case 'artists':
-				return `${index.artists.length.toLocaleString()} TOTAL`;
+				return `${listArtists.length.toLocaleString()} TOTAL`;
 			case 'albums':
-				return `${index.albums.length.toLocaleString()} TOTAL`;
+				return `${listAlbums.length.toLocaleString()} TOTAL`;
 			case 'genres':
 				return `${$genresStore.totalCount.toLocaleString()} TOTAL`;
 			case 'recently-played':
 				return `${$recentStore.entries.length} TRACKS`;
-			case 'most-played':
-				return '';
 			case 'recently-added':
-				return `${index.albums.length.toLocaleString()} TOTAL`;
-			case 'playlists':
-				return `${$playlistsStore.playlists.length.toLocaleString()} TOTAL`;
+				return `${listAlbums.length.toLocaleString()} TOTAL`;
 			case 'surprise':
-				return `RANDOM FROM ${index.albums.length.toLocaleString()}`;
+				return `RANDOM FROM ${listAlbums.length.toLocaleString()}`;
 			default:
 				return '';
 		}
 	});
 	const railBuckets = $derived.by((): readonly LetterBucket[] => {
-		if (index.phase !== 'ready') return [];
-		if (collectionDrill?.kind === 'genre' && itemTarget === null) return drillRailBuckets;
+		// The rail addresses the list on screen, so it waits on whichever source
+		// produced that list — not on the catalog, which the live scopes no
+		// longer read.
+		if (surfacePhase !== 'ready') return [];
 		if (scope === 'albums' && sortValue === 'by-artist') {
 			const buckets: LetterBucket[] = [];
-			for (const [position, album] of sortAlbums(index.albums, 'by-artist', shuffleSeed).entries()) {
+			for (const [position, album] of sortAlbums(listAlbums, 'by-artist', shuffleSeed).entries()) {
 				const letter = bucketLetterFor(librarySortKey(album.artist));
 				const last = buckets[buckets.length - 1];
 				if (last?.letter === letter) last.count += 1;
@@ -684,9 +677,9 @@
 		}
 		const base =
 			scope === 'artists'
-				? index.artistBuckets
+				? listArtistBuckets
 				: scope === 'albums'
-					? index.albumBuckets
+					? listAlbumBuckets
 					: scope === 'genres'
 						? namedCountBuckets($genresStore.entries)
 						: [];
@@ -695,30 +688,22 @@
 		// so each letter still addresses exactly its entries (slice 5).
 		const total =
 			scope === 'artists'
-				? index.artists.length
+				? listArtists.length
 				: scope === 'albums'
-					? index.albums.length
+					? listAlbums.length
 					: $genresStore.entries.length;
 		return reverseBuckets(base, total);
 	});
 	const railItemCount = $derived(
-		collectionDrill?.kind === 'genre' && itemTarget === null
-			? drillStoreAlbums.length
-			: scope === 'artists'
-			? index.artists.length
+		scope === 'artists'
+				? listArtists.length
 			: scope === 'albums'
-				? index.albums.length
+				? listAlbums.length
 				: scope === 'genres'
 					? $genresStore.entries.length
 				: 0
 	);
 	const railSortCompatible = $derived.by(() => {
-		if (collectionDrill?.kind === 'genre' && itemTarget === null)
-			return (
-				drillSortValue !== null &&
-				drillSortValue !== 'shuffle' &&
-				!isChronologicalAlbumSort(drillSortValue)
-			);
 		if (scope === 'artists') return sortValue === 'az' || sortValue === 'za';
 		// Chronological album orders (Oldest/Newest first) hide the rail
 		// exactly like the other non-alphabetical orders (Shuffle).
@@ -730,7 +715,6 @@
 	// Item pages own the pane; the rail serves root scopes and genre drills.
 	const railVisible = $derived(
 		itemTarget === null &&
-			(collectionDrill === null || collectionDrill.kind === 'genre') &&
 			filterText === '' &&
 			railSortCompatible &&
 			railBuckets.length >= RAIL_MIN_LETTERS &&
@@ -740,17 +724,330 @@
 	// ---- Smart-filter page (plan §3.2 slice 7) ------------------------
 	// The parsed spec re-derives from persisted text on every render, so
 	// a restored page re-validates instead of trusting stale results.
+	//
+	// IT RUNS OVER ROON'S OWN ARTISTS ROOT. Each row's count is the number Roon
+	// printed in that row's own subtitle ("58 Albums"), parsed once when the
+	// root was read — the row talking about itself, never a join and never a
+	// stored answer. A row Roon gave no count for is NOT tested: `undefined` is
+	// not zero, and matching it against a numeric predicate would put a number
+	// on screen the library never said. Those rows are counted separately and
+	// declared, so nobody reads a partial answer as a whole one.
 	const filterSpec = $derived(filterText === '' ? null : parseCountFilter(filterText));
 	const filterArtists = $derived.by(() => {
-		if (!filterSpec || index.phase !== 'ready' || !index.capabilities.countFilters) return [];
+		if (!filterSpec || roots.phase !== 'ready') return [];
 		const spec = filterSpec;
-		return index.artists
-			.filter((entry) => spec.test(entry.albumCount ?? 0))
+		return roots.artists
+			.filter((entry) => entry.albumCount !== undefined && spec.test(entry.albumCount))
 			.sort(
 				(a, b) =>
 					(b.albumCount ?? 0) - (a.albumCount ?? 0) ||
 					compareLibrarySearchKeys(a.searchKey, b.searchKey)
 			);
+	});
+	/** How many live Artists rows Roon gave no count for, and so were not tested. */
+	const filterUncountedArtists = $derived(
+		roots.phase === 'ready'
+			? roots.artists.reduce((total, entry) => (entry.albumCount === undefined ? total + 1 : total), 0)
+			: 0
+	);
+
+	// ---- The live view of Roon (library-live-view Slice 2) ------------
+	// Artists and Albums are Roon's own two roots, and every page under them
+	// is Roon's own level. Nothing on this path reads the catalog, mints an
+	// identifier, or compares a name against another surface.
+
+	const livePage = $derived($livePageController);
+	/**
+	 * What the OPEN ADDRESS says this page is — the reader's own question,
+	 * answered without waiting for a read. Roon's answer arrives with the
+	 * level and cannot differ: every step's kind was taken from the row it
+	 * names, at the moment that row was rendered.
+	 */
+	const livePageKind = $derived(
+		itemTarget?.kind === 'live'
+			? (itemTarget.path.steps[itemTarget.path.steps.length - 1]?.kind ?? 'entry')
+			: null
+	);
+	/** The live artist page's identity, from the row Roon rendered. */
+	const liveArtist = $derived.by((): LibraryArtistEntry | null => {
+		if (livePageKind !== 'artist' || livePage.target === null) return null;
+		const target = livePage.target;
+		return {
+			id: target.ref.token,
+			name: target.title,
+			searchKey: librarySortKey(target.title),
+			liveRef: target.ref,
+			...(target.imageKey === null ? {} : { imageKey: target.imageKey })
+		};
+	});
+	/** The live artist page's discography: Roon's own album rows, in its order. */
+	const liveArtistAlbums = $derived.by((): LibraryAlbumEntry[] => {
+		const level = livePageKind === 'artist' ? livePage.level : null;
+		if (level === null) return [];
+		return level.rows
+			.filter((row) => row.kind === 'album')
+			.map((row) => liveAlbumEntryFromLevelRow(row));
+	});
+	/** The live album page's hero row, likewise from what Roon rendered. */
+	const liveAlbum = $derived.by((): LibraryAlbumEntry | null => {
+		if (livePageKind !== 'album' || livePage.target === null) return null;
+		return liveAlbumEntryFromLevelRow({
+			ref: livePage.target.ref,
+			title: livePage.target.title,
+			...(livePage.target.subtitle === null ? {} : { subtitle: livePage.target.subtitle }),
+			...(livePage.target.imageKey === null ? {} : { imageKey: livePage.target.imageKey })
+		});
+	});
+
+	function liveAlbumEntryFromLevelRow(row: {
+		readonly ref: LibraryRowReference;
+		readonly title: string;
+		readonly subtitle?: string;
+		readonly imageKey?: string;
+	}): LibraryAlbumEntry {
+		return {
+			// The token is this row's whole identity and it dies with its
+			// generation; it is used here only as a keyed-each key inside the
+			// list that produced it, never written down and never compared.
+			id: row.ref.token,
+			title: row.title,
+			artist: row.subtitle ?? '',
+			searchKey: librarySortKey(`${row.title} ${row.subtitle ?? ''}`),
+			liveRef: row.ref,
+			...(row.imageKey === undefined ? {} : { imageKey: row.imageKey })
+		};
+	}
+
+	/** The address of one row of a root: Roon's own text, and nothing else. */
+	function liveRootPath(
+		origin: 'artists' | 'albums',
+		row: { readonly title: string; readonly artist?: string }
+	): LibraryRenderingPath {
+		return origin === 'artists'
+			? { origin, steps: [{ kind: 'artist', title: row.title }] }
+			: { origin, steps: [libraryAlbumStep(row.title, row.artist ?? '')] };
+	}
+
+	/**
+	 * Open one row the reader clicked in the live view.
+	 *
+	 * The reference is what opens it NOW — that click was unambiguous even
+	 * where two rows read alike. The address is what the page is, and it is
+	 * the only part written down.
+	 */
+	function openLiveRow(
+		path: LibraryRenderingPath,
+		row: {
+			readonly liveRef?: LibraryRowReference;
+			readonly title: string;
+			readonly subtitle?: string;
+			readonly imageKey?: string;
+		},
+		recordHistory = true
+	): void {
+		void openItemPage({ kind: 'live', path }, recordHistory, undefined, {
+			path,
+			title: row.title,
+			...(row.liveRef === undefined ? {} : { ref: row.liveRef }),
+			...(row.subtitle === undefined ? {} : { subtitle: row.subtitle }),
+			...(row.imageKey === undefined ? {} : { imageKey: row.imageKey })
+		});
+	}
+
+	function openLiveGroupCandidate(target: LibraryPathTarget): void {
+		const group = livePage.group;
+		if (group === null) return;
+		// A candidate has no invented address of its own. The group URL stays
+		// put; this in-session choice opens only the live reference Roon put on
+		// the selected row.
+		itemTarget = { kind: 'live', path: group.path };
+		livePageResolvedUnder = untrack(() => roots.generation);
+		livePageController.open({
+			path: group.path,
+			ref: target.ref,
+			title: target.title,
+			...(target.subtitle === null ? {} : { subtitle: target.subtitle }),
+			...(target.imageKey === null ? {} : { imageKey: target.imageKey })
+		});
+	}
+
+	function liveChildPath(row: LibraryLevelRow): LibraryRenderingPath | null {
+		if (itemTarget?.kind !== 'live') return null;
+		const step =
+			row.kind === 'album'
+				? libraryAlbumStep(row.title, row.subtitle ?? '')
+				: { kind: row.kind, title: row.title };
+		return { origin: itemTarget.path.origin, steps: [...itemTarget.path.steps, step] };
+	}
+
+	function openLiveStructuralRow(row: LibraryLevelRow, recordHistory: boolean): void {
+		const path = liveChildPath(row);
+		if (path === null) return;
+		openLiveRow(
+			path,
+			{
+				liveRef: row.ref,
+				title: row.title,
+				...(row.subtitle === undefined ? {} : { subtitle: row.subtitle }),
+				...(row.imageKey === undefined ? {} : { imageKey: row.imageKey })
+			},
+			recordHistory
+		);
+	}
+
+	function hrefForLiveStructuralRow(row: LibraryLevelRow): string | null {
+		const path = liveChildPath(row);
+		if (path === null) return null;
+		const route = libraryRouteFromPageState(
+			itemDestinationPageState({ kind: 'live', path })
+		);
+		if (route === null) return null;
+		try {
+			return encodeLibraryRoute(route);
+		} catch {
+			return null;
+		}
+	}
+
+	/** An artist row of the Artists root. */
+	function openLiveArtist(entry: LibraryArtistEntry): void {
+		openLiveRow(liveRootPath('artists', { title: entry.name }), {
+			title: entry.name,
+			...(entry.liveRef === undefined ? {} : { liveRef: entry.liveRef }),
+			...(entry.imageKey === undefined ? {} : { imageKey: entry.imageKey })
+		});
+	}
+
+	/**
+	 * An album tile, from the Albums root or from an artist's own page.
+	 *
+	 * The address it gets depends on where it was rendered, because that is
+	 * where it will be looked for again: an album tile on an artist's page is
+	 * addressed THROUGH that artist, never as a row of the Albums root, which
+	 * is a different list that may render it differently or not at all.
+	 */
+	function openLiveAlbum(entry: LibraryAlbumEntry): void {
+		const path =
+			liveAlbumChildPath(entry) ??
+			liveRootPath('albums', { title: entry.title, artist: entry.artist });
+		openLiveRow(path, {
+			title: entry.title,
+			subtitle: entry.artist,
+			...(entry.liveRef === undefined ? {} : { liveRef: entry.liveRef }),
+			...(entry.imageKey === undefined ? {} : { imageKey: entry.imageKey })
+		});
+	}
+
+	/**
+	 * The album page is fed by the same read every live page uses.
+	 *
+	 * One reader, one fence. A second read on this path would be a second
+	 * chance for a level to land under the wrong heading.
+	 */
+	$effect(() => {
+		const page = livePage;
+		const kind = livePageKind;
+		if (kind !== 'album') return;
+		untrack(() => {
+			if (page.phase === 'opening') {
+				albumController.beginLive();
+				return;
+			}
+			if (page.phase === 'failed') {
+				albumController.failLive('LIVE_OPEN_FAILED', page.message ?? 'This album could not be opened.');
+				return;
+			}
+			if (page.phase === 'ready' && page.target && page.level) {
+				albumController.adoptLiveLevel({
+					albumRef: page.target.ref,
+					title: page.target.title,
+					artist: page.target.subtitle,
+					rows: page.level.rows
+				});
+			}
+		});
+	});
+
+	/**
+	 * Re-read Roon's roots.
+	 *
+	 * Cheap when nothing moved — the store sends the generation it holds and the
+	 * server answers "still current" from Roon's own root counts — and a whole
+	 * replacement when it did. This is the plan's scope-activation trigger and
+	 * the first half of recovering a page whose snapshot was retired.
+	 */
+	function reloadLiveRoots(): void {
+		const coreId = untrack(() => roots.coreId) ?? untrack(() => $coreStore.core?.id) ?? null;
+		if (coreId === null) return;
+		void loadRoots(fetchFn, { coreId });
+	}
+
+	/**
+	 * The roots generation the open page was last read under.
+	 *
+	 * Deliberately not reactive: it is the memory that makes re-resolution
+	 * happen ONCE per snapshot. Without it a refusal the current snapshot cannot
+	 * fix — a row Roon really has dropped — would be retried on every state
+	 * change, which is a hot loop against the Core rather than a recovery.
+	 */
+	let livePageResolvedUnder: string | null = null;
+	/** The snapshot a stale refusal has already asked the server to re-read. */
+	let liveStaleAskedUnder: string | null = null;
+	let handledLibraryRetirementRevision = 0;
+
+	/**
+	 * A retired snapshot re-resolves the open page; it never leaves it there.
+	 *
+	 * This is the whole recovery the plan ships. A refresh, a reconnect or a
+	 * server-side session loss retires every reference the browser holds at
+	 * once; the open page then re-asks Roon for the row its address names,
+	 * under the generation that replaced it, exactly as a reload would.
+	 */
+	$effect(() => {
+		const generation = roots.generation;
+		const page = livePage;
+		if (generation === null || page.path === null) return;
+		if (page.phase === 'opening') return;
+		if (page.phase === 'ready' && (page.level?.generation ?? null) === generation) {
+			livePageResolvedUnder = generation;
+			return;
+		}
+		if (livePageResolvedUnder === generation) return;
+		livePageResolvedUnder = generation;
+		untrack(() => livePageController.retry());
+	});
+
+	/**
+	 * A page refused for a retired snapshot recovers by re-reading the roots.
+	 *
+	 * Retrying the address against rows that are themselves retired can only be
+	 * refused again, so the snapshot has to move first. Once per snapshot: if the
+	 * server says the generation it holds is still this one, the refusal was not
+	 * about staleness after all and the reader is told, not looped.
+	 */
+	$effect(() => {
+		const generation = roots.generation;
+		const page = livePage;
+		if (page.phase !== 'failed' || !page.stale) return;
+		if (generation === null || liveStaleAskedUnder === generation) return;
+		liveStaleAskedUnder = generation;
+		untrack(() => reloadLiveRoots());
+	});
+
+	$effect(() => {
+		const revision = roots.retirementRevision;
+		const reason = roots.retirementReason;
+		if (revision === handledLibraryRetirementRevision) return;
+		handledLibraryRetirementRevision = revision;
+		// Other browsers may initiate Refresh/count replacement. The roots store
+		// waits only for requests this browser actually owns before recovering.
+		if (
+			!resumed ||
+			(reason !== 'session-lost' && reason !== 'refresh' && reason !== 'count-mismatch')
+		) return;
+		const activeClaim = untrack(() => claim);
+		if (activeClaim === null) return;
+		untrack(() => void loadForClaim(activeClaim, revision));
 	});
 
 	// ---- Drills (plan §4 slice 5) -------------------------------------
@@ -758,67 +1055,54 @@
 	// UnifiedLibrarySnapshot; itemKeys are session-scoped and resolved
 	// live. Album drills open the slice-6 sheet; inert until then.
 
-	const drillArtist = $derived.by(() => {
-		if (itemTarget?.kind !== 'artist' || index.phase !== 'ready') return null;
-		const target = itemTarget;
-		return index.artists.find((entry) => entry.id === target.localId) ?? null;
-	});
-	const drillAlbum = $derived.by(() => {
-		if (itemTarget?.kind !== 'album' || index.phase !== 'ready') return null;
-		const target = itemTarget;
-		return (
-			index.albums.find(
-				(entry) =>
-					entry.catalogLocalId === target.localId ||
-					entry.id === target.localId ||
-					entry.memberLocalIds?.includes(target.localId) === true
-			) ?? null
-		);
-	});
-	const drillAlbumArtistId = $derived.by(() => {
-		if (!drillAlbum || index.phase !== 'ready') return null;
-		if (
-			drillAlbum.artistId &&
-			index.artists.some((entry) => entry.id === drillAlbum.artistId)
-		) {
-			return drillAlbum.artistId;
+	/**
+	 * What to tell the reader when a collection card could not be opened.
+	 *
+	 * Two stages, and they are different news. Stage one is the collection
+	 * itself: the library no longer carries that genre or composer, or now
+	 * carries two rows reading the same name. Stage two is the album inside
+	 * it: it left the collection, or it is one of two rows that read exactly
+	 * alike — and re-drilling would return the same two, so there is no tie to
+	 * break. `null` when the failure was not a locator refusal at all, which
+	 * leaves the page's ordinary error prose to speak.
+	 *
+	 * An artist's discography is one of these drills too, and the reader of an
+	 * artist page is not looking at anything they would call a collection. Same
+	 * two stages, same two outcomes, said in the words of the surface the reader
+	 * is actually on — and worded to match the stored-card message above, since
+	 * the two can appear on the same page about the same click.
+	 */
+	function collectionOpenMessage(
+		failure: CollectionDrillOpenFailureDetail | null,
+		hierarchy: CollectionDrillHierarchy | null
+	): string | null {
+		if (failure === null) return null;
+		if (hierarchy === 'artists') {
+			if (failure.stage === 'collection') {
+				return failure.kind === 'missing'
+					? 'This artist is no longer in the library, so this album could not be opened.'
+					: 'The library now has more than one artist with this name, so this album could not be opened.';
+			}
+			return failure.kind === 'missing'
+				? 'This album is no longer one of this artist’s albums.'
+				: 'This artist has more than one album that reads exactly the same, so this one could not be opened.';
 		}
-		const artistName = foldCatalogNameKey(drillAlbum.artist);
-		if (!artistName) return null;
-		return (
-			index.artists.find((entry) => foldCatalogNameKey(entry.name) === artistName)?.id ??
-			null
-		);
-	});
-	const drillArtistAlbums = $derived.by((): LibraryAlbumEntry[] => {
-		if (!drillArtist) return [];
-		if (
-			drillArtistOverlay !== null &&
-			drillArtistOverlay.artistLocalId === drillArtist.catalogLocalId
-		) {
-			return drillArtistOverlay.albums;
+		if (failure.stage === 'collection') {
+			return failure.kind === 'missing'
+				? 'The library no longer carries this collection, so this album could not be opened.'
+				: 'The library now carries more than one collection with this name, so this album could not be opened.';
 		}
-		// Fallback join while the authoritative discography loads (or when it
-		// cannot): catalog binding first, folded display names second.
-		const artistId = drillArtist.id;
-		const artistName = foldCatalogNameKey(drillArtist.name);
-		return index.albums.filter(
-			(entry) =>
-				entry.artistId === artistId ||
-				(!entry.artistId && foldCatalogNameKey(entry.artist) === artistName)
-		);
-	});
-	const drillArtistTruncated = $derived(
-		drillArtistOverlay !== null &&
-			drillArtistOverlay.artistLocalId === drillArtist?.catalogLocalId &&
-			drillArtistOverlay.truncated
+		return failure.kind === 'missing'
+			? 'This album is no longer in this collection.'
+			: 'This collection carries more than one album that reads exactly the same, so this one could not be opened.';
+	}
+	const collectionOpenFailureMessage = $derived(
+		collectionOpenMessage(
+			sheetState.collectionFailure ?? null,
+			itemTarget?.kind === 'collection' ? itemTarget.locator.hierarchy : null
+		)
 	);
-	const collectionLabel = $derived(collectionDrill?.label ?? '');
-	const collectionSummary = $derived(
-		collectionDrill !== null && drillState.loaded
-			? `${drillState.totalCount.toLocaleString()} ALBUMS`
-			: ''
-	);
+
 	/**
 	 * Back from an item page returns to its invoking context: the palette's
 	 * search results, the collection drill, or the owning scope (§4.2).
@@ -829,7 +1113,6 @@
 		// that is the actual back target — not the current scope or
 		// collection drill (issue #6).
 		if (itemOriginName !== null) return itemOriginName;
-		if (collectionDrill !== null) return collectionDrill.label;
 		return ALL_SCOPE_CHIPS.find((chip) => chip.id === scope)?.label ?? 'Library';
 	});
 
@@ -849,82 +1132,21 @@
 		return settled;
 	}
 
-	/** The revision the catalog will accept right now, read per attempt. */
-	function expectedCatalogRevision(): number {
-		return Math.max(index.revision ?? 1, hydrationRevision ?? index.revision ?? 1);
-	}
-
-	async function loadDrillArtistOverlay(artistLocalId: string): Promise<void> {
-		const generation = lifecycleGeneration;
-		if (hydrationCoreId !== index.coreId) {
-			hydrationCoreId = index.coreId;
-			hydrationRevision = index.revision;
-			hydratedAlbumLocalIds.clear();
-		}
-		try {
-			const response = await queueHydration(async () => {
-				try {
-					return await hydrateArtistAlbums(
-						fetchFn,
-						artistLocalId,
-						expectedCatalogRevision(),
-						// Ask for everything the contract allows; the default page
-						// size would silently cut a large discography (cr-1).
-						CATALOG_ARTIST_ALBUMS_MAX_LIMIT
-					);
-				} catch {
-					// Something published between reading the revision and using
-					// it. When that was an EXTERNAL refresh, neither our own
-					// hydrationRevision nor the store's index revision has moved
-					// yet, so re-deriving locally would just resend the rejected
-					// value. Ask the Core what the revision is now and retry
-					// against that (cr-2).
-					const current = await fetchStatus(fetchFn);
-					if (current.coreId !== index.coreId) throw new Error('Catalog Core changed');
-					hydrationRevision = current.revision;
-					return await hydrateArtistAlbums(
-						fetchFn,
-						artistLocalId,
-						current.revision,
-						CATALOG_ARTIST_ALBUMS_MAX_LIMIT
-					);
-				}
-			});
-			if (generation !== lifecycleGeneration || response.status.coreId !== index.coreId) return;
-			hydrationRevision = response.status.revision;
-			for (const bound of response.albums) {
-				if (bound.resolutionStatus === 'resolved') hydratedAlbumLocalIds.add(bound.localId);
-			}
-			if (drillArtistOverlayFor !== artistLocalId) return;
-			drillArtistOverlay = {
-				artistLocalId,
-				albums: groupLibraryAlbums(response.albums.map(libraryAlbumEntryFromAlbumRef)),
-				truncated: response.truncated === true
-			};
-			drillArtistOverlayPhase = 'idle';
-		} catch {
-			// The fallback join keeps rendering; the failed phase only stops
-			// retries and lets the empty state say "could not load" honestly.
-			if (generation !== lifecycleGeneration) return;
-			if (drillArtistOverlayFor === artistLocalId) drillArtistOverlayPhase = 'failed';
-		}
-	}
-
-	// Kick the authoritative discography load whenever an artist drill is
-	// open against a ready catalog index and no overlay (or unfinished
-	// attempt) exists for that artist. Covers openDrill, semantic
-	// restoration, and an index that becomes ready after the drill opened.
-	$effect(() => {
-		if (itemTarget?.kind !== 'artist' || !drillArtist) return;
-		if (index.source !== 'catalog' || index.coreId === null || index.revision === null) return;
-		const artistLocalId = drillArtist.catalogLocalId;
-		if (artistLocalId === undefined) return;
-		if (drillArtistOverlay?.artistLocalId === artistLocalId) return;
-		if (drillArtistOverlayFor === artistLocalId && drillArtistOverlayPhase !== 'idle') return;
-		drillArtistOverlayFor = artistLocalId;
-		drillArtistOverlayPhase = 'loading';
-		void loadDrillArtistOverlay(artistLocalId);
-	});
+	/**
+	 * Opens one live drill card, through the drill it came from.
+	 *
+	 * The card has no catalog identity and none is minted here. What it has is
+	 * its own rendering in this drill, and the locator carries exactly that
+	 * plus the collection it was rendered in — enough for the server to walk
+	 * the same path again and find the same row, unique or nothing.
+	 *
+	 * Readiness is settled BEFORE anything is mutated: a drill that has not
+	 * loaded, a row that carries no usable rendering, or a rendering that
+	 * repeats inside this same drill all return here, with no page opened and
+	 * no state touched. (The repeated case is already marked non-openable on
+	 * the card, so a click cannot normally reach it; the check stands because
+	 * this function must be right for the arguments it is handed.)
+	 */
 
 	function setPaneScrollTop(top: number): void {
 		if (!pane) return;
@@ -978,28 +1200,31 @@
 	}
 
 	function unifiedSemanticState(density: UnifiedLibraryDensity = prefs.density) {
+		const trackTitle =
+			editorialTrackIndex === null
+				? null
+				: (get(albumController).orderedTracks[editorialTrackIndex]?.title ?? null);
 		return buildUnifiedLibraryPageState({
 			scope,
-			collectionDrill,
+			collectionDrill: null,
 			itemTarget,
 			// The exact-track child is reconstructible product semantics
 			// (album localId + zero-based index, Slice 8); opaque follow
 			// destinations are deliberately never persisted.
 			itemDetail:
-				itemTarget?.kind === 'album' && editorialTrackIndex !== null
-					? { kind: 'track', trackIndex: editorialTrackIndex }
+				(itemTarget?.kind === 'collection' ||
+					(itemTarget?.kind === 'live' && livePageKind === 'album')) &&
+				trackTitle !== null
+					? { kind: 'track', title: trackTitle }
 					: null,
 			// The composition surface persists by composer context + exact
 			// title intent (Slice 8); live browse keys never persist, and
 			// nested recording pages restore to their top composition.
-			composition:
-				collectionDrill?.kind === 'composer' && compositionMode
-					? { title: openCompositionTitle }
-					: null,
+			composition: null,
 			// The artist-origin label for an open album page (issue #6):
 			// persisted so the back button keeps naming the artist after
 			// reload/popstate restore instead of falling back to the scope.
-			itemOriginName: itemTarget?.kind === 'album' ? itemOriginName : null,
+			itemOriginName: itemTarget?.kind === 'collection' ? itemOriginName : null,
 			filterText,
 			surpriseSeed: scope === 'surprise' ? shuffleSeed : null,
 			density,
@@ -1007,32 +1232,201 @@
 		});
 	}
 
-	/** Returns whether a new entry was actually pushed (dedupe may skip). */
-	function pushUnifiedSemanticState(density?: UnifiedLibraryDensity): boolean {
-		return pushLibraryPageState(unifiedSemanticState(density));
+	function itemDestinationPageState(target: UnifiedItemTarget): UnifiedLibraryPageState {
+		return buildUnifiedLibraryPageState({
+			...unifiedSemanticState().snapshot,
+			itemTarget: target,
+			itemDetail: null
+		});
+	}
+
+
+	function routeAlbum(entry: LibraryAlbumEntry): LibraryRouteAlbum {
+		return { title: entry.title, credit: entry.artist, edition: '' };
+	}
+
+	function hrefForArtist(entry: LibraryArtistEntry): string {
+		return encodeLibraryRoute({ kind: 'artist', artist: entry.name });
+	}
+
+	function hrefForDrill(target: UnifiedLibraryDrillTarget): string {
+		return target.kind === 'genre'
+			? encodeLibraryRoute({ kind: 'genre', genre: target.label })
+			: encodeLibraryRoute({ kind: 'composer', composer: target.label });
+	}
+
+	function livePathForDrill(target: UnifiedLibraryDrillTarget): LibraryRenderingPath {
+		return target.kind === 'genre'
+			? { origin: 'genres', steps: [{ kind: 'genre', title: target.label }] }
+			: { origin: 'composers', steps: [{ kind: 'composer', title: target.label }] };
+	}
+
+	function hrefForAlbum(entry: LibraryAlbumEntry): string | null {
+		const album = routeAlbum(entry);
+		const livePath = liveAlbumChildPath(entry);
+		if (livePath !== null) {
+			const route = libraryRouteFromPageState(
+				itemDestinationPageState({ kind: 'live', path: livePath })
+			);
+			return route === null ? null : encodeLibraryRoute(route);
+		}
+		return encodeLibraryRoute({ kind: 'album', album });
+	}
+
+	function liveAlbumChildPath(entry: LibraryAlbumEntry): LibraryRenderingPath | null {
+		if (
+			itemTarget?.kind !== 'live' ||
+			livePageKind === 'album' ||
+			livePageKind === 'track'
+		) {
+			return null;
+		}
+		return {
+			origin: itemTarget.path.origin,
+			steps: [...itemTarget.path.steps, libraryAlbumStep(entry.title, entry.artist)]
+		};
+	}
+
+	function followAddress(event: MouseEvent, open: () => void): void {
+		if (!shouldHandleLibraryAnchorClick(event)) return;
+		event.preventDefault();
+		open();
+	}
+
+	function routeBrowseStep(breadcrumb: BrowseBreadcrumb): LibraryRouteBrowseStep {
+		return {
+			title: breadcrumb.title,
+			...(breadcrumb.subtitle === undefined ? {} : { subtitle: breadcrumb.subtitle }),
+			...(breadcrumb.itemType === undefined ? {} : { itemType: breadcrumb.itemType }),
+			...(breadcrumb.searchCategory === true ? { searchCategory: true as const } : {})
+		};
+	}
+
+	function hrefForBrowseItem(item: BrowseItem): string | null {
+		if (item.inputPrompt || browseItemOpensActions(item)) return null;
+		const breadcrumb = browseBreadcrumbFor(item);
+		if (breadcrumb === undefined) return null;
+		return encodeLibraryRoute({
+			kind: 'browse',
+			steps: [
+				...browseState.snapshot.history.map((step) => routeBrowseStep(step.breadcrumb)),
+				routeBrowseStep(breadcrumb)
+			],
+			search:
+				browseState.snapshot.context.hierarchy === 'search'
+					? browseState.snapshot.context.query
+					: null
+		});
+	}
+
+	function routeWithTrack(route: LibraryRoute, track: string | undefined): LibraryRoute {
+		if (track === undefined) return route;
+		switch (route.kind) {
+			case 'artist-album':
+				return { ...route, kind: 'artist-album-track', track };
+			case 'artist-album-track':
+				return { ...route, track };
+			case 'album':
+				return { ...route, kind: 'album-track', track };
+			case 'album-track':
+				return { ...route, track };
+			case 'genre-album':
+				return { ...route, kind: 'genre-album-track', track };
+			case 'genre-album-track':
+				return { ...route, track };
+			case 'live-path':
+				return {
+					...route,
+					path: {
+						...route.path,
+						steps: [...route.path.steps, { kind: 'track', title: track }]
+					}
+				};
+			default:
+				return route;
+		}
+	}
+
+	function hrefForTrack(track: string): string | null {
+		const route = durableRouteForState(unifiedSemanticState());
+		return route === undefined ? null : encodeLibraryRoute(routeWithTrack(route, track));
 	}
 
 	/**
-	 * Routes the legacy drill union: artist/album destinations are item
-	 * pages, genre/composer destinations are collection drills (§4.1).
-	 * Scope views and the palette still speak the union.
+	 * Transitional catalog pages already have all renderings on screen. Turn
+	 * those into the live route they will restore through; never serialize the
+	 * controller id that happened to feed the current render.
+	 */
+	function durableRouteForState(state: UnifiedLibraryPageState): LibraryRoute | undefined {
+		return libraryRouteFromPageState(state) ?? undefined;
+	}
+
+	function pushLibraryPageState(
+		state: UnifiedLibraryPageState,
+		routeOverride?: LibraryRoute
+	): LibraryPageStateWriteResult {
+		return pushLibraryRoute(state, routeOverride ?? durableRouteForState(state));
+	}
+
+	function replaceLibraryPageState(state: UnifiedLibraryPageState): LibraryPageStateWriteResult {
+		return replaceLibraryRoute(state, durableRouteForState(state));
+	}
+
+	function preflightLibraryPageState(
+		state: UnifiedLibraryPageState,
+		routeOverride?: LibraryRoute
+	): boolean {
+		return preflightLibraryRoute(state, routeOverride ?? durableRouteForState(state)) !== null;
+	}
+
+	function entryRelationshipAfterWrite(
+		result: LibraryPageStateWriteResult | null,
+		previous: EntryRelationship,
+		restoredEntry: boolean
+	): EntryRelationship {
+		if (restoredEntry) return 'restored';
+		if (result === 'pushed') return 'owned';
+		if (result === 'deduped') return previous;
+		return 'transient';
+	}
+
+	function expectSelfAuthoredLibraryPageState(state: UnifiedLibraryPageState): void {
+		expectLibraryRoute(state, durableRouteForState(state));
+	}
+
+	/** Returns whether a new entry was actually pushed (dedupe may skip). */
+	function pushUnifiedSemanticState(density?: UnifiedLibraryDensity): boolean {
+		return pushLibraryPageState(unifiedSemanticState(density)) === 'pushed';
+	}
+
+	/**
+	 * Routes every durable destination through its page owner. Genre and
+	 * composer rows use the same live path on click that their URLs restore.
+	 * Scope views and the palette still speak the historical target union.
 	 */
 	async function openDrill(
-		target: UnifiedLibraryDrillTarget,
+		target: UnifiedItemTarget | UnifiedLibraryDrillTarget,
 		recordHistory = true,
 		albumOptions?: {
 			readonly songFocusTitle?: string;
+			readonly route?: LibraryRoute;
 		}
 	): Promise<void> {
 		// Palette-owned views are nested search views, not semantic history
 		// entries; every descendant they navigate to inherits that (ri1-2) —
 		// otherwise the palette-return close leaves a phantom entry behind.
 		const record = recordHistory && !returnToPalette;
-		if (target.kind === 'album' || target.kind === 'artist') {
+		if (target.kind === 'collection' || target.kind === 'live') {
 			await openItemPage(target, record, albumOptions);
 			return;
 		}
-		await openCollectionDrill(target, record);
+		const path = livePathForDrill(target);
+		await openItemPage(
+			{ kind: 'live', path },
+			record,
+			albumOptions,
+			{ path, title: target.label }
+		);
 	}
 
 	/** Each item transition pushes exactly one history entry (§4.2). */
@@ -1041,10 +1435,20 @@
 		recordHistory = true,
 		albumOptions?: {
 			readonly songFocusTitle?: string;
-		}
+			readonly route?: LibraryRoute;
+		},
+		/**
+		 * What the reader's own click carried, for a live target: the row's
+		 * reference and Roon's own text for it. Absent on a restore, which is
+		 * exactly when the address has to do the work alone.
+		 */
+		liveOpen?: LiveLibraryPageOpenInput,
+		restoredEntry = false
 	): Promise<void> {
+		const candidateState = itemDestinationPageState(target);
+		if (!preflightLibraryPageState(candidateState, albumOptions?.route)) return;
+		const previousEntryRelationship = itemEntryRelationship;
 		railTarget = null;
-		itemRecordedHistory = recordHistory;
 		trackChildOwnsEntry = false;
 		// Captured for every open: an in-place close (no history entry)
 		// returns focus to the invoking row/tile when it is still mounted.
@@ -1057,92 +1461,89 @@
 		// fresh artist open — clears a stale name so it never mislabels an
 		// unrelated page. Restoration repopulates this separately (below,
 		// in resumeUnified) since itemTarget is null at that call site.
+		// A live album opened from a live artist's page names that artist for
+		// the back button, from the heading Roon gave it.
 		itemOriginName =
-			target.kind === 'album' && itemTarget?.kind === 'artist'
-				? (drillArtist?.name ?? null)
+			target.kind === 'live' &&
+			(target.path.steps[target.path.steps.length - 1]?.kind ?? '') === 'album' &&
+			itemTarget?.kind === 'live' &&
+			livePageKind === 'artist'
+				? (liveArtist?.name ?? null)
 				: null;
-		if (target.kind === 'album') {
-			albumSongFocusTitle = albumOptions?.songFocusTitle ?? null;
+		if (target.kind === 'live') {
+			legacyItemRoute = null;
+			albumSongFocusTitle = null;
+			// This open IS the attempt under the snapshot the reader holds, so a
+			// refusal it produces is an answer, not something to retry against the
+			// same rows.
+			livePageResolvedUnder = untrack(() => roots.generation);
 			itemTarget = target;
-			const pageGeneration = itemPageController.open(target);
-			openEditorialForTarget(target, pageGeneration);
-			if (recordHistory) pushUnifiedSemanticState();
+			// The live page is its own reader; the item-page controller still
+			// owns retirement of whatever it displaced.
+			itemPageController.open(target);
+			const writeResult = recordHistory ? pushLibraryPageState(unifiedSemanticState()) : null;
+			itemEntryRelationship = entryRelationshipAfterWrite(
+				writeResult,
+				previousEntryRelationship,
+				restoredEntry
+			);
 			resetPaneAfterRender();
-			await openAlbumRead(target.localId, pageGeneration);
+			livePageController.open(liveOpen ?? { path: target.path });
 			return;
 		}
-		albumSongFocusTitle = null;
-		// Validity is derived at render time so restoration can begin
-		// before the index is ready; a missing artist renders the
-		// missing-entity page state.
+		legacyItemRoute = null;
+		albumSongFocusTitle = albumOptions?.songFocusTitle ?? null;
 		itemTarget = target;
 		const pageGeneration = itemPageController.open(target);
-		openEditorialForTarget(target, pageGeneration);
-		if (recordHistory) pushUnifiedSemanticState();
+		clearTrackChildAnchor();
+		const writeResult = recordHistory
+			? pushLibraryPageState(unifiedSemanticState(), albumOptions?.route)
+			: null;
+		itemEntryRelationship = entryRelationshipAfterWrite(
+			writeResult,
+			previousEntryRelationship,
+			restoredEntry
+		);
 		resetPaneAfterRender();
+		await openAlbumRead({ kind: 'collection', locator: target.locator }, pageGeneration);
 	}
 
 	/**
-	 * The live opaque follow destination (ri4-3): retained so a failed
-	 * follow retries the performer the user asked for, not the parent.
-	 * Cleared by every anchor open and by the explicit back control.
-	 */
-	let editorialFollowTarget = $state<string | null>(null);
-	/**
-	 * The live exact-track anchor (Slice 5), retained like the follow
-	 * target so retry re-reads the track the user asked for.
+	 * The exact-track child anchor (Slice 5), retained so the page-chain
+	 * entry and the address both name the track the reader asked for.
 	 */
 	let editorialTrackIndex: number | null = null;
 
 	/**
-	 * A restored exact-track child index (Slice 8): consumed once by the
-	 * album page when its single-version track order arrives; cleared by
-	 * every fresh anchor open.
+	 * A restored exact-track title, consumed once the album's current track
+	 * order arrives; cleared by every fresh anchor open.
 	 */
-	let restoredTrackInfoIndex = $state<number | null>(null);
+	let restoredTrackInfoTitle = $state<string | null>(null);
 
-	/** Starts the optional editorial read for the just-opened item page. */
-	function openEditorialForTarget(target: UnifiedItemTarget, generation: number): void {
-		editorialFollowTarget = null;
+	/** Clears the exact-track anchor whenever a fresh item page opens. */
+	function clearTrackChildAnchor(): void {
 		editorialTrackIndex = null;
-		restoredTrackInfoIndex = null;
-		// No positive capability, no open (q1-2): the pages render no
-		// editorial surface, so no read is ever issued without one.
-		if (!editorialFeatureAvailable) return;
-		void editorialItemController.open({
-			anchor:
-				target.kind === 'album'
-					? { kind: 'album', albumLocalId: target.localId }
-					: { kind: 'artist', artistLocalId: target.localId },
-			tabId: getTabId(),
-			generation
-		});
+		restoredTrackInfoTitle = null;
 	}
 
-	/** Opens exact-track credits for the live album page (Slice 5). */
+	/** Opens the exact-track child of the album page (Slice 5). */
 	function openEditorialTrack(trackPosition: number): void {
 		const target = itemTarget;
 		const current = itemPageController.current;
-		if (target?.kind !== 'album' || current.target === null) return;
+		if (
+			(target?.kind !== 'collection' && target?.kind !== 'live') ||
+			current.target === null
+		) {
+			return;
+		}
 		// A consume of the restored child re-lands on the SAME history
 		// entry (Slice 8): it must not push a duplicate chain step.
-		const restoredConsume = restoredTrackInfoIndex === trackPosition;
-		restoredTrackInfoIndex = null;
-		editorialFollowTarget = null;
+		const trackTitle = get(albumController).orderedTracks[trackPosition]?.title ?? null;
+		const restoredConsume = trackTitle !== null && restoredTrackInfoTitle === trackTitle;
+		restoredTrackInfoTitle = null;
 		editorialTrackIndex = trackPosition;
-		if (editorialFeatureAvailable) {
-			void editorialItemController.open({
-				anchor: {
-					kind: 'track',
-					albumLocalId: target.localId,
-					trackIndex: trackPosition
-				},
-				tabId: getTabId(),
-				generation: current.generation
-			});
-		}
 		// The exact-track child is a page-chain step (Slice 8): one
-		// semantic entry per transition, restored by album + index. A
+		// semantic entry per transition, restored by album + title. A
 		// transient parent (palette-opened, ri1-2) owns no semantic entry,
 		// so its children must not create one either (ri8-1). A restored
 		// child re-landed on an entry whose neighbours are unknown, so it
@@ -1150,234 +1551,33 @@
 		// dedupes the push against the child's own entry — claimed
 		// ownership survives that (ri8-1 reopen).
 		const pushed =
-			!restoredConsume && itemRecordedHistory && pushUnifiedSemanticState();
+			!restoredConsume &&
+			itemEntryRelationship !== 'transient' &&
+			pushUnifiedSemanticState();
 		trackChildOwnsEntry = pushed || (trackChildOwnsEntry && !restoredConsume);
 	}
 
 
-	/** Retries the live editorial destination: follow, track, or anchor. */
-	function retryEditorial(): void {
-		const target = itemTarget;
-		const current = itemPageController.current;
-		if (!target || current.target === null) return;
-		const followTarget = editorialFollowTarget;
-		if (followTarget !== null) {
-			void editorialItemController.follow({
-				target: followTarget,
-				tabId: getTabId(),
-				generation: current.generation
-			});
-			return;
-		}
-		const trackIndex = editorialTrackIndex;
-		if (trackIndex !== null) {
-			openEditorialTrack(trackIndex);
-			return;
-		}
-		openEditorialForTarget(target, current.generation);
-	}
-
-	/** Follows an opaque editorial child target (plan Slice 4). */
-	function followEditorial(target: string): void {
-		const current = itemPageController.current;
-		if (current.target === null) return;
-		editorialFollowTarget = target;
-		void editorialItemController.follow({
-			target,
-			tabId: getTabId(),
-			generation: current.generation
-		});
-	}
-
-	// A terminal (non-retryable) WHOLE-READ follow failure has no
-	// destination left: the parent view was cleared when the follow
-	// started, no child arrived, and no child Back control can render.
-	// Fall back to the reconstructible parent destination instead of
-	// stranding the surface (ri7-3). A retained view means the failure was
-	// section-scoped on a delivered child — that child stays (ri4-1/ri4-2)
-	// — and retryable failures keep the target for target-aware retry
-	// (ri4-3).
-	$effect(() => {
-		const state = $editorialItemController;
-		if (
-			editorialFollowTarget !== null &&
-			state.phase === 'failed' &&
-			!state.retryable &&
-			state.view === null
-		) {
-			editorialFollowTarget = null;
-			retryEditorial();
-		}
-	});
-
 	/** Composition surface state (plan Slice 6). */
-	const compositionBrowseController =
-		untrack(() => suppliedCompositionController) ?? createCompositionBrowseController();
-	const compositionState = $derived($compositionBrowseController);
-	let compositionMode = $state(false);
-	/**
-	 * The exact composition title the user asked to open (Slice 8): the
-	 * persistable intent, set synchronously at the list click and consumed
-	 * by restoration once the composition list arrives. Never a browse key.
-	 */
-	let openCompositionTitle = $state<string | null>(null);
-	let pendingCompositionAction = $state<{ title: string; itemKey: string } | null>(null);
-
-	function toggleCompositionMode(restore: { title: string | null } | null = null): void {
-		const drill = collectionDrill;
-		if (drill?.kind !== 'composer') return;
-		if (compositionMode) {
-			// Live-pushed surface/composition entries are traversed away in
-			// one step; a restored surface rewrites its entry; a transient
-			// drill's base entry stays untouched (ri8-1).
-			const traversalSteps =
-				(openCompositionOwnsEntry ? 1 : 0) + (compositionSurfaceOwnsEntry ? 1 : 0);
-			openCompositionOwnsEntry = false;
-			compositionSurfaceOwnsEntry = false;
-			compositionMode = false;
-			pendingCompositionAction = null;
-			openCompositionTitle = null;
-			compositionBrowseController.reset();
-			if (traversalSteps > 0) {
-				expectSelfAuthoredLibraryPageState(unifiedSemanticState());
-				window.history.go(-traversalSteps);
-			} else if (collectionRecordedHistory) {
-				// The current entry no longer describes the surface (Slice 8).
-				replaceLibraryPageState(unifiedSemanticState());
-			}
-			return;
+	/** Leaves the exact-track child and returns to the album's own view. */
+	function closeTrackChild(): void {
+		const currentState = unifiedSemanticState();
+		editorialTrackIndex = null;
+		restoredTrackInfoTitle = null;
+		// The closed child must stop being the restore target (Slice 8).
+		// A live-pushed child traverses back to the parent entry — the
+		// close stays synchronous and the expected-state mark absorbs
+		// the pop without a teardown restore (ri8-1). A restored child
+		// rewrites its entry instead (its neighbours are unknown), and
+		// a transient parent owns no entry to touch.
+		if (trackChildOwnsEntry) {
+			trackChildOwnsEntry = false;
+			expectSelfAuthoredLibraryPageState(unifiedSemanticState());
+			window.history.back();
+		} else if (itemEntryRelationship === 'restored') {
+			const parent = libraryParentPageState(currentState);
+			if (parent !== null) replaceLibraryPageState(parent);
 		}
-		compositionMode = true;
-		openCompositionTitle = null;
-		restoreCompositionTitle = restore?.title ?? null;
-		const activeClaim = claim;
-		if (!activeClaim) return;
-		void compositionBrowseController.openForComposer(activeClaim, drill.label);
-		// Entering the surface is a page-chain step; a restore re-lands on
-		// the entry that already describes it (Slice 8), and a transient
-		// drill (palette-opened, ri1-2) records no entries at all (ri8-1).
-		compositionSurfaceOwnsEntry =
-			restore === null && collectionRecordedHistory && pushUnifiedSemanticState();
-	}
-
-	function leaveCompositionSurface(): void {
-		compositionMode = false;
-		pendingCompositionAction = null;
-		openCompositionTitle = null;
-		compositionSurfaceOwnsEntry = false;
-		openCompositionOwnsEntry = false;
-		compositionBrowseController.reset();
-	}
-
-	/** A restored composition title awaiting its list (consume-once). */
-	let restoreCompositionTitle = $state<string | null>(null);
-
-	// Restoration consume (Slice 8): once the composition list arrives, a
-	// restored title opens its composition only when it matches EXACTLY one
-	// row — ambiguity or absence keeps the honest list view. The live click
-	// path never routes through here.
-	$effect(() => {
-		const title = restoreCompositionTitle;
-		if (!compositionMode || title === null) return;
-		if (compositionState.phase !== 'compositions') return;
-		const activeClaim = claim;
-		if (!activeClaim) return;
-		restoreCompositionTitle = null;
-		const matches = compositionState.compositions.filter(
-			(row) => row.title === title && row.itemKey
-		);
-		if (matches.length === 1) {
-			openCompositionTitle = title;
-			void compositionBrowseController.openComposition(activeClaim, matches[0]);
-		} else {
-			openCompositionTitle = null;
-		}
-	});
-
-	function beginCompositionAction(action: { title: string; itemKey: string }): void {
-		const activeClaim = claim;
-		if (!activeClaim || sheetZones.length === 0) return;
-		if (sheetZones.length === 1) {
-			void compositionBrowseController.runAction(activeClaim, action, sheetZones[0].zoneId);
-			pendingCompositionAction = null;
-			return;
-		}
-		pendingCompositionAction = action;
-	}
-
-	function chooseCompositionZone(zoneId: string): void {
-		const activeClaim = claim;
-		const action = pendingCompositionAction;
-		if (!activeClaim || !action) return;
-		void compositionBrowseController.runAction(activeClaim, action, zoneId);
-		pendingCompositionAction = null;
-	}
-
-	/**
-	 * Leaves a followed performer or track child view: performer backs out
-	 * to the surface it was followed FROM (a track's credits when one is
-	 * live), a track backs out to the album's own anchor view.
-	 */
-	function backFromEditorialFollow(): void {
-		if (editorialFollowTarget !== null) {
-			editorialFollowTarget = null;
-		} else {
-			editorialTrackIndex = null;
-			restoredTrackInfoIndex = null;
-			// The closed child must stop being the restore target (Slice 8).
-			// A live-pushed child traverses back to the parent entry — the
-			// close stays synchronous and the expected-state mark absorbs
-			// the pop without a teardown restore (ri8-1). A restored child
-			// rewrites its entry instead (its neighbours are unknown), and
-			// a transient parent owns no entry to touch.
-			if (trackChildOwnsEntry) {
-				trackChildOwnsEntry = false;
-				expectSelfAuthoredLibraryPageState(unifiedSemanticState());
-				window.history.back();
-			} else if (itemRecordedHistory) {
-				replaceLibraryPageState(unifiedSemanticState());
-			}
-		}
-		retryEditorial();
-	}
-
-	async function openCollectionDrill(
-		target: UnifiedCollectionDrillTarget,
-		recordHistory = true
-	): Promise<void> {
-		railTarget = null;
-		collectionRecordedHistory = recordHistory;
-		// A collection destination replaces any open item page and any
-		// live composition surface.
-		leaveCompositionSurface();
-		if (itemTarget !== null) resetItemPage(false);
-		albumSongFocusTitle = null;
-		drillNotice = null;
-		const activeClaim = claim;
-		if (!activeClaim) return;
-		const generation = lifecycleGeneration;
-		collectionDrill = target;
-		if (recordHistory) pushUnifiedSemanticState();
-		resetPaneAfterRender();
-		const namedStore = target.kind === 'genre' ? genresStore : composersStore;
-		let snapshot = target.kind === 'genre' ? $genresStore : $composersStore;
-		if (!snapshot.loaded) {
-			await namedStore.load(activeClaim);
-			if (generation !== lifecycleGeneration) return;
-			snapshot = target.kind === 'genre' ? $genresStore : $composersStore;
-		}
-		const entry = snapshot.entries.find((candidate) => candidate.label === target.label);
-		if (!entry) {
-			// Semantic restoration rule: zero matches → parent with notice.
-			collectionDrill = null;
-			drillNotice = `“${target.label}” is not in this library any more.`;
-			return;
-		}
-		void drillStore.load(
-			activeClaim,
-			target.kind === 'genre' ? 'genres' : 'composers',
-			target.label
-		);
 	}
 
 	/** Cancels the live page's read and action authority. */
@@ -1385,8 +1585,11 @@
 		albumController.cancel();
 		albumController.reset();
 		sheetActionController.cancel();
-		editorialItemController.cancel();
-		sheetGeneration = null;
+		sheetActionGesture += 1;
+		sheetActionAttempt = null;
+		retrySheetActionIntent = null;
+		sheetActionRetryAvailable = false;
+		albumReadSession = null;
 	}
 
 	/**
@@ -1398,14 +1601,15 @@
 		if (itemTarget === null && itemInvoker === null) return;
 		// The controller's retirement hook cancels read/action authority.
 		itemPageController.close();
+		// A closed live page stops reading: its fence moves, so a level still
+		// in flight lands nowhere rather than over whatever opens next.
+		livePageController.reset();
 		albumSongFocusTitle = null;
 		itemTarget = null;
+		legacyItemRoute = null;
 		itemOriginName = null;
-		itemRecordedHistory = false;
+		itemEntryRelationship = 'transient';
 		trackChildOwnsEntry = false;
-		drillArtistOverlay = null;
-		drillArtistOverlayPhase = 'idle';
-		drillArtistOverlayFor = null;
 		const invoker = itemInvoker;
 		itemInvoker = null;
 		const returnScrollTop = itemReturnScrollTop;
@@ -1424,111 +1628,48 @@
 		});
 	}
 
-	function resetCollectionDrill(): void {
-		collectionDrill = null;
-		collectionRecordedHistory = false;
-		drillNotice = null;
-		drillStore.reset();
-	}
-
 	/** Resets both navigation layers (scope switches, suspend). */
 	function resetDrill(): void {
 		const resetPane = itemTarget === null;
 		resetItemPage(false);
-		resetCollectionDrill();
 		if (resetPane) resetPaneAfterRender();
+	}
+
+	function replaceRestoredItemWithParent(): boolean {
+		const parent = libraryParentPageState(unifiedSemanticState());
+		if (parent === null || replaceLibraryPageState(parent) === 'refused') return false;
+		const parentTarget = parent.snapshot.itemTarget;
+		if (parentTarget !== null) {
+			void openItemPage(parentTarget, false, undefined, undefined, true);
+			itemOriginName = parent.snapshot.itemOriginName;
+		} else {
+			resetItemPage(true);
+		}
+		return true;
 	}
 
 	function backFromItem(): void {
 		const shouldReturnToPalette = returnToPalette;
-		const shouldPopHistory = itemRecordedHistory;
-		if (shouldPopHistory) pendingPopReturnScrollTop = itemReturnScrollTop;
-		resetItemPage(!shouldPopHistory && !shouldReturnToPalette);
 		if (shouldReturnToPalette) {
+			resetItemPage(false);
 			returnToPalette = false;
 			selectedSong = null;
 			resetSongRelationship();
 			paletteOpen = true;
 			return;
 		}
-		if (shouldPopHistory) window.history.back();
-	}
-
-	function backFromCollection(): void {
-		const shouldReturnToPalette = returnToPalette;
-		const shouldPopHistory = collectionRecordedHistory;
-		resetCollectionDrill();
-		resetPaneAfterRender();
-		if (shouldReturnToPalette) {
-			returnToPalette = false;
-			selectedSong = null;
-			resetSongRelationship();
-			paletteOpen = true;
+		if (itemEntryRelationship === 'owned') {
+			pendingPopReturnScrollTop = itemReturnScrollTop;
+			resetItemPage(false);
+			window.history.back();
 			return;
 		}
-		if (shouldPopHistory) window.history.back();
-	}
-
-	function openAlbumArtist(): void {
-		const artistId = drillAlbumArtistId;
-		if (!artistId) return;
-		void openItemPage({ kind: 'artist', localId: artistId }, !returnToPalette);
-	}
-
-	/**
-	 * Opens (or chooser-retries) the album sheet's keyless read against the
-	 * live session generation. Stale lifecycles abandon the result unused.
-	 */
-	async function hydrateUnresolvedAlbum(
-		albumLocalId: string,
-		generation: number
-	): Promise<void> {
-		const album = index.albums.find((entry) => entry.catalogLocalId === albumLocalId);
-		if (
-			!album ||
-			album.resolutionStatus !== 'unresolved' ||
-			hydratedAlbumLocalIds.has(albumLocalId) ||
-			index.source !== 'catalog' ||
-			index.coreId === null ||
-			index.revision === null
-		) {
-			return;
-		}
-
-		if (hydrationCoreId !== index.coreId) {
-			hydrationCoreId = index.coreId;
-			hydrationRevision = index.revision;
-			hydratedAlbumLocalIds.clear();
-		}
-		const normalizedArtist = normalizeCatalogText(album.artist);
-		const artists = index.artists.filter(
-			(entry) =>
-				entry.catalogLocalId !== undefined &&
-				normalizeCatalogText(entry.name) === normalizedArtist
-		);
-		// Artist hydration is authoritative only for one exact catalog identity.
-		if (normalizedArtist.length === 0 || artists.length !== 1) return;
-
-		try {
-			// Same queue as the drill overlay: both gate on the catalog revision
-			// and must not race each other (cr-2).
-			const response = await queueHydration(() =>
-				hydrateArtistAlbums(fetchFn, artists[0].catalogLocalId!, expectedCatalogRevision())
-			);
-			if (generation !== lifecycleGeneration || response.status.coreId !== index.coreId) return;
-			hydrationRevision = response.status.revision;
-			for (const resolved of response.albums) {
-				if (resolved.resolutionStatus === 'resolved') {
-					hydratedAlbumLocalIds.add(resolved.localId);
-				}
-			}
-		} catch {
-			// The read protocol will surface its normal fail-closed error.
-		}
+		if (itemEntryRelationship === 'restored' && replaceRestoredItemWithParent()) return;
+		resetItemPage(true);
 	}
 
 	async function openAlbumRead(
-		albumLocalId: string,
+		target: LibraryAlbumOpenTarget,
 		pageGeneration: number
 	): Promise<void> {
 		const activeClaim = claim;
@@ -1540,8 +1681,6 @@
 		const pageIsCurrent = (): boolean =>
 			generation === lifecycleGeneration &&
 			itemPageController.isCurrent(pageGeneration);
-		await hydrateUnresolvedAlbum(albumLocalId, generation);
-		if (!pageIsCurrent()) return;
 		let ref;
 		try {
 			ref = await activeClaim.ready;
@@ -1561,18 +1700,231 @@
 			drillNotice = 'Secure library identity is unavailable.';
 			return;
 		}
-		sheetGeneration = ref.generation;
-		albumController.open({
-			albumLocalId,
-			tabId,
-			generation: ref.generation
-		});
+		albumReadSession = ref;
+		albumController.open({ target, tabId, generation: ref.generation });
 	}
 
 	function retryAlbumPage(): void {
-		if (itemTarget?.kind !== 'album') return;
+		// A live page's retry is a re-resolution of its address, not a reopen
+		// of a reference that has already been refused.
+		if (itemTarget?.kind === 'live') {
+			livePageController.retry();
+			return;
+		}
+		if (itemTarget?.kind !== 'collection') return;
+		const activeClaim = claim;
+		if (!activeClaim) return;
+		const retired = albumReadSession;
+		if (retired === null) return;
+		// The failed read records the exact Classic handle it used. Retire only
+		// that handle: another surface may already have acquired its replacement.
+		sessionClient.invalidate(activeClaim, retired);
 		albumController.reset();
-		void openAlbumRead(itemTarget.localId, itemPageController.current.generation);
+		void openAlbumRead(
+			{ kind: 'collection', locator: itemTarget.locator },
+			itemPageController.current.generation
+		);
+	}
+
+	function sameLibraryRef(
+		left: LibraryRowReference | null | undefined,
+		right: LibraryRowReference | null | undefined
+	): boolean {
+		return (
+			left !== null &&
+			left !== undefined &&
+			right !== null &&
+			right !== undefined &&
+			left.generation === right.generation &&
+			left.token === right.token
+		);
+	}
+
+	function isSheetActionIntentCurrent(intent: SheetActionIntent): boolean {
+		if (
+			!resumed ||
+			claim !== intent.claim ||
+			lifecycleGeneration !== intent.lifecycle ||
+			!sessionClient.isClaimCurrent(intent.claim) ||
+			!itemPageController.isCurrent(intent.itemPageGeneration) ||
+			actionZoneId !== intent.zoneId
+		) {
+			return false;
+		}
+		if (intent.kind === 'page') {
+			return (
+				itemTarget?.kind === 'collection' &&
+				sheetState.operationId === intent.pageId &&
+				sheetState.selectedVersionId === intent.versionId &&
+				(intent.track === null
+					? sheetState.albumActionsAvailable
+					: sheetState.actionsAvailable)
+			);
+		}
+		if (intent.referenceSource === 'live-collection') {
+			return (
+				itemTarget?.kind === 'live' &&
+				livePage.phase === 'ready' &&
+				sameLibraryRef(livePage.target?.ref, intent.ref)
+			);
+		}
+		const live = sheetState.live;
+		const currentRef =
+			intent.trackIndex === null
+				? live?.playRef
+				: live?.trackRefs[intent.trackIndex ?? -1];
+		return (
+			itemTarget?.kind === 'live' &&
+			live !== null &&
+			sameLibraryRef(currentRef, intent.ref) &&
+			(intent.trackIndex === null
+				? sheetState.albumActionsAvailable
+				: sheetState.actionsAvailable)
+		);
+	}
+
+	function actionInput(
+		intent: SheetActionIntent,
+		session: ClassicBrowseSessionRef
+	): AlbumActionBeginInput | null {
+		const common = {
+			zoneId: intent.zoneId,
+			tabId: intent.tabId,
+			generation: session.generation,
+			...(intent.desiredSemantic === null
+				? {}
+				: { desiredSemantic: intent.desiredSemantic })
+		};
+		if (intent.kind === 'reference') {
+			return intent.ref === undefined ? null : { ...common, ref: intent.ref };
+		}
+		if (intent.pageId === undefined || intent.versionId === undefined) return null;
+		return {
+			...common,
+			pageId: intent.pageId,
+			versionId: intent.versionId,
+			...(intent.track === null || intent.track === undefined ? {} : { track: intent.track })
+		};
+	}
+
+	async function issueSheetAction(
+		intent: SheetActionIntent,
+		gesture: number,
+		automaticReissueSpent: boolean
+	): Promise<void> {
+		let session: ClassicBrowseSessionRef;
+		try {
+			session = await intent.claim.ready;
+		} catch {
+			if (gesture === sheetActionGesture && automaticReissueSpent) {
+				retrySheetActionIntent = intent;
+				sheetActionRetryAvailable = true;
+			}
+			return;
+		}
+		if (gesture !== sheetActionGesture || !isSheetActionIntentCurrent(intent)) return;
+		const input = actionInput(intent, session);
+		if (input === null) return;
+		const result = sheetActionController.begin(input);
+		if (!result?.started) return;
+		sheetActionAttempt = {
+			intent,
+			gesture,
+			session,
+			requestId: result.requestId,
+			automaticReissueSpent,
+			reissueInFlight: false
+		};
+	}
+
+	function startSheetAction(intent: SheetActionIntent): void {
+		sheetActionGesture += 1;
+		sheetActionAttempt = null;
+		retrySheetActionIntent = null;
+		sheetActionRetryAvailable = false;
+		void issueSheetAction(intent, sheetActionGesture, false);
+	}
+
+	async function reissueSheetAction(attempt: SheetActionAttempt): Promise<void> {
+		sessionClient.invalidate(attempt.intent.claim, attempt.session);
+		await issueSheetAction(attempt.intent, attempt.gesture, true);
+	}
+
+	function retryFailedSheetAction(): void {
+		const intent = retrySheetActionIntent;
+		if (intent === null || !isSheetActionIntentCurrent(intent)) {
+			retrySheetActionIntent = null;
+			sheetActionRetryAvailable = false;
+			return;
+		}
+		startSheetAction(intent);
+	}
+
+	$effect(() => {
+		const state = sheetActionState;
+		const attempt = sheetActionAttempt;
+		if (attempt === null || state.requestId !== attempt.requestId) return;
+		if (state.phase === 'failed') {
+			if (
+				state.code !== 'SESSION_LOST' ||
+				state.executionAttempted ||
+				!isSheetActionIntentCurrent(attempt.intent)
+			) {
+				sheetActionAttempt = null;
+				return;
+			}
+			if (!attempt.automaticReissueSpent && !attempt.reissueInFlight) {
+				attempt.automaticReissueSpent = true;
+				attempt.reissueInFlight = true;
+				void reissueSheetAction(attempt);
+				return;
+			}
+			if (!attempt.reissueInFlight) {
+				sessionClient.invalidate(attempt.intent.claim, attempt.session);
+				retrySheetActionIntent = attempt.intent;
+				sheetActionRetryAvailable = true;
+				sheetActionAttempt = null;
+			}
+			return;
+		}
+		if (
+			state.phase === 'executed' ||
+			state.phase === 'canceled' ||
+			state.phase === 'outcome-unknown'
+		) {
+			sheetActionAttempt = null;
+			retrySheetActionIntent = null;
+			sheetActionRetryAvailable = false;
+		}
+	});
+
+	function referenceIntent(
+		ref: LibraryRowReference,
+		zoneId: string,
+		desiredSemantic: AlbumActionSemantic | null,
+		referenceSource: 'album' | 'live-collection',
+		trackIndex: number | null
+	): SheetActionIntent | null {
+		const activeClaim = claim;
+		if (activeClaim === null) return null;
+		let tabId: string;
+		try {
+			tabId = getTabId();
+		} catch {
+			return null;
+		}
+		return Object.freeze({
+			kind: 'reference',
+			claim: activeClaim,
+			lifecycle: lifecycleGeneration,
+			itemPageGeneration: itemPageController.current.generation,
+			zoneId,
+			tabId,
+			desiredSemantic,
+			ref: Object.freeze({ ...ref }),
+			referenceSource,
+			trackIndex
+		});
 	}
 
 	function beginSheetAction(
@@ -1580,83 +1932,57 @@
 		zoneId: string,
 		desiredSemantic: AlbumActionSemantic
 	): void {
+		const live = sheetState.live;
+		if (itemTarget?.kind === 'live' && live !== null) {
+			const ref = track === null ? live.playRef : (live.trackRefs[track.index] ?? null);
+			if (ref === null) return;
+			if (track === null ? !sheetState.albumActionsAvailable : !sheetState.actionsAvailable) return;
+			const intent = referenceIntent(ref, zoneId, desiredSemantic, 'album', track?.index ?? null);
+			if (intent !== null) startSheetAction(intent);
+			return;
+		}
 		if (
-			itemTarget?.kind !== 'album' ||
-			sheetGeneration === null ||
+			itemTarget?.kind !== 'collection' ||
 			!sheetState.operationId ||
 			!sheetState.selectedVersionId ||
-			!sheetState.actionsAvailable
+			(track === null ? !sheetState.albumActionsAvailable : !sheetState.actionsAvailable)
 		) {
 			return;
 		}
+		const activeClaim = claim;
+		if (activeClaim === null) return;
 		let tabId: string;
 		try {
 			tabId = getTabId();
 		} catch {
 			return;
 		}
-		sheetActionController.begin({
-			pageId: sheetState.operationId,
-			versionId: sheetState.selectedVersionId,
-			zoneId,
-			tabId,
-			generation: sheetGeneration,
-			...(track ? { track } : {}),
-			desiredSemantic
-		});
+		startSheetAction(
+			Object.freeze({
+				kind: 'page',
+				claim: activeClaim,
+				lifecycle: lifecycleGeneration,
+				itemPageGeneration: itemPageController.current.generation,
+				zoneId,
+				tabId,
+				desiredSemantic,
+				pageId: sheetState.operationId,
+				versionId: sheetState.selectedVersionId,
+				track: track === null ? null : Object.freeze({ ...track })
+			})
+		);
 	}
 
-	/**
-	 * Playlist and Most Played rows carry the same opaque source authority.
-	 * Clearing the palette store synchronously fences any in-flight search
-	 * before the resolver's shared classic-search generation is claimed.
-	 */
-	function beginPublicSongAction(
-		target: ScopeActionTarget,
-		zoneId: string,
-		desiredSemantic: UnifiedSongActionSemantic
-	): void {
-		const activeClaim = claim;
-		if (!activeClaim) return;
-		classicSearchOwnerGeneration += 1;
-		paletteOpen = false;
-		paletteQuery = '';
-		paletteSelectedRowId = null;
-		selectedSong = null;
-		returnToPalette = false;
-		songActionController.reset();
-		resetSongRelationship();
-		resetPaletteSearchData();
-		playlistActionController.begin({
-			claim: activeClaim,
-			authority: target.authority,
-			zoneId,
-			semantic: desiredSemantic
-		});
-	}
-
-	function clearPublicSongAction(): void {
-		if (playlistActionState.phase !== 'executing') {
-			const displacedResolver = playlistActionState.phase !== 'idle';
-			playlistActionController.cancel();
-			playlistActionController.reset();
-			if (displacedResolver) startPaletteAuthorityRetirement();
-		}
-	}
-
-	function closePlaylistWithResolverCleanup(): void {
-		clearPublicSongAction();
-		closePlaylistView();
-	}
-
-	function openMostPlayedAlbum(albumLocalId: string): void {
-		clearPublicSongAction();
-		void openDrill({ kind: 'album', localId: albumLocalId }, false);
+	function beginLiveCollectionActions(): void {
+		const ref = livePage.target?.ref;
+		if (itemTarget?.kind !== 'live' || ref === undefined || actionZoneId === null) return;
+		const intent = referenceIntent(ref, actionZoneId, null, 'live-collection', null);
+		if (intent !== null) startSheetAction(intent);
 	}
 
 	function maybeLoadScopeData(next: UnifiedLibraryScope): void {
 		// Genres page on the classic-explore role and needs the claim;
-		// recently played and most played are plain REST fetches. All are
+		// recently played is a plain REST fetch. All are
 		// idempotent.
 		if (next === 'genres' && claim) {
 			const genres = $genresStore;
@@ -1667,17 +1993,10 @@
 		} else if (next === 'favorites') {
 			const current = $favoritesDataStore;
 			if (!current.loaded && !current.loading) void loadFavoritesData(fetchFn);
-		} else if (next === 'most-played') {
-			const stats = $mostPlayedStore;
-			if (!stats.loaded && !stats.loading) void loadMostPlayedData(fetchFn);
-		} else if (next === 'playlists') {
-			const playlists = $playlistsStore;
-			if (!playlists.loaded && !playlists.loading) void loadPlaylistsData(fetchFn);
 		}
 	}
 
 	function setScope(next: UnifiedLibraryScope): void {
-		if (next !== scope) clearPublicSongAction();
 		browseActionController.reset();
 		browseActionFromPalette = false;
 		browseFavoriteStatus = null;
@@ -1701,7 +2020,7 @@
 		// in. The scope chips also scroll away with the content (they are inside
 		// the pane and not sticky), which means a switch made from the list
 		// itself is necessarily made from the top — honestly nothing to restore.
-		if (collectionDrill === null && !filterText) {
+		if (!filterText) {
 			const leavingTop = itemTarget !== null ? itemReturnScrollTop : (pane?.scrollTop ?? 0);
 			scopeScrollTops.set(scope, leavingTop);
 		}
@@ -1710,6 +2029,12 @@
 		railTarget = null;
 		filterText = '';
 		resetDrill();
+		// Opening a live scope re-reads its root: the plan's scope-activation
+		// trigger (`.agents/plans/library-live-view.md`, refresh contract). It is
+		// the cheap confirm when nothing moved, and it is how a reader who came
+		// back to the list sees a record added since they last looked. The mode's
+		// own activation is not this — that read is `loadForClaim`'s.
+		if ((next === 'artists' || next === 'albums') && claim) reloadLiveRoots();
 		maybeLoadScopeData(next);
 		restorePaneScrollTop(restoreTop);
 		if (next === 'browse') {
@@ -1813,20 +2138,11 @@
 	}
 
 	function openPalette(seedText = ''): void {
-		if (!resumed || playlistActionState.phase === 'executing') return;
+		if (!resumed) return;
 		browseActionController.reset();
 		browseActionFromPalette = false;
 		browseFavoriteStatus = null;
 		classicSearchOwnerGeneration += 1;
-		const displacedResolver = playlistActionState.phase !== 'idle';
-		playlistActionController.cancel();
-		if (displacedResolver) {
-			// Never remount cached song IDs after resolver ownership. The next
-			// eligible query must run a fresh palette search generation.
-			playlistActionController.reset();
-			resetPaletteSearchData();
-			startPaletteAuthorityRetirement();
-		}
 		paletteQuery = seedText;
 		paletteSelectedRowId = null;
 		selectedSong = null;
@@ -1855,55 +2171,53 @@
 
 	/**
 	 * Resolves an artist/album entity intent (issue #10: play-bar and
-	 * NowPlayingOverlay name clicks) to an item-page target against the
-	 * loaded library index, ahead of the palette-search fallback. Roon's
-	 * now-playing strings do not always equal library names (joined artist
-	 * lists, remasters), so no match, an ambiguous match, or an index that
-	 * is not yet `ready` all return null — the caller falls back to
-	 * `openPalette` unchanged.
+	 * NowPlayingOverlay name clicks) against Roon's own two roots, ahead of
+	 * the palette-search fallback.
+	 *
+	 * It used to match against the saved catalog index and open the record it
+	 * found by local id. It matches the live rows now and opens the row's own
+	 * reference — the same row the reader would have clicked in the list.
+	 *
+	 * ONE MATCH OR NONE. Roon's now-playing strings do not always equal
+	 * library names (joined artist lists, remasters), so no match, an
+	 * ambiguous match, or roots that are not yet `ready` all return null and
+	 * the caller falls back to `openPalette` unchanged. Two rows reading alike
+	 * are two rows: picking one of them would be a guess.
 	 */
-	function resolveEntityIntentTarget(intent: LibraryIntent): UnifiedItemTarget | null {
-		if (index.phase !== 'ready') return null;
+	function resolveEntityIntent(intent: LibraryIntent): (() => void) | null {
+		if (roots.phase !== 'ready') return null;
 		if (intent.kind === 'artist') {
 			const key = librarySortKey(intent.query);
-			const matches = index.artists.filter((entry) => librarySortKey(entry.name) === key);
-			return matches.length === 1 ? { kind: 'artist', localId: matches[0].id } : null;
+			const matches = roots.artists.filter((entry) => librarySortKey(entry.name) === key);
+			return matches.length === 1 ? () => openLiveArtist(matches[0]) : null;
 		}
 		if (intent.kind === 'album') {
 			const title = intent.display?.title;
 			const artist = intent.display?.artist;
 			if (!title || !artist) return null;
-			const key = albumIdentityKey(title, artist);
-			const match = index.albums.find(
-				(entry) => albumIdentityKey(entry.title, entry.artist) === key
-			);
-			// Mirrors the album-tile drill rule (UnifiedScopeViews.svelte):
-			// browse-fallback entries (`browse:album:N`, libraryIndexStore.ts
-			// `prepareBrowseFallback`) carry no catalogLocalId and stay inert,
-			// so an intent match must resolve through the catalog identity
-			// too, not the index-local id — otherwise it opens an album page
-			// the album controller UUID-rejects. Fall back to the palette
-			// instead.
-			return match?.catalogLocalId ? { kind: 'album', localId: match.catalogLocalId } : null;
+			const key = `${librarySortKey(title)} ${normalizeCatalogText(artist)}`;
+			const matches = roots.albums.filter((entry) => entry.searchKey === key);
+			return matches.length === 1 ? () => openLiveAlbum(matches[0]) : null;
 		}
 		return null;
 	}
 
 	$effect(() => {
 		const pending = $pendingLibraryIntentStore;
-		if (
-			!resumed ||
-			!pending ||
-			pending.intent.destination !== 'search' ||
-			playlistActionState.phase === 'executing'
-		) {
+		if (!resumed || !pending || pending.intent.destination !== 'search') {
 			return;
 		}
 		const intent = claimLibraryIntent(pending.requestId);
 		if (intent?.destination !== 'search') return;
-		const resolved = resolveEntityIntentTarget(intent);
-		if (resolved) {
-			void openDrill(resolved);
+		const open = resolveEntityIntent(intent);
+		if (open) {
+			// The row is opened from the scope it belongs to, so Back returns to
+			// a list rather than to whatever surface the reader came from.
+			resetDrill();
+			scope = intent.kind === 'artist' ? 'artists' : 'albums';
+			railTarget = null;
+			filterText = '';
+			open();
 			return;
 		}
 		openPalette(intent.query);
@@ -1971,6 +2285,33 @@
 		// query/selection and the server-owned retained song authority.
 		void openDrill(target, false);
 	}
+
+	/**
+	 * A live Artists or Albums row picked out of the palette.
+	 *
+	 * Unlike a palette-owned search view, a live page IS an address: it has a
+	 * URL of its own and a history entry to match (Slice 3). So the palette
+	 * closes for good rather than staying behind it, and the page opens exactly
+	 * as it would from the list — same reference, same address, same Back.
+	 */
+	function paletteOpenLiveArtist(entry: LibraryArtistEntry): void {
+		closePalette();
+		resetDrill();
+		scope = 'artists';
+		railTarget = null;
+		filterText = '';
+		openLiveArtist(entry);
+	}
+
+	function paletteOpenLiveAlbum(entry: LibraryAlbumEntry): void {
+		closePalette();
+		resetDrill();
+		scope = 'albums';
+		railTarget = null;
+		filterText = '';
+		openLiveAlbum(entry);
+	}
+
 
 	function paletteSong(song: PaletteSearchRow): void {
 		songActionController.reset();
@@ -2086,7 +2427,7 @@
 				item,
 				restoreCount: browseState.result?.items.length
 			},
-			sheetZones[0]?.zoneId
+			actionZoneId ?? undefined
 		);
 	}
 
@@ -2152,6 +2493,28 @@
 		void browseActionController.execute(activeClaim, semantic, zoneId);
 	}
 
+	// Which actions Roon offers is a question asked OF a zone, and the answer
+	// is what enables these buttons — but the zone picker sits in the layout,
+	// outside the sheet's backdrop, and stays clickable while the sheet is up.
+	// `+layout.svelte` also re-pins the selection on Core reconnect and moves
+	// it in memory when a zone vanishes. So availability probed under one zone
+	// can end up gating buttons that will execute on another: a button offered
+	// for a zone that never answered for it. A moved zone re-probes; the
+	// controller's fence supersedes the in-flight probe, so the buttons flip
+	// to loading and then to the truth (public issue #12).
+	$effect(() => {
+		const zoneId = actionZoneId;
+		const state = browseActionState;
+		const source = state.source;
+		if (state.phase === 'idle' || source === null) return;
+		if (state.zoneId === zoneId) return;
+		const activeClaim = claim;
+		if (!activeClaim) return;
+		untrack(() => {
+			void browseActionController.open(activeClaim, source, zoneId ?? undefined);
+		});
+	});
+
 	async function preparePaletteBrowseTransition(): Promise<ClassicBrowseSessionClaim | null> {
 		const activeClaim = claim;
 		if (!activeClaim || !paletteOpen) return null;
@@ -2174,7 +2537,7 @@
 				void browseActionController.open(
 					activeClaim,
 					{ kind: 'search', query, item: result },
-					sheetZones[0]?.zoneId
+					actionZoneId ?? undefined
 				);
 				return;
 			}
@@ -2206,42 +2569,6 @@
 		songActionController.reset();
 		paletteOpen = false;
 		returnToPalette = true;
-	}
-
-	function openSongAlbum(candidate: UnifiedSongAlbumRelationship): void {
-		const relationship = songRelationship.relationship;
-		if (
-			songRelationship.phase !== 'ready' ||
-			!relationship ||
-			!relationship.albums.some(
-				(album) => album.albumLocalId === candidate.albumLocalId
-			)
-		) {
-			return;
-		}
-		leaveSongPanelForDrill();
-		void openDrill(
-			{ kind: 'album', localId: candidate.albumLocalId },
-			false,
-			{
-				songFocusTitle: relationship.songTitle
-			}
-		);
-	}
-
-	function openSongArtist(artistLocalId: string): void {
-		const relationship = songRelationship.relationship;
-		if (
-			songRelationship.phase !== 'ready' ||
-			!relationship ||
-			!relationship.albums.some(
-				(album) => album.artistLocalId === artistLocalId
-			)
-		) {
-			return;
-		}
-		leaveSongPanelForDrill();
-		void openDrill({ kind: 'artist', localId: artistLocalId }, false);
 	}
 
 	function openSongComposer(label: string): void {
@@ -2309,22 +2636,15 @@
 			return;
 		}
 		if (paletteOpen) return;
-		if (
-			playlistActionState.phase === 'resolving' ||
-			playlistActionState.phase === 'choosing' ||
-			playlistActionState.phase === 'executing'
-		) {
-			return;
-		}
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
-		const target = event.target instanceof HTMLElement ? event.target : null;
-		const active =
-			document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		const target = event.target instanceof Element ? event.target : null;
+		const active = document.activeElement;
+		// `swallowsTypedText` rather than a hand-written tagName check: the
+		// volume slider is an `<input>` that no printable key types into, and
+		// a bare tagName test left typing dead after a drag (songr #16). One
+		// predicate, shared with the Space shortcut, so the two cannot drift.
 		for (const el of [target, active]) {
-			if (!el) continue;
-			if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')
-				return;
-			if (el.isContentEditable) return;
+			if (swallowsTypedText(el)) return;
 		}
 		// A live item page owns reading focus; typing must not yank it into
 		// the palette (§4.3, extending the album-sheet protection).
@@ -2341,6 +2661,17 @@
 		return () => window.removeEventListener('keydown', paletteCaptureKeydown);
 	});
 
+	// The palette covers the header it opens over, and nothing else unsets
+	// these: an open Sort or About menu stayed open and rendered underneath
+	// it (songr #15). Same dismissal contract as the outside-pointerdown and
+	// Escape effects above — a menu closes when the surface that owns it goes
+	// away — with the one trigger those two did not cover.
+	$effect(() => {
+		if (!paletteOpen) return;
+		sortOpen = false;
+		aboutOpen = false;
+	});
+
 	function setSort(value: string): void {
 		if (!sortMenu) return;
 		// A persisted rail target indexes the previous ordering; drop it.
@@ -2348,29 +2679,13 @@
 		prefsStore.setSort(scope as SortableUnifiedScope, value);
 	}
 
-	function setDrillSort(value: string): void {
-		const sortKey =
-			itemTarget?.kind === 'artist'
-				? 'artist'
-				: collectionDrill?.kind === 'genre'
-					? 'genre'
-					: null;
-		if (sortKey === null) return;
-		railTarget = null;
+	function setLiveCollectionAlbumSort(value: string): void {
 		if (value === 'shuffle') shuffleSeed += 1;
-		prefsStore.setSort(sortKey, value);
+		prefsStore.setSort('genre', value);
 	}
 
 	function setDensity(value: UnifiedLibraryDensity): boolean {
-		const previous = prefs.density;
-		if (value === previous) return false;
-		// The root entry intentionally has no authoritative density. Capture
-		// the actual current preference before creating the changed entry so
-		// Back can restore it even on the first density change after reload.
-		replaceLibraryPageState(unifiedSemanticState(previous));
-		if (!prefsStore.setDensity(value)) return false;
-		pushUnifiedSemanticState(value);
-		return true;
+		return prefsStore.setDensity(value);
 	}
 
 	function railJump(bucket: LetterBucket): void {
@@ -2379,12 +2694,23 @@
 		railTarget = bucket;
 	}
 
-	async function loadForClaim(activeClaim: ClassicBrowseSessionClaim): Promise<void> {
+	async function loadForClaim(
+		activeClaim: ClassicBrowseSessionClaim,
+		retirementRevision?: number
+	): Promise<void> {
 		const generation = lifecycleGeneration;
 		let coreId: string;
 		try {
-			const status = await fetchStatus(fetchFn);
-			coreId = status.coreId;
+			// The Core's own identity, not the catalog's account of it: the
+			// live view must be able to read the library on a build where the
+			// catalog is gone, which is where this plan ends.
+			const paired = $coreStore.core?.id;
+			if (paired !== undefined) coreId = paired;
+			else {
+				const status = await fetchCoreStatusData(fetchFn);
+				if (status.core === undefined) throw new Error('No paired Core');
+				coreId = status.core.id;
+			}
 		} catch {
 			// A cold desktop launch opens the window as soon as the engine's
 			// HTTP port is up — up to ~25s before Roon discovery and registry
@@ -2398,7 +2724,16 @@
 			return;
 		}
 		if (generation !== lifecycleGeneration || claim !== activeClaim) return;
-		await loadIndex(fetchFn, { coreId, claim: activeClaim });
+		await loadRoots(fetchFn, {
+			coreId,
+			...(retirementRevision === undefined ? {} : {
+				retirement: {
+					revision: retirementRevision,
+					isCurrent: () => generation === lifecycleGeneration &&
+						isCurrentUnifiedClaim(activeClaim) && ($coreStore.core?.id ?? coreId) === coreId
+				}
+			})
+		});
 	}
 
 	// Pairing is the readiness signal the deferred load is waiting for, and it
@@ -2438,7 +2773,6 @@
 		browseActionController.reset();
 		browseActionFromPalette = false;
 		browseController.reset(browseState.snapshot);
-		playlistActionController.abandon();
 		selectedSong = null;
 		resetSongRelationship();
 		resetPaletteSearchData();
@@ -2465,6 +2799,12 @@
 					return;
 				}
 				void loadForClaim(activeClaim);
+				// A cold scope load can lose the same socket-connect race as the
+				// roots. Re-drive the visible scope after the recovered session is
+				// current; each loader is idempotent and retries only unloaded data.
+				// An addressed live page owns the pane and restores through its own
+				// hierarchy, so its hidden classic scope has nothing to retry.
+				if (itemTarget?.kind !== 'live') maybeLoadScopeData(scope);
 				if (scope === 'browse') {
 					void browseController
 						.restore(activeClaim, browseState.snapshot, sheetZones[0]?.zoneId)
@@ -2514,26 +2854,23 @@
 		const becamePaired = coreWasPaired === false && paired;
 		coreWasPaired = paired;
 		if (!becamePaired || !resumed || claim === null) return;
-		if (index.phase !== 'idle' && index.phase !== 'error') return;
+		if (roots.phase !== 'idle' && roots.phase !== 'error') return;
 		void loadForClaim(claim);
 	});
 
 	function resumeUnified(activation: CommittedLibraryModeActivation | null = null): void {
 		lifecycleGeneration += 1;
+		activationGeneration = lifecycleGeneration;
 		const pageState = activation?.pageState;
-		let restoredCollection: UnifiedCollectionDrillTarget | null = null;
 		let restoredItem: UnifiedItemTarget | null = null;
 		let restoredDetail: UnifiedItemDetailTarget | null = null;
-		let restoredComposition: { title: string | null } | null = null;
 		/** Issue #6: the persisted artist-origin label for a restored album page. */
 		let restoredOriginName: string | null = null;
 		if (pageState && pageState.libraryView === 'unified') {
 			scope = pageState.snapshot.scope;
 			browseController.reset(pageState.snapshot.browseHistory);
-			restoredCollection = pageState.snapshot.collectionDrill;
 			restoredItem = pageState.snapshot.itemTarget;
 			restoredDetail = pageState.snapshot.itemDetail;
-			restoredComposition = pageState.snapshot.composition;
 			restoredOriginName = pageState.snapshot.itemOriginName;
 			shuffleSeed = pageState.snapshot.surpriseSeed ?? 0;
 			const restoredDensity = pageState.snapshot.density;
@@ -2550,6 +2887,7 @@
 		}
 		const connectedBeforeClaim = Boolean(getSocketClient()?.connected);
 		claim = sessionClient.claim('unified-mode');
+		claimEpoch += 1;
 		resumed = true;
 		attachConnectionListeners();
 		if (!connectedBeforeClaim && connectionSocket?.connected) handleReconnect();
@@ -2560,28 +2898,15 @@
 				.restore(activeClaim, browseState.snapshot, sheetZones[0]?.zoneId)
 				.then((restored) => replaceBrowseStateAfter(restored, activeClaim));
 		}
-		// Restored page state may land directly on a data-owning scope.
-		maybeLoadScopeData(scope);
+		// Restored page state may land directly on a data-owning scope. A live
+		// item restores through its addressed hierarchy instead; asking the
+		// hidden classic scope too only creates competing Core browse traffic.
+		if (restoredItem?.kind !== 'live') maybeLoadScopeData(scope);
 		// Semantic restoration: the collection context first, then the item
 		// page over it; labels resolve against live data and zero matches
 		// degrade to the parent with a notice.
-		if (restoredCollection) {
-			const composition = restoredComposition;
-			void openCollectionDrill(restoredCollection, false).then(() => {
-				// These already own the restored history entry even though
-				// resume must not push a duplicate one.
-				collectionRecordedHistory = true;
-				// The composition surface restores over its composer drill
-				// (Slice 8): the toggle re-enters without pushing, and the
-				// consume effect resolves the exact title once the list
-				// arrives.
-				if (composition !== null && collectionDrill?.kind === 'composer') {
-					toggleCompositionMode(composition);
-				}
-			});
-		}
 		if (restoredItem) {
-			void openItemPage(restoredItem, false);
+			void openItemPage(restoredItem, false, undefined, undefined, true);
 			// openItemPage's synchronous prefix always clears itemOriginName
 			// (it has no way to see the artist-origin transition during
 			// restore, since itemTarget is still null at this call site) —
@@ -2591,14 +2916,13 @@
 			// assignment, has already run synchronously by the time control
 			// returns here (album targets yield only on the later `await
 			// openAlbumRead(...)`).
-			if (restoredItem.kind === 'album') itemOriginName = restoredOriginName;
-			itemRecordedHistory = true;
+			itemOriginName = restoredOriginName;
 			// The exact-track child restores AFTER the album page opens: the
 			// page consumes the index once its single-version track order
 			// arrives, and a stale index simply keeps the parent (the
 			// session-bound restoration rule, Slice 8).
-			if (restoredItem.kind === 'album' && restoredDetail?.kind === 'track') {
-				restoredTrackInfoIndex = restoredDetail.trackIndex;
+			if (restoredDetail?.kind === 'track') {
+				restoredTrackInfoTitle = restoredDetail.title;
 			}
 		}
 		// A Back initiated from an item page returns to this entry: restore
@@ -2628,30 +2952,22 @@
 		sheetActionController.cancel();
 		albumController.cancel();
 		albumController.reset();
-		sheetGeneration = null;
-		resetIndex();
+		sheetActionGesture += 1;
+		sheetActionAttempt = null;
+		retrySheetActionIntent = null;
+		sheetActionRetryAvailable = false;
 		// Scope data is claim-scoped; a future resume gets a fresh claim.
 		genresStore.reset();
 		composersStore.reset();
-		drillStore.reset();
-		// Most played is snapshot-bound REST data; a future resume re-fetches
-		// against the fresh capability answer (possibly a different Core).
-		mostPlayedReset();
-		// Playlists likewise: snapshot-bound list plus any open contents and
-		// a pending playlist-track action.
-		playlistsReset();
-		playlistActionController.abandon();
 		classicSearchOwnerGeneration += 1;
 		itemPageController.close();
 		itemTarget = null;
+		legacyItemRoute = null;
 		itemOriginName = null;
-		itemRecordedHistory = false;
+		itemEntryRelationship = 'transient';
 		trackChildOwnsEntry = false;
 		itemInvoker = null;
-		collectionDrill = null;
-		collectionRecordedHistory = false;
 		drillNotice = null;
-		leaveCompositionSurface();
 		// Palette capture detaches with `resumed`; state resets here so a
 		// future resume never inherits a stale overlay or filter page.
 		paletteOpen = false;
@@ -2675,6 +2991,7 @@
 		if (claim) {
 			sessionClient.release(claim);
 			claim = null;
+			claimEpoch += 1;
 		}
 	}
 
@@ -2756,8 +3073,7 @@
 			class="findbtn"
 			data-testid="unified-find"
 			title="Search — or just type anywhere"
-			disabled={playlistActionState.phase === 'executing' ||
-				browseActionState.phase !== 'idle'}
+			disabled={browseActionState.phase !== 'idle'}
 			onclick={() => openPalette('')}
 		>
 			<span aria-hidden="true">⚲</span> Search
@@ -2780,6 +3096,7 @@
 			data-testid="unified-about-open"
 			aria-haspopup="dialog"
 			aria-expanded={aboutOpen}
+			bind:this={aboutButton}
 			onclick={() => (aboutOpen = !aboutOpen)}
 		>
 			About
@@ -2793,6 +3110,7 @@
 			aria-modal="false"
 			aria-label="About Sǫngr"
 			data-testid="unified-about-panel"
+			bind:this={aboutPanel}
 		>
 			<p class="ab-name">Sǫngr</p>
 			<p class="ab-desc">web-based controller for Roon</p>
@@ -2825,168 +3143,7 @@
 		</div>
 	{/if}
 
-	{#snippet drillSortControl()}
-		{#if drillSortMenu && drillSortValue}
-			<div class="sortc-wrap">
-				<button
-					type="button"
-					class="sortc"
-					data-testid="unified-drill-sort"
-					aria-haspopup="menu"
-					aria-expanded={sortOpen}
-					onclick={() => (sortOpen = !sortOpen)}
-				>
-					Sort:
-					<b
-						>{drillSortMenu.find((option) => option.id === drillSortValue)?.label ??
-							''}</b
-					>
-					<span style="color:var(--dim)">▾</span>
-				</button>
-				<div class="smenu" class:open={sortOpen}>
-					{#each drillSortMenu as option (option.id)}
-						<button
-							type="button"
-							class="so"
-							class:on={option.id === drillSortValue}
-							class:dis={option.disabledReason !== undefined}
-							disabled={option.disabledReason !== undefined}
-							title={option.disabledReason}
-							data-testid="unified-drill-sort-option-{option.id}"
-							onclick={() => {
-								setDrillSort(option.id);
-								sortOpen = false;
-							}}
-						>
-							{option.label}{#if option.disabledReason}<span class="why"
-									>{option.disabledReason}</span
-								>{/if}
-						</button>
-					{/each}
-				</div>
-			</div>
-		{/if}
-	{/snippet}
 
-	{#snippet compositionSurface()}
-		{@const composition = compositionState}
-		{@const compositionPage = composition.pages[composition.pages.length - 1]}
-		{#if composition.phase === 'loading' || composition.phase === 'idle'}
-			<p class="status" data-testid="unified-composition-loading">Loading compositions…</p>
-		{:else if composition.phase === 'failed'}
-			<p class="status error" data-testid="unified-composition-error">
-				{composition.notice ?? composition.error ?? 'Compositions could not be loaded.'}
-			</p>
-		{:else if composition.phase === 'page' && compositionPage}
-			<div class="composition-page" data-testid="unified-composition-page">
-				<button
-					type="button"
-					class="back"
-					data-testid="unified-composition-back"
-					onclick={async () => {
-						pendingCompositionAction = null;
-						const activeClaim = claim;
-						if (!activeClaim) return;
-						await compositionBrowseController.backToCompositions(activeClaim);
-						// Only a genuine return to the list retires the persisted
-						// composition intent; a nested pop keeps the parent page
-						// visible and its restore target intact (ri8-2). A
-						// live-pushed composition entry is traversed away, a
-						// restored one rewritten, a transient drill untouched
-						// (ri8-1).
-						if (compositionState.phase === 'compositions') {
-							openCompositionTitle = null;
-							if (openCompositionOwnsEntry) {
-								openCompositionOwnsEntry = false;
-								expectSelfAuthoredLibraryPageState(unifiedSemanticState());
-								window.history.back();
-							} else if (collectionRecordedHistory) {
-								replaceLibraryPageState(unifiedSemanticState());
-							}
-						}
-					}}
-				>
-					← Back
-				</button>
-				<h3 data-testid="unified-composition-title">{compositionPage.title}</h3>
-				{#if compositionPage.actions.length > 0}
-					<div class="composition-actions" data-testid="unified-composition-actions">
-						{#each compositionPage.actions as action, index (action.itemKey)}
-							<button
-								type="button"
-								data-testid="unified-composition-action-{index}"
-								disabled={composition.actionBusy || sheetZones.length === 0}
-								onclick={() => beginCompositionAction(action)}
-							>
-								{action.title}
-							</button>
-						{/each}
-					</div>
-				{/if}
-				{#if pendingCompositionAction && sheetZones.length > 1}
-					<div class="zone-picker" data-testid="unified-composition-zone-picker">
-						<span class="zone-label">{pendingCompositionAction.title} on</span>
-						{#each sheetZones as zone (zone.zoneId)}
-							<button type="button" onclick={() => chooseCompositionZone(zone.zoneId)}>{zone.name}</button>
-						{/each}
-						<button type="button" class="ghost" onclick={() => (pendingCompositionAction = null)}>Cancel</button>
-					</div>
-				{/if}
-				<ul class="composition-rows" data-testid="unified-composition-recordings">
-					{#each compositionPage.recordings as recording, index (index)}
-						<li>
-							{#if recording.itemKey}
-								<button
-									type="button"
-									data-testid="unified-composition-recording-{index}"
-									onclick={() => {
-										const activeClaim = claim;
-										if (activeClaim) void compositionBrowseController.openComposition(activeClaim, recording);
-									}}
-								>
-									<span>{recording.title}</span>
-									{#if recording.subtitle}<small>{recording.subtitle}</small>{/if}
-								</button>
-							{:else}
-								<span class="composition-fact"
-									>{recording.title}{recording.subtitle ? ` — ${recording.subtitle}` : ''}</span
-								>
-							{/if}
-						</li>
-					{/each}
-				</ul>
-			</div>
-		{:else}
-			<ul class="composition-rows" data-testid="unified-composition-list">
-				{#each composition.compositions as row, index (index)}
-					<li>
-						{#if row.itemKey}
-							<button
-								type="button"
-								data-testid="unified-composition-row-{index}"
-								onclick={() => {
-									const activeClaim = claim;
-									if (!activeClaim) return;
-									void compositionBrowseController.openComposition(activeClaim, row);
-									// The open composition is a persisted page-chain
-									// step (Slice 8): exact title, never a browse key.
-									// Transient drills record no entries (ri8-1).
-									openCompositionTitle = row.title;
-									openCompositionOwnsEntry =
-										collectionRecordedHistory && pushUnifiedSemanticState();
-								}}
-							>
-								<span>{row.title}</span>
-								{#if row.subtitle}<small>{row.subtitle}</small>{/if}
-							</button>
-						{:else}
-							<span class="composition-fact">{row.title}</span>
-						{/if}
-					</li>
-				{/each}
-			</ul>
-		{/if}
-	{/snippet}
 
 	<!-- The library body stays MOUNTED but hidden while the search-track
 	     page is live (ri5-1) — the same restoration pattern the item
@@ -3019,7 +3176,7 @@
 					<button
 						type="button"
 						class="sc"
-						class:on={scope === chip.id && !collectionDrill && !itemTarget && !filterText}
+					class:on={scope === chip.id && !itemTarget && !filterText}
 						aria-pressed={scope === chip.id}
 						data-testid="unified-scope-{chip.id}"
 						onclick={() => setScope(chip.id)}
@@ -3027,32 +3184,20 @@
 						{chip.label}
 					</button>
 				{/each}
-				<!-- Workspaces this build provides, rendered exactly as given:
-				     a build with none provides an empty list and this renders
-				     nothing (no placeholder, no disabled chip). -->
-				{#each libraryScopeSlots.workspaceLinks as link (link.href)}
-					<a
-						class="sc workspace-link"
-						href={link.href}
-						data-testid="unified-workspace-link"
-						aria-label={link.description ?? link.label}
-					>
-						{link.label}
-					</a>
-				{/each}
 			</nav>
 			{#if !resumed}
 				<p class="status">Suspended.</p>
-			{:else if scope === 'browse' && collectionDrill === null && itemTarget === null}
+			{:else if scope === 'browse' && itemTarget === null}
 				<UnifiedBrowseView
 					state={browseState}
 					onBack={browseBack}
 					onForward={browseForward}
-					onItem={browseItem}
-					onLoadMore={browseLoadMore}
-					onSearchPrompt={() => openPalette('')}
+				onItem={browseItem}
+				onLoadMore={browseLoadMore}
+				onSearchPrompt={() => openPalette('')}
+				hrefForItem={hrefForBrowseItem}
 					/>
-			{:else if scope === 'favorites' && collectionDrill === null && itemTarget === null}
+			{:else if scope === 'favorites' && itemTarget === null}
 				<UnifiedFavoritesView
 					state={favorites as FavoritesState}
 					busy={favoriteMutationBusy}
@@ -3060,135 +3205,118 @@
 					onActivate={activateFavorite}
 					onRemove={(favorite) => void removeFavoriteEntry(favorite)}
 				/>
-			{:else if index.phase === 'loading'}
+			{:else if surfacePhase === 'loading'}
 				<p class="status" data-testid="unified-loading">Loading library…</p>
-			{:else if index.phase === 'error'}
+			{:else if surfacePhase === 'error'}
 				<p class="status error" data-testid="unified-error">
-					Could not load the library index{index.error ? `: ${index.error}` : '.'}
+					Could not load the library{surfaceError ? `: ${surfaceError}` : '.'}
 				</p>
-			{:else if index.phase === 'ready'}
-				{#if index.source === 'browse'}
-					<p class="notice" data-testid="unified-degraded-notice">
-						Showing a limited library listing while the catalog prepares. Counts are
-						approximate and album actions are unavailable.
-					</p>
-				{/if}
-				{#if itemTarget?.kind === 'album'}
+			{:else if surfacePhase === 'ready'}
+						{#if itemTarget?.kind === 'live' && livePage.phase === 'group' && livePage.group}
+					<section class="item-page" data-testid="unified-library-group-page">
+						<div class="ctx">
+							<button type="button" class="back" onclick={backFromItem}>← {itemBackLabel}</button>
+							<h2 tabindex="-1">{livePage.group.at.title}</h2>
+						</div>
+						<p class="notice" data-testid="unified-library-group-notice">
+							{livePage.message}
+						</p>
+						<div class="alist" data-testid="unified-library-group-candidates">
+							{#each livePage.group.targets as target, index (`${target.ref.generation}:${target.ref.token}`)}
+								<button
+									type="button"
+									class="arow"
+									data-testid="unified-library-group-candidate-{index}"
+									onclick={() => openLiveGroupCandidate(target)}
+								>
+									<span class="an">{target.title}</span><span class="ad"></span><span
+										class="ac mono">{target.subtitle ?? ''}</span
+									>
+								</button>
+							{/each}
+						</div>
+					</section>
+				{:else if itemTarget?.kind === 'collection' || (itemTarget?.kind === 'live' && livePageKind === 'album')}
 					<UnifiedAlbumPage
 						controller={albumController}
 						actionController={sheetActionController}
-						zones={sheetZones}
-						album={drillAlbum}
+						zoneId={actionZoneId}
+						collectionFailureMessage={collectionOpenFailureMessage}
+						album={itemTarget.kind === 'live' ? liveAlbum : null}
 						focusSongTitle={albumSongFocusTitle}
+						{activationGeneration}
 						backLabel={itemBackLabel}
 						onBack={backFromItem}
 						onRetry={retryAlbumPage}
+						actionRetryAvailable={sheetActionRetryAvailable}
+						onRetryAction={retryFailedSheetAction}
 						onBeginAction={beginSheetAction}
-						onOpenArtist={drillAlbumArtistId ? openAlbumArtist : undefined}
-						editorial={editorialFeatureAvailable ? $editorialItemController : null}
-						onEditorialRetry={retryEditorial}
-						onEditorialFollow={followEditorial}
-						onEditorialBack={backFromEditorialFollow}
-						editorialFollowActive={editorialFollowTarget !== null}
 						onOpenTrackInfo={openEditorialTrack}
-						initialTrackInfoIndex={restoredTrackInfoIndex}
+						onCloseTrackInfo={closeTrackChild}
+						{hrefForTrack}
+						initialTrackInfoTitle={restoredTrackInfoTitle}
 					/>
-				{:else if itemTarget?.kind === 'artist'}
+				{:else if itemTarget?.kind === 'live' && livePageKind === 'artist'}
 					<UnifiedArtistPage
-						artist={drillArtist}
-						albums={drillArtistAlbums}
-						overlayPhase={drillArtistOverlayPhase}
-						truncated={drillArtistTruncated}
+						artist={liveArtist}
+						albums={liveArtistAlbums}
+						overlayPhase={livePage.phase === 'opening'
+							? 'loading'
+							: livePage.phase === 'failed'
+								? 'failed'
+								: 'idle'}
+						discographyKnown={livePage.phase === 'ready'}
+						truncated={false}
+						missingMessage={livePage.message}
 						backLabel={itemBackLabel}
 						onBack={backFromItem}
-						editorial={editorialFeatureAvailable ? $editorialItemController : null}
-						onEditorialRetry={retryEditorial}
-						onEditorialFollow={followEditorial}
-						editorialFollowActive={editorialFollowTarget !== null}
-						onEditorialBack={backFromEditorialFollow}
 					>
-						{#snippet headerExtra()}
-							{@render drillSortControl()}
-						{/snippet}
 						{#snippet discography()}
-							{#key drillArtist?.id}
+							{#key liveArtist?.name}
 								<UnifiedScopeViews
 									scope="albums"
 									artists={[]}
-									albums={drillArtistAlbums}
-									sorts={drillViewSorts}
+									albums={liveArtistAlbums}
+									sorts={viewSorts}
 									randomSeed={shuffleSeed}
 									groupAlbums={false}
 									railTarget={null}
-									{dateFeatureGate}
 									genres={$genresStore}
 									recent={$recentStore}
 									onDrill={openDrill}
+									onOpenLiveAlbum={openLiveAlbum}
+									{hrefForArtist}
+									{hrefForAlbum}
+									{hrefForDrill}
 								/>
 							{/key}
 						{/snippet}
 					</UnifiedArtistPage>
+				{:else if itemTarget?.kind === 'live' && livePageKind !== null}
+					<UnifiedLiveCollectionPage
+						page={livePage}
+						levelKind={livePageKind}
+						backLabel={itemBackLabel}
+						onBack={backFromItem}
+						onRetry={() => livePageController.retry()}
+						onOpenRow={(row) => openLiveStructuralRow(row, true)}
+						hrefForRow={hrefForLiveStructuralRow}
+						onOpenAlbum={openLiveAlbum}
+						{hrefForAlbum}
+						actionController={sheetActionController}
+						actionsEnabled={actionZoneId !== null}
+						onBeginActions={beginLiveCollectionActions}
+						sorts={liveCollectionSorts}
+						randomSeed={shuffleSeed}
+						onSetAlbumSort={setLiveCollectionAlbumSort}
+					/>
 				{/if}
 				<!-- The collection context stays MOUNTED but hidden under an
 				     open item page, so Back returns to the exact invoking
 				     collection with its transient view state (tabs, loaded
 				     data) intact (§4.2). -->
 				<div class="collection-host" hidden={itemTarget !== null}>
-				{#if collectionDrill}
-					<div class="ctx">
-						<button
-							type="button"
-							class="back"
-							data-testid="unified-drill-back"
-							onclick={backFromCollection}
-						>
-							← {collectionDrill.kind === 'genre' ? 'Genres' : 'Search results'}
-						</button>
-						<h2 tabindex="-1" data-testid="unified-drill-label">{collectionLabel}</h2>
-						{#if collectionSummary}
-							<span class="n mono" data-testid="unified-drill-summary">{collectionSummary}</span>
-						{/if}
-						{#if collectionDrill.kind === 'composer'}
-							<!-- The composition surface (plan Slice 6) rides its own
-							     retained composers-hierarchy session; the album drill
-							     stays the distinct collection destination. -->
-							<button
-								type="button"
-								class="ctab"
-								class:on={compositionMode}
-								data-testid="unified-drill-compositions-toggle"
-								onclick={() => toggleCompositionMode()}
-							>
-								{compositionMode ? 'Albums' : 'Compositions'}
-							</button>
-						{/if}
-						{@render drillSortControl()}
-					</div>
-					{#if compositionMode && collectionDrill.kind === 'composer'}
-						{@render compositionSurface()}
-					{:else if drillState.error}
-						<p class="status error" data-testid="unified-drill-error">
-							Could not load albums: {drillState.error}
-						</p>
-					{:else if drillState.loading || !drillState.loaded}
-						<p class="status" data-testid="unified-drill-loading">Loading albums…</p>
-					{:else}
-						{#key collectionLabel}
-							<UnifiedScopeViews
-								scope="albums"
-								artists={[]}
-								albums={drillStoreAlbums}
-								sorts={drillViewSorts}
-								randomSeed={shuffleSeed}
-								{railTarget}
-								{dateFeatureGate}
-								genres={$genresStore}
-								recent={$recentStore}
-								onDrill={openDrill}
-							/>
-						{/key}
-					{/if}
-				{:else if filterText}
+				{#if filterText}
 					<div class="ctx">
 						<button
 							type="button"
@@ -3201,38 +3329,38 @@
 						<h2 tabindex="-1" data-testid="unified-filter-label">
 							{filterSpec ? filterSpec.label : filterText}
 						</h2>
-						{#if filterSpec && index.capabilities.countFilters}
+						{#if filterSpec}
 							<span class="n mono" data-testid="unified-filter-summary">
 								{filterArtists.length.toLocaleString()} ARTISTS
 							</span>
 						{/if}
 					</div>
-					{#if !index.capabilities.countFilters}
-						<p class="notice" data-testid="unified-filter-gated">
-							{index.capabilities.countFiltersDisabledReason ??
-								'Count filters are unavailable.'}
-						</p>
-					{:else if !filterSpec}
+					{#if !filterSpec}
 						<p class="notice" data-testid="unified-filter-invalid">
 							“{filterText}” is not a filter this library understands any more.
 						</p>
 					{:else}
+						{#if filterUncountedArtists > 0}
+							<p class="notice" data-testid="unified-filter-uncounted">
+								{filterUncountedArtists.toLocaleString()} of {roots.artists.length.toLocaleString()}
+								artists carry no album count in Roon's own list, so they were not tested.
+							</p>
+						{/if}
 						{#if filterArtists.length === 0}
 							<div class="hint" data-testid="unified-filter-none">No artists match.</div>
 						{:else}
 							<div class="alist" data-testid="unified-filter-results">
 								{#each filterArtists as artist (artist.id)}
-									<button
-										type="button"
+									<a
 										class="arow"
 										data-testid="unified-filter-artist"
-										onclick={() =>
-											void openDrill({ kind: 'artist', localId: artist.id })}
+										href={hrefForArtist(artist)}
+										onclick={(event) => followAddress(event, () => openLiveArtist(artist))}
 									>
 										<span class="an">{artist.name}</span><span class="ad"></span><span
 											class="ac mono">{artist.albumCount ?? ''}</span
 										>
-									</button>
+									</a>
 								{/each}
 							</div>
 						{/if}
@@ -3245,11 +3373,13 @@
 						<h2 tabindex="-1">{ALL_SCOPE_CHIPS.find((chip) => chip.id === scope)?.label ?? 'Library'}</h2>
 						{#if scope !== 'most-played'}
 							<span class="n mono" data-testid="unified-summary">
-								{scopeSummary}{index.truncated ? ' (truncated)' : ''}
+								<!-- No truncation notice: Roon's roots are read whole or not at
+								     all, so a partial listing is never published. -->
+								{scopeSummary}
 							</span>
 						{/if}
 						{#if sortMenu}
-							<div class="sortc-wrap">
+							<div class="sortc-wrap" bind:this={collectionSortWrap}>
 								<button
 									type="button"
 									class="sortc"
@@ -3288,39 +3418,19 @@
 					{#key `${scope}:${shuffleSeed}`}
 						<UnifiedScopeViews
 							{scope}
-							artists={index.artists}
-							albums={index.albums}
+							artists={listArtists}
+							albums={listAlbums}
 							sorts={viewSorts}
 							randomSeed={shuffleSeed}
 							{railTarget}
-							{dateFeatureGate}
-							{scopeSlots}
-							mostPlayed={{
-								gate: playFeatureGate,
-								state: mostPlayed,
-								actionController: playlistActionController,
-								zones: sheetZones,
-								onBeginAction: (target, zoneId, desiredSemantic) =>
-									void beginPublicSongAction(target, zoneId, desiredSemantic),
-								onClearAction: clearPublicSongAction,
-								onOpenAlbum: openMostPlayedAlbum,
-								fetchFn
-							}}
-							playlists={{
-								gate: playlistFeatureGate,
-								store: playlistsStore,
-								open: openPlaylistData,
-								close: closePlaylistWithResolverCleanup,
-								actionController: playlistActionController,
-								zones: sheetZones,
-								onBeginAction: (target, zoneId, desiredSemantic) =>
-									void beginPublicSongAction(target, zoneId, desiredSemantic),
-								albums: index.albums,
-								fetchFn
-							}}
 							genres={$genresStore}
 							recent={$recentStore}
-							onDrill={(target) => void openDrill(target)}
+						onDrill={(target) => void openDrill(target)}
+						onOpenLiveArtist={openLiveArtist}
+						onOpenLiveAlbum={openLiveAlbum}
+						{hrefForArtist}
+						{hrefForAlbum}
+						{hrefForDrill}
 						/>
 					{/key}
 				{/if}
@@ -3334,7 +3444,7 @@
 	{#if paletteOpen && selectedSong}
 		<UnifiedTrackPage
 			song={selectedSong}
-			zones={sheetZones}
+			zoneId={actionZoneId}
 			busy={songActionState.phase === 'executing'}
 			error={songActionState.resultId === selectedSong.resultId ? songActionState.error : null}
 			relationshipPhase={songRelationship.resultId === selectedSong.resultId
@@ -3355,13 +3465,11 @@
 			onFavorite={() => void favoriteSong()}
 			favoriteBusy={songFavoriteBusy}
 			favoriteStatus={songFavoriteStatus}
-			onOpenAlbum={openSongAlbum}
-			onOpenArtist={openSongArtist}
 			onOpenComposer={openSongComposer}
 		/>
 	{:else if paletteOpen}
 		<UnifiedPalette
-			{index}
+			{roots}
 			genres={$genresStore}
 			composers={$composersStore}
 			searchStore={paletteSearchStore}
@@ -3369,6 +3477,8 @@
 			bind:selectedRowId={paletteSelectedRowId}
 			onClose={closePalette}
 			onDrill={paletteDrill}
+			onOpenLiveArtist={paletteOpenLiveArtist}
+			onOpenLiveAlbum={paletteOpenLiveAlbum}
 			onSong={paletteSong}
 			onBrowseResult={paletteBrowseResult}
 			onBrowseCategory={paletteBrowseCategory}
@@ -3380,7 +3490,7 @@
 	{#if browseActionState.phase !== 'idle' && browseActionState.source}
 		<UnifiedBrowseActionSheet
 			state={browseActionState}
-			zones={sheetZones}
+			zoneId={actionZoneId}
 			onAction={beginBrowseAction}
 			onFavorite={() => void favoriteBrowseAction()}
 			favoriteEnabled={!browseFavoriteBusy &&
@@ -3427,54 +3537,6 @@
 		border-color: var(--unified-accent);
 		color: var(--unified-fg);
 	}
-	.composition-page h3 {
-		margin: 10px 0 6px;
-	}
-	.composition-actions,
-	.zone-picker {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 8px;
-		margin: 8px 0;
-	}
-	.composition-rows {
-		list-style: none;
-		margin: 8px 0 0;
-		padding: 0;
-		max-width: 72ch;
-	}
-	.composition-rows li + li {
-		margin-top: 4px;
-	}
-	.composition-rows button {
-		display: flex;
-		width: 100%;
-		flex-direction: column;
-		gap: 2px;
-		padding: 7px 10px;
-		border: 1px solid var(--songr-line);
-		border-radius: 6px;
-		background: transparent;
-		color: var(--unified-fg);
-		font: inherit;
-		text-align: left;
-		cursor: pointer;
-	}
-	.composition-rows button:hover {
-		border-color: var(--unified-accent);
-	}
-	.composition-rows small,
-	.composition-fact {
-		color: var(--unified-dim);
-		font-size: 12px;
-	}
-	.zone-label {
-		width: 100%;
-		color: var(--songr-soft);
-		font-size: 12px;
-	}
-
 	.status.error {
 		color: var(--songr-error);
 	}

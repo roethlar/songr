@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# Build the complete desktop artifact set this machine can produce, for THIS
-# tree's identity: a private checkout builds "Songr Private"
-# (app.songr.desktop.private), an export tree builds the public "Songr" —
-# the identity follows the tree marker, never a flag (see
-# desktop/scripts/package-app.mjs).
+# Build the complete public Songr desktop artifact set this machine supports.
 #
 #   ./scripts/build-desktop-release.sh
 #
@@ -45,7 +41,7 @@ npm --prefix desktop run package -- --linux --skip-builds -- \
 
 echo
 echo "Artifacts in desktop/release/artifacts/:"
-# find+du rather than ls/awk: artifact names carry spaces ("Songr Private…").
+# find+du rather than ls/awk: artifact names carry spaces (installer filenames).
 find desktop/release/artifacts -maxdepth 1 -type f \
   \( -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \
      -o -name '*.exe' -o -name '*.tar.gz' \) -exec du -h {} + | sed 's/^/  /'

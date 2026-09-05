@@ -5,16 +5,8 @@
 # running `electron-builder` directly produces an app that cannot start. The
 # script is the entry point; this file is the part electron-builder reads.
 #
-# Every artifact here is UNSIGNED, deliberately (plan §1: "Unsigned artifacts
-# initially; install caveats documented"). Signing is follow-on work, and the
-# install caveats are in README.md.
-
-# Plan §10's stated public default. The private tree's build overrides this on
-# the command line with a `.private` suffix (see `appIdForTree` in
-# `src/packaging.ts`), so the owner's own build and a public release can be
-# installed side by side. The literal here is the public one so that a plain
-# `electron-builder` run — a contributor's, a CI job's — produces the public
-# identity without needing to know about the override.
+# All checkouts use the published identity. Signing follows the credential-
+# gated release workflow and local keychain configuration below.
 appId: app.songr.desktop
 productName: Songr
 copyright: Songr contributors
@@ -22,9 +14,8 @@ copyright: Songr contributors
 # The public runtime identity, written into the packaged app's own
 # package.json. This is the half the pulled v1.1.4 build lacked: productName
 # above names the bundle and artifacts, but Electron derives userData — and
-# the single-instance lock — from this manifest. The private tree's build
-# overrides both values on the command line (see `builderIdentityArgs` in
-# `src/packaging.ts`), exactly like the appId/productName literals above.
+# the single-instance lock — from this manifest. The shared packaging module
+# supplies the same identity on every build.
 extraMetadata:
   name: songr
   productName: Songr

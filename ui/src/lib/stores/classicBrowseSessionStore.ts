@@ -78,7 +78,18 @@ export interface ClassicBrowseRoleTransaction {
 export interface ClassicBrowseSessionClient extends Readable<ClassicBrowseSessionState> {
 	claim(owner: ActiveClassicBrowseSessionOwner): ClassicBrowseSessionClaim;
 	release(claim: ClassicBrowseSessionClaim): void;
+	/** Transport loss: forget the cached session without a release emit. */
 	connectionLost(claim: ClassicBrowseSessionClaim): void;
+	/**
+	 * The server no longer honours the cached session even though this socket
+	 * never dropped — the Core re-paired, or the tab's mode lease idled out
+	 * overnight and was retired server-side. Same effect as `connectionLost`
+	 * (forget it, emit no release for a handle the server has already closed),
+	 * but reached from a failed read rather than a transport event, so the next
+	 * `claim.ready` acquires a live session instead of replaying a dead one.
+	 */
+	retireServerSession(retired: ClassicBrowseSessionRef): void;
+	invalidate(claim: ClassicBrowseSessionClaim, retired: ClassicBrowseSessionRef): void;
 	recover(claim: ClassicBrowseSessionClaim): Promise<ClassicBrowseSessionRef>;
 	isClaimCurrent(claim: ClassicBrowseSessionClaim): boolean;
 	isSessionCurrent(
@@ -372,9 +383,31 @@ export function createClassicBrowseSessionClient(
 		ownerEpoch += 1;
 		abandon(state.session, { release: true });
 	};
+	// Transport loss retires the current claim wholesale. Server notices and
+	// in-surface refusals below are narrower: only their exact handle may move
+	// the store, so a late old-generation notice cannot kill its replacement.
 	const connectionLost = (claim: ClassicBrowseSessionClaim): void => {
 		if (!ownsClaim(claim) || state.phase === 'none') return;
 		abandon(state.session);
+	};
+	const retireExact = (retired: ClassicBrowseSessionRef): void => {
+		if (
+			state.phase !== 'live' ||
+			state.session === null ||
+			state.session.handleId !== retired.handleId ||
+			state.session.generation !== retired.generation
+		) {
+			return;
+		}
+		abandon(retired);
+	};
+	const retireServerSession = retireExact;
+	const invalidate = (
+		claim: ClassicBrowseSessionClaim,
+		retired: ClassicBrowseSessionRef
+	): void => {
+		if (!ownsClaim(claim)) return;
+		retireExact(retired);
 	};
 	const recover = (claim: ClassicBrowseSessionClaim): Promise<ClassicBrowseSessionRef> => {
 		if (!ownsClaim(claim)) return Promise.reject(new ClassicBrowseSupersededError());
@@ -386,6 +419,8 @@ export function createClassicBrowseSessionClient(
 		claim,
 		release: releaseClaim,
 		connectionLost,
+		retireServerSession,
+		invalidate,
 		recover,
 		generation: () => state.lifecycleGeneration,
 		isClaimCurrent: ownsClaim,

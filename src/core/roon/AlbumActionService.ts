@@ -14,10 +14,13 @@ import {
   AlbumActionFailureCode,
   AlbumActionResolvedEvent,
   AlbumActionSemantic,
+  isAlbumActionReferenceRequest,
   normalizeAlbumActionBeginRequest,
   normalizeAlbumActionCancelRequest,
   normalizeAlbumActionExecuteRequest,
 } from "../../shared/albumActionContracts";
+import type { LibraryRowReference } from "../../shared/libraryRootsContracts";
+import type { LibraryActionSubject } from "../library/LibrarySource";
 import {
   BrowseOptions,
   BrowseResult,
@@ -27,14 +30,16 @@ import {
   AlbumActionBrowseHierarchy,
   AlbumActionResolutionError,
   AlbumActionResolverPort,
-  AlbumActionVersionSource,
+  AlbumActionPageSource,
   ResolvedAlbumAction,
+  ResolvedAlbumActions,
 } from "./AlbumActionResolver";
 import {
   ActionSessionAccess,
   ActionSessionHandle,
   BrowseSessionCoordinatorError,
   CoordinatedBrowseSession,
+  LibraryActionAnchor,
 } from "./BrowseSessionCoordinator";
 import { RoonTimeoutError } from "./errors";
 
@@ -82,7 +87,7 @@ export interface AlbumActionPageAuthority {
   readonly generation: number;
   readonly albumSignature: string;
   readonly retainedItemKey: string;
-  readonly source: Readonly<AlbumActionVersionSource>;
+  readonly source: Readonly<AlbumActionPageSource>;
 }
 
 export interface AlbumActionPagePort {
@@ -100,6 +105,21 @@ export interface AlbumActionPagePort {
   ): boolean;
 }
 
+/**
+ * The live library, as an action needs to see it.
+ *
+ * `.agents/plans/library-live-view.md` Slice 2. Two questions and nothing else:
+ * what does this reference name, and is it still the reference the reader is
+ * holding. Both are answered by the session that published it, because it is
+ * the only thing that knows.
+ */
+export interface AlbumActionLibraryPort {
+  resolveActionSubject(
+    ref: Readonly<LibraryRowReference>
+  ): Readonly<LibraryActionSubject>;
+  isActionSubjectCurrent(subject: Readonly<LibraryActionSubject>): boolean;
+}
+
 export interface AlbumActionCoordinatorPort {
   acquireAction(input: {
     coreId: string;
@@ -113,6 +133,11 @@ export interface AlbumActionCoordinatorPort {
     access: ActionSessionAccess,
     work: (session: CoordinatedBrowseSession) => Promise<T>
   ): Promise<T>;
+  runLibraryAction<T>(
+    access: ActionSessionAccess,
+    anchor: LibraryActionAnchor,
+    work: (session: CoordinatedBrowseSession) => Promise<T>
+  ): Promise<T>;
   claimActionExecute(access: ActionSessionAccess): boolean;
   executeAction(
     access: ActionSessionAccess,
@@ -121,9 +146,33 @@ export interface AlbumActionCoordinatorPort {
     },
     onIssued: () => void
   ): Promise<BrowseResult>;
+  executeLibraryAction(
+    access: ActionSessionAccess,
+    anchor: LibraryActionAnchor,
+    options: Omit<BrowseOptions, "multiSessionKey"> & {
+      multiSessionKey?: never;
+    },
+    onIssued: () => void
+  ): Promise<BrowseResult>;
   releaseAction(access: ActionSessionAccess): Promise<void>;
   quarantineAction(access: ActionSessionAccess): void;
 }
+
+/**
+ * What one operation is acting on, and therefore where it dispatches.
+ *
+ * A retained page and a live reference are two different kinds of authority
+ * over the same question — "is this still the thing the reader is looking at?"
+ * — so the operation carries whichever it was begun with and asks that one.
+ * There is no third state and no fallback between them: a request addresses a
+ * page or it addresses a reference.
+ */
+type AlbumActionAuthority =
+  | { readonly kind: "page"; readonly page: Readonly<AlbumActionPageAuthority> }
+  | {
+      readonly kind: "reference";
+      readonly subject: Readonly<LibraryActionSubject>;
+    };
 
 export interface AlbumActionServiceOptions {
   resolvingTtlMs?: number;
@@ -158,7 +207,7 @@ interface AlbumActionOperation {
   readonly topologyFingerprint: string;
   readonly access: ActionSessionAccess;
   readonly sink: AlbumActionEventSink;
-  readonly pageAuthority: Readonly<AlbumActionPageAuthority>;
+  readonly authority: AlbumActionAuthority;
   phase: OperationPhase;
   timer?: Timer;
   started: boolean;
@@ -205,6 +254,7 @@ export class AlbumActionService {
     private readonly zones: AlbumActionZonePort,
     private readonly resolver: AlbumActionResolverPort,
     private readonly logger: Logger,
+    private readonly library: AlbumActionLibraryPort,
     options: AlbumActionServiceOptions = {}
   ) {
     this.resolvingTtlMs =
@@ -215,6 +265,51 @@ export class AlbumActionService {
     this.now = options.now ?? Date.now;
     this.randomId = options.randomId ?? randomUUID;
     this.validateOptions();
+  }
+
+  /**
+   * Take the authority a request addresses, or refuse.
+   *
+   * A page request claims its retained version, exactly as before. A reference
+   * request resolves against the live library, which refuses `STALE_GENERATION`
+   * when the snapshot behind the reference has been retired — and that refusal
+   * is turned into a rejected begin, reported to the reader, never a quiet
+   * fallback to some other row.
+   */
+  private claimAuthority(
+    origin: AlbumActionOrigin,
+    request: AlbumActionBeginRequest
+  ): AlbumActionAuthority | null {
+    if (isAlbumActionReferenceRequest(request)) {
+      try {
+        return {
+          kind: "reference",
+          subject: this.library.resolveActionSubject(request.ref),
+        };
+      } catch (error) {
+        if (
+          error instanceof BrowseSessionCoordinatorError &&
+          (error.code === "STALE_GENERATION" || error.code === "SESSION_LOST")
+        ) {
+          return null;
+        }
+        throw error;
+      }
+    }
+    const page = this.pages.claimSelectedVersionAction(origin, {
+      pageId: request.pageId,
+      versionId: request.versionId,
+      tabId: request.tabId,
+      generation: request.generation,
+    });
+    return page ? { kind: "page", page } : null;
+  }
+
+  /** Whether the thing this operation is acting on is still the live one. */
+  private authorityCurrent(operation: AlbumActionOperation): boolean {
+    return operation.authority.kind === "reference"
+      ? this.library.isActionSubjectCurrent(operation.authority.subject)
+      : this.pages.isSelectedVersionActionCurrent(operation.authority.page);
   }
 
   public begin(
@@ -245,16 +340,13 @@ export class AlbumActionService {
     if (!topologyFingerprint) {
       return this.beginRejected("ZONE_NOT_FOUND", "The target zone is unavailable");
     }
-    const pageAuthority = this.pages.claimSelectedVersionAction(origin, {
-      pageId: request.pageId,
-      versionId: request.versionId,
-      tabId: request.tabId,
-      generation: request.generation,
-    });
-    if (!pageAuthority) {
+    const authority = this.claimAuthority(origin, request);
+    if (!authority) {
       return this.beginRejected(
         "SESSION_LOST",
-        "The selected album version is no longer current"
+        isAlbumActionReferenceRequest(request)
+          ? "That row is no longer part of the current library"
+          : "The selected album version is no longer current"
       );
     }
 
@@ -279,13 +371,27 @@ export class AlbumActionService {
         generation: request.generation,
       });
     } catch (error) {
-      return error instanceof BrowseSessionCoordinatorError &&
-        error.code === "BACKPRESSURE"
-        ? this.beginRejected("BACKPRESSURE", "Album action capacity is full")
-        : this.beginRejected(
-            "INVALID_REQUEST",
-            "The browse session cannot own this album action"
+      if (error instanceof BrowseSessionCoordinatorError) {
+        if (error.code === "BACKPRESSURE") {
+          return this.beginRejected(
+            "BACKPRESSURE",
+            "Album action capacity is full"
           );
+        }
+        if (
+          error.code === "STALE_GENERATION" ||
+          error.code === "SESSION_LOST"
+        ) {
+          return this.beginRejected(
+            "SESSION_LOST",
+            "The browse session is no longer current"
+          );
+        }
+      }
+      return this.beginRejected(
+        "INVALID_REQUEST",
+        "The browse session cannot own this album action"
+      );
     }
 
     const resolvingDeadlineAt = this.now() + this.resolvingTtlMs;
@@ -302,7 +408,7 @@ export class AlbumActionService {
         handle,
       }),
       sink,
-      pageAuthority,
+      authority,
       phase: "resolving",
       started: false,
       resolutionInFlight: false,
@@ -372,7 +478,7 @@ export class AlbumActionService {
       this.expireChoosing(operation);
       return { success: true, data: { claimed: false } };
     }
-    if (!this.pages.isSelectedVersionActionCurrent(operation.pageAuthority)) {
+    if (!this.authorityCurrent(operation)) {
       this.close(operation, false);
       return this.executeRejected(
         "ALBUM_UNRESOLVED",
@@ -429,7 +535,7 @@ export class AlbumActionService {
         "The target zone grouping changed"
       );
     }
-    if (!this.pages.isSelectedVersionActionCurrent(operation.pageAuthority)) {
+    if (!this.authorityCurrent(operation)) {
       this.close(operation, false);
       return this.executeRejected(
         "ALBUM_UNRESOLVED",
@@ -437,17 +543,31 @@ export class AlbumActionService {
       );
     }
     try {
-      await this.coordinator.executeAction(
-        operation.access,
-        {
-          hierarchy: binding.hierarchy,
-          zoneId: operation.request.zoneId,
-          itemKey: binding.itemKey,
-        },
-        () => {
-          operation.executeIssued = true;
-        }
-      );
+      const dispatchOptions = {
+        hierarchy: binding.hierarchy,
+        zoneId: operation.request.zoneId,
+        itemKey: binding.itemKey,
+      };
+      const onIssued = (): void => {
+        operation.executeIssued = true;
+      };
+      // The leaf's key belongs to whichever session found it, so the dispatch
+      // goes back to that session. For a live reference that is the library
+      // channel, anchored to the publication the reference was minted in — a
+      // refresh landing between the claim and here refuses the call rather
+      // than sending a key whose meaning has expired.
+      await (operation.authority.kind === "reference"
+        ? this.coordinator.executeLibraryAction(
+            operation.access,
+            operation.authority.subject.anchor,
+            dispatchOptions,
+            onIssued
+          )
+        : this.coordinator.executeAction(
+            operation.access,
+            dispatchOptions,
+            onIssued
+          ));
       if (
         !operation.executeIssued ||
         operation.coreInvalidated ||
@@ -539,20 +659,88 @@ export class AlbumActionService {
     void this.resolveOperation(operation);
   }
 
+  /**
+   * Ask Roon what can be done with the thing this operation names.
+   *
+   * Two sources, two paths, dispatched on the operation's own authority and
+   * never on anything read off a wire. A collection page re-walks the drill its
+   * row came from; a live reference is already the row, and only has to be
+   * browsed with a zone bound. Nothing here ever reads another surface's
+   * identity.
+   *
+   * WHERE EACH ONE RUNS, AND WHY IT DIFFERS. The page source runs on the action
+   * lease's own channel, because it finds its album by walking Roon from a root
+   * and any session can do that. The reference source runs on the library
+   * channel that minted it, because a Roon item key means nothing off the
+   * session it came from — and it runs there anchored to that channel's
+   * publication generation, so a snapshot retired mid-resolution refuses rather
+   * than resolves against whatever the key now names.
+   */
+  private resolveAgainstAuthority(
+    operation: AlbumActionOperation
+  ): Promise<ResolvedAlbumActions> {
+    const authority = operation.authority;
+    if (authority.kind === "reference") {
+      return this.coordinator.runLibraryAction(
+        operation.access,
+        authority.subject.anchor,
+        (session) =>
+          this.resolver.resolveReference(
+            this.guardedResolutionSession(operation, session),
+            {
+              itemKey: authority.subject.itemKey,
+              hierarchy: this.referenceHierarchy(authority.subject),
+              title: authority.subject.title,
+            },
+            operation.request.zoneId
+          )
+      );
+    }
+    const page = authority.page;
+    const request = operation.request;
+    const track = isAlbumActionReferenceRequest(request)
+      ? undefined
+      : request.track;
+    return this.coordinator.runAction(operation.access, (session) =>
+      this.resolver.resolveCollectionVersion(
+        this.guardedResolutionSession(operation, session),
+        page.source.source,
+        operation.request.zoneId,
+        track
+      )
+    );
+  }
+
+  /**
+   * The hierarchy a live reference's action leaves must be executed against.
+   *
+   * The library publishes references on the four hierarchies it reads — Roon's
+   * Artists, Albums, Genres and Composers roots — and a leaf found under one is
+   * only meaningful there. Anything else is a shape this service does not know
+   * how to execute, and it is refused rather than guessed at.
+   */
+  private referenceHierarchy(
+    subject: Readonly<LibraryActionSubject>
+  ): AlbumActionBrowseHierarchy {
+    if (
+      subject.hierarchy === "artists" ||
+      subject.hierarchy === "albums" ||
+      subject.hierarchy === "genres" ||
+      subject.hierarchy === "composers"
+    ) {
+      return subject.hierarchy;
+    }
+    throw new AlbumActionResolutionError(
+      "ACTION_PATH_NOT_FOUND",
+      "That row is not on a hierarchy this controller can act on"
+    );
+  }
+
   private async resolveOperation(operation: AlbumActionOperation): Promise<void> {
     try {
       this.assertResolutionAuthority(operation);
       operation.resolutionInFlight = true;
-      const resolved = await this.coordinator.runAction(
-        operation.access,
-        (session) =>
-          this.resolver.resolveSelectedVersion(
-            this.guardedResolutionSession(operation, session),
-            operation.pageAuthority.source,
-            operation.request.zoneId,
-            operation.request.track
-          )
-      );
+      const resolved = await this.resolveAgainstAuthority(operation);
       operation.resolutionInFlight = false;
       if (operation.closed || operation.phase !== "resolving") return;
       if (this.now() > operation.resolvingDeadlineAt) {
@@ -560,7 +748,10 @@ export class AlbumActionService {
         return;
       }
       this.assertResolutionAuthority(operation);
-      const bindings = this.bindResolvedActions(resolved.actions);
+      const bindings = this.bindResolvedActions(
+        resolved.actions,
+        this.executableHierarchies(operation)
+      );
       this.enterChoosing(operation, bindings);
     } catch (error) {
       operation.resolutionInFlight = false;
@@ -576,7 +767,7 @@ export class AlbumActionService {
       }
       if (
         error instanceof BrowseSessionCoordinatorError &&
-        error.code === "SESSION_LOST"
+        (error.code === "STALE_GENERATION" || error.code === "SESSION_LOST")
       ) {
         this.close(operation, true);
         this.emitFailure(
@@ -628,8 +819,25 @@ export class AlbumActionService {
     }
   }
 
+  /**
+   * The hierarchies this operation's leaves are allowed to have come from.
+   *
+   * For a live reference it is exactly one — the hierarchy the reference itself
+   * was published on — which is stricter than a fixed list could be: a leaf
+   * that surfaced on any other hierarchy is not the row the reader clicked. The
+   * page sources keep the list they have always had, unchanged.
+   */
+  private executableHierarchies(
+    operation: AlbumActionOperation
+  ): readonly AlbumActionBrowseHierarchy[] {
+    return operation.authority.kind === "reference"
+      ? [this.referenceHierarchy(operation.authority.subject)]
+      : ALBUM_ACTION_HIERARCHIES;
+  }
+
   private bindResolvedActions(
-    resolved: readonly ResolvedAlbumAction[]
+    resolved: readonly ResolvedAlbumAction[],
+    allowedHierarchies: readonly AlbumActionBrowseHierarchy[]
   ): ActionBinding[] {
     if (resolved.length === 0 || resolved.length > ALBUM_ACTION_MAX_CHOICES) {
       throw new AlbumActionResolutionError(
@@ -651,7 +859,7 @@ export class AlbumActionService {
         !ALBUM_ACTION_SEMANTICS.includes(action.semantic) ||
         typeof action.itemKey !== "string" ||
         action.itemKey.length === 0 ||
-        !ALBUM_ACTION_HIERARCHIES.includes(action.hierarchy) ||
+        !allowedHierarchies.includes(action.hierarchy) ||
         labels.has(action.label) ||
         itemKeys.has(action.itemKey)
       ) {
@@ -813,7 +1021,7 @@ export class AlbumActionService {
         "The target zone grouping changed during album action resolution"
       );
     }
-    if (!this.pages.isSelectedVersionActionCurrent(operation.pageAuthority)) {
+    if (!this.authorityCurrent(operation)) {
       throw new AlbumActionPhaseError(
         "SESSION_LOST",
         "The selected album version changed during action resolution"

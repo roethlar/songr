@@ -16,6 +16,7 @@ import {
   normalizeLibraryAlbumVersionsEvent,
   type LibraryAlbumCorrelation,
 } from "../libraryAlbumContracts";
+import { COLLECTION_DRILL_SOURCE_CONTRACT } from "../collectionDrillContracts";
 
 const REQUEST_ID = "request-01";
 const OPERATION_ID = "operation-01";
@@ -64,12 +65,117 @@ function failedEvent(patch: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * The artist is absent, not blank, when a page has none — the collection
+ * authority's whole reason for existing (Slice 8c). These pin the wire rule
+ * both directions: an omitted artist survives normalization, and an empty one
+ * never does.
+ */
+describe("a page with no artist", () => {
+  it("normalizes a resolved event that omits the artist entirely", () => {
+    const event = { ...resolvedEvent() } as Record<string, unknown>;
+    delete event.artist;
+    const normalized = normalizeLibraryAlbumResolvedEvent(event, correlation());
+    expect(normalized).not.toBeNull();
+    expect(normalized).not.toHaveProperty("artist");
+  });
+
+  it("normalizes a versions event that omits the artist entirely", () => {
+    const normalized = normalizeLibraryAlbumVersionsEvent(
+      {
+        requestId: REQUEST_ID,
+        operationId: OPERATION_ID,
+        generation: 4,
+        title: "Album",
+        versions: [version("version-01")],
+      },
+      correlation()
+    );
+    expect(normalized).not.toBeNull();
+    expect(normalized).not.toHaveProperty("artist");
+  });
+
+  it("refuses an empty artist on either event", () => {
+    expect(
+      normalizeLibraryAlbumResolvedEvent(
+        { ...resolvedEvent(), artist: "" },
+        correlation()
+      )
+    ).toBeNull();
+    expect(
+      normalizeLibraryAlbumVersionsEvent(
+        {
+          requestId: REQUEST_ID,
+          operationId: OPERATION_ID,
+          generation: 4,
+          artist: "",
+          title: "Album",
+          versions: [version("version-01")],
+        },
+        correlation()
+      )
+    ).toBeNull();
+  });
+});
+
+describe("a collection open that could not find its row", () => {
+  it("carries the refusing stage and the count the resolver observed", () => {
+    const normalized = normalizeLibraryAlbumFailedEvent(
+      failedEvent({
+        code: "ALBUM_AMBIGUOUS",
+        collectionFailure: { kind: "ambiguous", stage: "entry", matchCount: 2 },
+      }),
+      correlation()
+    );
+    expect(normalized?.collectionFailure).toEqual({
+      kind: "ambiguous",
+      stage: "entry",
+      matchCount: 2,
+    });
+  });
+
+  it("fails the whole event rather than dropping a detail that lies", () => {
+    expect(
+      normalizeLibraryAlbumFailedEvent(
+        failedEvent({
+          collectionFailure: {
+            kind: "missing",
+            stage: "collection",
+            matchCount: 3,
+          },
+        }),
+        correlation()
+      )
+    ).toBeNull();
+  });
+
+  it("leaves the field absent on every ordinary failure", () => {
+    const normalized = normalizeLibraryAlbumFailedEvent(
+      failedEvent(),
+      correlation()
+    );
+    expect(normalized).not.toBeNull();
+    expect(normalized).not.toHaveProperty("collectionFailure");
+  });
+});
+
 describe("library album open contracts", () => {
-  it("normalizes the exact keyless open request into a defensive copy", () => {
+  it("normalizes a collection open request into a defensive copy", () => {
     const source = {
       requestId: REQUEST_ID,
       tabId: "tab-01",
-      albumLocalId: ALBUM_ID,
+      target: {
+        kind: "collection",
+        locator: {
+          sourceContract: COLLECTION_DRILL_SOURCE_CONTRACT,
+          hierarchy: "genres",
+          collectionExactName: "Bright Machinery",
+          rendering: {
+            exactTitle: "Harbour Lantern",
+            exactCredit: "The Paper Fleet",
+          },
+        },
+      },
       generation: 4,
     };
     const normalized = normalizeLibraryAlbumOpenRequest(source);
@@ -77,14 +183,62 @@ describe("library album open contracts", () => {
     expect(normalized).not.toBe(source);
   });
 
+  it("rejects the retired catalog-album target", () => {
+    // The saved catalog model is gone (`.agents/plans/library-live-view.md`
+    // Slice 4) and with it the only way to name an album by a
+    // controller-minted local id. A client still sending one is refused
+    // outright rather than read past.
+    expect(
+      normalizeLibraryAlbumOpenRequest({
+        requestId: REQUEST_ID,
+        tabId: "tab-01",
+        target: { kind: "album", albumLocalId: ALBUM_ID },
+        generation: 4,
+      })
+    ).toBeNull();
+  });
+
+  it("refuses a collection target carrying anything beside its locator", () => {
+    expect(
+      normalizeLibraryAlbumOpenRequest({
+        requestId: REQUEST_ID,
+        tabId: "tab-01",
+        target: {
+          kind: "collection",
+          albumLocalId: ALBUM_ID,
+          locator: {
+          sourceContract: COLLECTION_DRILL_SOURCE_CONTRACT,
+          hierarchy: "genres",
+          collectionExactName: "Bright Machinery",
+          rendering: {
+            exactTitle: "Harbour Lantern",
+            exactCredit: "The Paper Fleet",
+          },
+        },
+        },
+        generation: 4,
+      })
+    ).toBeNull();
+  });
+
   it("rejects the retired chooser-candidate request shape", () => {
-    expect(normalizeLibraryAlbumOpenRequest({
-      requestId: REQUEST_ID,
-      tabId: "tab-01",
-      albumLocalId: ALBUM_ID,
-      generation: 4,
-      candidate: { title: "Album", artist: "Artist", editionText: "Remaster" },
-    })).toBeNull();
+    expect(
+      normalizeLibraryAlbumOpenRequest({
+        requestId: REQUEST_ID,
+        tabId: "tab-01",
+        target: { kind: "collection", locator: {
+          sourceContract: COLLECTION_DRILL_SOURCE_CONTRACT,
+          hierarchy: "genres",
+          collectionExactName: "Bright Machinery",
+          rendering: {
+            exactTitle: "Harbour Lantern",
+            exactCredit: "The Paper Fleet",
+          },
+        } },
+        generation: 4,
+        candidate: { title: "Album", artist: "Artist", editionText: "Remaster" },
+      })
+    ).toBeNull();
   });
 
   it.each([
@@ -94,18 +248,53 @@ describe("library album open contracts", () => {
       {
         requestId: REQUEST_ID,
         tabId: "tab-01",
-        albumLocalId: ALBUM_ID,
+        target: { kind: "collection", locator: {
+          sourceContract: COLLECTION_DRILL_SOURCE_CONTRACT,
+          hierarchy: "genres",
+          collectionExactName: "Bright Machinery",
+          rendering: {
+            exactTitle: "Harbour Lantern",
+            exactCredit: "The Paper Fleet",
+          },
+        } },
         generation: 4,
         extra: true,
       },
     ],
     [
-      "non-uuid album",
-      { requestId: REQUEST_ID, tabId: "tab-01", albumLocalId: "album", generation: 4 },
+      "unknown target kind",
+      {
+        requestId: REQUEST_ID,
+        tabId: "tab-01",
+        target: { kind: "genre", label: "Bright Machinery" },
+        generation: 4,
+      },
+    ],
+    [
+      "collection target with an unreadable locator",
+      {
+        requestId: REQUEST_ID,
+        tabId: "tab-01",
+        target: { kind: "collection", locator: { hierarchy: "genres" } },
+        generation: 4,
+      },
     ],
     [
       "negative generation",
-      { requestId: REQUEST_ID, tabId: "tab-01", albumLocalId: ALBUM_ID, generation: -1 },
+      {
+        requestId: REQUEST_ID,
+        tabId: "tab-01",
+        target: { kind: "collection", locator: {
+          sourceContract: COLLECTION_DRILL_SOURCE_CONTRACT,
+          hierarchy: "genres",
+          collectionExactName: "Bright Machinery",
+          rendering: {
+            exactTitle: "Harbour Lantern",
+            exactCredit: "The Paper Fleet",
+          },
+        } },
+        generation: -1,
+      },
     ],
   ])("rejects an invalid open request (%s)", (_label, value) => {
     expect(normalizeLibraryAlbumOpenRequest(value)).toBeNull();
@@ -287,6 +476,28 @@ describe("library album version page contracts", () => {
     );
     expect(
       normalizeLibraryAlbumVersionsEvent({ ...event, versions: oversized }, correlation())
+    ).toBeNull();
+  });
+
+  it("carries only the literal degraded marker and still rejects unknown keys", () => {
+    const event = {
+      requestId: REQUEST_ID,
+      operationId: OPERATION_ID,
+      generation: 4,
+      artist: "Artist",
+      title: "Album",
+      versions: [version("version-01")],
+    };
+    expect(
+      normalizeLibraryAlbumVersionsEvent({ ...event, degraded: true }, correlation())
+    ).toEqual({ ...event, degraded: true });
+    for (const degraded of [false, "true", 1, null]) {
+      expect(
+        normalizeLibraryAlbumVersionsEvent({ ...event, degraded }, correlation())
+      ).toEqual(event);
+    }
+    expect(
+      normalizeLibraryAlbumVersionsEvent({ ...event, stableKey: "10" }, correlation())
     ).toBeNull();
   });
 

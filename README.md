@@ -1,264 +1,73 @@
-<p align="center">
-  <img src="brand/songr-wordmark.svg" alt="Sǫngr" width="300">
-</p>
+# Songr
 
-<h1 align="center">Songr</h1>
+Web-based controller for a local Roon Core, built with Node.js + SvelteKit.
 
-<p align="center">A browser controller for your Roon Core.</p>
-
-<p align="center">
-  <a href="#desktop-app">Desktop app</a> ·
-  <a href="#install">Server install</a> ·
-  <a href="#configuration">Configuration</a> ·
-  <a href="#security">Security</a> ·
-  <a href="LICENSE">MIT</a>
-</p>
-
----
-
-Roon ships desktop and mobile control apps, but none for Linux. Songr fills
-that gap two ways, from one codebase: a **desktop app** you download and run
-like any other application, and a **self-hosted server** you point browsers
-at. Either way it pairs with your Core as a Roon extension, then gives you
-your library, search, transport, queue, and zones. No cloud, no account, no
-telemetry.
-
-Pick one:
-
-- **[Desktop app](#desktop-app)** — for using Songr on this computer. One
-  download, nothing else to run.
-- **[Server install](#install)** — for a Raspberry Pi, NAS, or any always-on
-  machine; every browser and tablet on the network gets the same controller.
+Download the desktop app or headless server from
+[GitHub Releases](https://github.com/roethlar/songr/releases/latest).
+Desktop packages are available through Homebrew (`roethlar/tap/songr`),
+Scoop (`roethlar` bucket, `songr`), AUR (`songr-bin`), and WinGet
+(`roethlar.Songr`). The headless server is `songr-server` on npm;
+Docker images are `ghcr.io/roethlar/songr:latest` and versioned `:vX.Y.Z` tags.
 
 ## Screenshots
 
-<p align="center">
-  <img src="screenshots/library-artists.png" alt="Artists scope with alphabetic jump rail" width="49%">
-  <img src="screenshots/library-albums.png" alt="Albums scope" width="49%">
-</p>
-<p align="center">
-  <img src="screenshots/search-palette.png" alt="Instant search palette" width="80%">
-</p>
+| | |
+|---|---|
+| ![Artists](product/screenshots/library-artists.png) | ![Albums](product/screenshots/library-albums.png) |
+| ![Instant search palette](product/screenshots/search-palette.png) | |
 
-## Features
+## What Works
 
-**Library.** Artists, Albums, and Genres scopes with alphabetic jump rails and
-per-scope sorting, a Recently played scope, and a Surprise me shuffle. Album
-sheets show full track listings with artwork. Density control switches between
-Compact and Normal, plus a layout tuned for a Raspberry Pi touchscreen.
+- Browse and search library with alphabetic jump lists, quick-play, and artwork caching
+- Search result drill-down uses an isolated Roon browse session and remaps fresh result keys after re-seeding
+- Real-time zone and now-playing updates via Socket.IO (hydrated on page load)
+- Transport controls: play/pause, previous/next, seek, volume
+- Queue: per-zone subscription, track listing with artwork, play-from-here, shuffle/loop/auto-radio
+- Global zone switching, persistent play bar with track/artist deep-links
+- System media controls and hardware media keys via the Media Session API (see below)
 
-The Library combines catalog-backed scopes with a **Browse** scope that walks
-your Core live, folder by folder. The catalog powers jump rails, sorting, and
-counts; Browse needs no index, so it is available immediately and remains the
-direct way to walk Roon's hierarchy.
+## System media controls and media keys
 
-**Search.** An instant palette — start typing anywhere — with drill-down into
-results. Search runs in an isolated browse session, so exploring a result never
-disturbs the page you came from.
+The selected zone's now-playing state is published to the browser's Media
+Session API: title, artist, album, artwork and position, with play, pause,
+next, previous and seek handlers that send the same socket commands the
+on-screen transport buttons send. In Chromium that feeds the OS media surface —
+MPRIS on Linux, System Media Transport Controls on Windows, Now Playing on
+macOS — so hardware media keys can drive Roon playback.
 
-**Playback.** Play, pause, previous, next, seek, and volume, with a persistent
-play bar carrying deep links to the current track and artist. Zone switching is
-global, and now-playing state streams over Socket.IO so every open browser stays
-in sync. Hardware media keys and the system's media panel follow the selected
-zone — always in the desktop app, and in Chromium-family browsers too.
+**Why the page plays a silent audio clip.** A controller plays no audio of its
+own, and metadata alone does not get a page onto the OS media surface. The
+Media Session spec is explicit that `playbackState` "MUST not affect media
+session routing", and the routing itself is the user agent's choice: Chromium
+selects the page holding audio focus, based on media elements that are
+potentially playing and *not muted*. So while a track is loaded in the selected
+zone, the page loops a generated clip of digital silence through one detached
+`<audio>` element. It is left unmuted at full volume on purpose — muting it
+would remove the player from the media session and defeat the point — and it
+carries no signal, so there is nothing to hear. The clip is 20 seconds long
+because Chromium treats very short media as a transient sound effect rather
+than as media worth a session. Browsers may refuse to start it until the page
+has seen a user gesture; it retries on the next click or keypress.
 
-**Queue.** Per-zone queue with artwork, play-from-here, shuffle, loop, and auto
-radio.
+**What is and is not verified.** The repository's Playwright suite proves in
+the pinned Chromium that the clip decodes and plays unmuted, that the metadata,
+artwork and position payloads are accepted, and that every action handler
+registers. Whether a given desktop actually routes its hardware media keys to
+the browser is a property of the browser build and the desktop environment, and
+no automated test can press a hardware key: MPRIS behaviour on Linux and the
+macOS Now Playing panel have not been verified in this repository.
 
-**Presentation.** A fixed OLED-black and gold interface with Compact, Normal,
-and Pi density controls, plus artwork cached to disk so browsing a large
-library stays quick.
+## Library
 
-## Desktop app
+The Library combines switchable scopes (Artists / Albums / Genres /
+Recently played / Favorites / Surprise me), a live Browse scope, instant
+palette search, per-scope sorts, and density control. Artist, album, genre,
+composer and track pages carry durable `/library/...` addresses that survive
+a reload, a fresh tab, and Back/Forward.
 
-The same controller in its own window, with hardware media keys and a
-first-run guide that finds your Core. Download the build for your
-platform from [Releases](https://github.com/roethlar/songr/releases):
-AppImage, deb, or rpm on Linux (x64 and arm64), dmg on macOS (Apple Silicon
-and Intel), or the Windows installer.
-
-- The app runs its own copy of the Songr server, privately, on your machine —
-  nothing else to install. Closing the window hides it rather than quitting,
-  so the music keeps playing; launch it again to bring the window back.
-- On desktops that show one, a tray icon offers play/pause, next, previous and
-  Quit. Not every Linux desktop has a system tray, so nothing depends on it.
-- To play audio **on the computer itself**, install Roon Labs' free
-  [Roon Bridge](https://roon.app/downloads) alongside (their official
-  download, all three platforms) — Songr is a controller, and Roon Bridge is
-  what makes the machine an audio zone in Roon. The app's first-run guide
-  walks through it, and you can skip it if you only control other zones.
-- The builds are currently unsigned, and recent macOS is strict about that:
-  if the app is blocked on first open, allow it under System Settings →
-  Privacy & Security → "Open Anyway"; if macOS calls the app "damaged"
-  (Apple Silicon does this to unsigned downloads), clear the quarantine flag
-  once with `xattr -dc /Applications/Songr.app`. Windows: SmartScreen →
-  "More info" → "Run anyway".
-- Advanced, off by default: under Settings → Desktop app → Open advanced
-  settings, the app can also serve browsers on your network (read
-  [Security](#security) first), or connect to an existing Songr server instead
-  of running its own. Without it the app serves only itself, on a private
-  port.
-
-A desktop user needs only the app. The server install below is the right
-shape when several people or devices share one Songr.
-
-## Install
-
-### Package managers
-
-The desktop app and the server are both packaged. Each tracks the latest
-release automatically.
-
-| Platform | Command |
-| --- | --- |
-| Arch Linux (AUR) | `yay -S songr-bin` — or any AUR helper |
-| macOS (Homebrew) | `brew install --cask roethlar/tap/songr` |
-| Windows (Scoop) | `scoop bucket add roethlar https://github.com/roethlar/scoop-bucket` then `scoop install roethlar/songr` |
-| Any (npm) | `npm install -g songr-server` then `songr-server` |
-
-The npm package is the **server**, not the desktop app: use it when you want
-Songr running headless for other devices to reach. The rest install the
-desktop app.
-
-Prefer a direct download, or on a distribution without one of the above? Both
-prebuilt options below need no source checkout either.
-
-**Prebuilt server.** Each release attaches `songr-server-<version>.tar.gz` —
-the compiled server with its dependencies, one tarball for any platform with
-[Node.js](https://nodejs.org) 22 or newer:
-
-```bash
-tar xzf songr-server-<version>.tar.gz
-cd songr-server-<version>
-node dist/index.js
-```
-
-Pairing state and caches land in `./config` and `./data` beside wherever you
-run it. Registering it as a service is up to you — or use the installers
-below, which do that from a source checkout.
-
-**Docker.** A prebuilt multi-arch image (amd64/arm64) is published with each
-release:
-
-```bash
-docker run -d --name songr -p 3333:3333 \
-  -v ./config:/app/config -v ./data:/app/data \
-  ghcr.io/roethlar/songr:latest
-```
-
-The source installers below build from a checkout, deploy to a system
-directory, and register a service that starts on boot. Run from the
-repository root.
-
-### Linux
-
-```bash
-sudo ./scripts/install.sh
-```
-
-Options: `--port PORT`, `--install-dir DIR` (default: `/opt/songr`),
-`--user USER` (default: `songr`), `--reinstall`, `--no-start`
-
-### macOS
-
-```bash
-sudo ./scripts/install-macos.sh
-```
-
-Options: `--port PORT`, `--install-dir DIR` (default: `/opt/songr`),
-`--reinstall`, `--no-start`
-
-Installs as a launchd daemon. Logs at `/Library/Logs/Songr/`.
-
-### Windows
-
-Requires [NSSM](https://nssm.cc/) (`winget install nssm` or
-`choco install nssm`). Run in an elevated PowerShell:
-
-```powershell
-.\scripts\install-windows.ps1
-```
-
-Options: `-Port`, `-InstallDir` (default: `C:\Program Files\Songr`),
-`-Reinstall`, `-NoStart`
-
-### Docker (published image)
-
-```bash
-docker run -d --name songr --network host \
-  -v "$PWD/config":/app/config -v "$PWD/data":/app/data \
-  ghcr.io/roethlar/songr:latest
-```
-
-Host networking is required on Linux — Roon Core discovery uses
-mDNS/multicast, which does not cross Docker's default bridge network.
-Every setting has a working default; pass `-e PORT=…` etc. to override.
-
-### Docker (from source)
-
-```bash
-cp .env.example .env   # optional — only to override defaults
-docker compose build
-docker compose up -d
-```
-
-The `./config/` and `./data/` volumes persist the pairing token, artwork cache,
-and Recently played history across restarts. If you override a persistence path
-to somewhere outside those directories, mount that location separately.
-
-## Pairing
-
-On first run, open Roon → Settings → Extensions and enable **Songr (your machine's name)** — each Songr instance registers under the name of the machine it runs on, so several installs stay tellable-apart.
-
-Roon's pairing state — the paired core id plus its per-core token map — is
-written to `ROON_TOKEN_PATH` with file mode `0o600`, under a directory created
-with mode `0o700`. Reconnection is automatic on later starts.
-
-### First run: the library indexes in the background
-
-Once paired, Songr indexes your library from the Core. Until that finishes the
-Library view says so — "Showing a limited library listing while the catalog
-prepares" — and shows a reduced listing with approximate counts and album
-actions disabled. **This is normal and it clears itself.** How long it takes
-scales with library size: seconds for a small collection, a few minutes for
-tens of thousands of albums.
-
-Nothing is missing or misconfigured while that notice is up, and there is no
-setting to change. If you would rather not wait, open **Browse** in the Library
-bar — it reads your Core's hierarchy live and is usable immediately.
-
-## Configuration
-
-Copy `.env.example` to `.env` and adjust as needed. Every value has a working
-default; a stock install needs no configuration at all.
-
-| Variable | Description | Default |
-|---|---|---|
-| `HOST` | Bind address. `0.0.0.0` reaches the LAN; `127.0.0.1` is localhost-only (recommended behind a reverse proxy) | `0.0.0.0` |
-| `PORT` | HTTP port, serving both API and UI | `3333` |
-| `LOG_LEVEL` | Pino log level | `info` |
-| `ROON_TOKEN_PATH` | Pairing-state file | `./config/roon-token.json` |
-| `IMAGE_CACHE_PATH` | Artwork disk cache | `./data/image-cache` |
-| `IMAGE_CACHE_MAX_BYTES` | Cache cap in bytes; LRU eviction past it | `10737418240` (10 GB) |
-| `RECENTLY_PLAYED_PATH` | Recently-played persistence file | `./data/recently-played.json` |
-| `RECENTLY_PLAYED_CAP` | Entries kept in the rolling list (1–1000) | `50` |
-| `FAVORITES_PATH` | Curated favorites file | `./data/favorites.json` |
-| `CLIENT_ORIGIN` | Comma-separated Socket.IO CORS allowlist, or `*` for any | `*` |
-| `TRUST_PROXY` | Set `true` behind a reverse proxy so rate limits see the real client IP | unset |
-
-## Security
-
-Read this before exposing Songr beyond your own network.
-
-- **There is no built-in authentication.** The default `HOST=0.0.0.0` binds every
-  interface, so anyone who can reach the port can browse the library and control
-  playback. For a single-purpose appliance on a trusted home LAN that is the
-  intended trade-off. For anything broader, bind `127.0.0.1` and front it with a
-  reverse proxy that adds authentication, and set `CLIENT_ORIGIN` to your own
-  origin instead of `*`.
-- Responses carry Helmet defaults, including a content security policy. The
-  `/api/*` surface is rate-limited to 600 requests per minute per IP.
-- The pairing token is written `0o600` inside a `0o700` directory.
+Everything the Library shows comes from Roon's own public Browse API. Songr
+reads nothing from the Core that Roon does not publish, and it holds no
+library data of its own between runs.
 
 ## Upgrading
 
@@ -266,61 +75,140 @@ Read this before exposing Songr beyond your own network.
 git pull && sudo ./scripts/install.sh --reinstall
 ```
 
-That is the whole upgrade. It rebuilds backend and frontend, preserves pairing,
-configuration, and data, then restarts the service. Roon dependencies are
-vendored at pinned commits, so a plain `npm ci` works without extra flags.
+That is the whole upgrade. The install rebuilds the backend and frontend,
+preserves pairing/config/data, and restarts the service. Dependencies are
+vendored in the repository, so a plain `npm ci` works everywhere — no git
+sourcing, no flags.
 
-## Local development
+## Queue API Limitation
 
-```bash
-./scripts/run-local.sh        # installs dependencies, starts both servers
+Roon's public transport API (`node-roon-api-transport`) does not expose remove/reorder endpoints. All currently available queue controls are implemented.
+
+## Tech Stack
+
+- **Backend**: Node.js, TypeScript, Express, Socket.IO
+- **Roon**: `node-roon-api`, `node-roon-api-transport`, `node-roon-api-browse`, `node-roon-api-image`
+- **Frontend**: SvelteKit (static adapter — no SSR required)
+- **Logging**: Pino
+
+## Repository Layout
+
+```
+src/       Backend TypeScript source
+ui/        SvelteKit frontend (built to ui/build/)
+vendor/    Vendored Roon dependencies (node-roon-api*, pinned commits)
+scripts/   Installer scripts (Linux, macOS, Windows)
+deploy/    Systemd service template
+config/    Roon pairing token (gitignored)
+Dockerfile Multi-stage build: backend + frontend → single image/port
 ```
 
-Or by hand:
+## Configuration
+
+Copy `.env.example` to `.env` and adjust as needed.
+
+| Variable | Description | Default |
+|---|---|---|
+| `HOST` | Bind address. `0.0.0.0` makes the UI reachable on the LAN; set `127.0.0.1` for localhost-only (recommended behind a reverse proxy) | `0.0.0.0` |
+| `PORT` | HTTP port (serves API + UI) | `3333` |
+| `LOG_LEVEL` | Pino log level. `trace` enables raw Roon payload dumps for debugging | `info` |
+| `ROON_TOKEN_PATH` | Roon pairing-state file (paired_core_id + per-core tokens) | `./config/roon-token.json` |
+| `IMAGE_CACHE_PATH` | Artwork disk cache | `./data/image-cache` |
+| `CATALOG_PATH` | Where an earlier install's saved catalog store sits, so it can be removed at start; Songr keeps no library model on disk (the legacy `TIMELINE_CATALOG_PATH` key is still honored) | `./data/catalog` |
+| `IMAGE_CACHE_MAX_BYTES` | Disk cache cap (bytes); LRU eviction when exceeded | `10737418240` (10 GB) |
+| `RECENTLY_PLAYED_PATH` | JSON file for "Recently played on this controller" persistence | `./data/recently-played.json` |
+| `RECENTLY_PLAYED_CAP` | Max entries kept in the rolling list (1-1000) | `50` |
+| `FAVORITES_PATH` | JSON file for user-curated favorites (tracks/albums/artists) | `./data/favorites.json` |
+| `CLIENT_ORIGIN` | Comma-separated Socket.IO CORS allowlist, or `*` for any | `*` |
+| `TRUST_PROXY` | Set to `true` when fronted by a reverse proxy so rate limits identify the real client IP | unset |
+
+### Security notes
+
+- The default `HOST=0.0.0.0` exposes the controller on every interface. There is **no built-in authentication** — anyone reachable on the network can browse, search, and control playback. For a single-purpose home appliance on a trusted LAN this is intentional. For anything broader, bind to `127.0.0.1` and front with a reverse proxy that adds auth, or set `CLIENT_ORIGIN` to your specific frontend origin(s).
+- HTTP responses include Helmet defaults (CSP, `X-Content-Type-Options`, etc.). The `/api/*` surface is rate-limited to 600 requests/minute per IP.
+- The Roon pairing token is written with file mode `0o600` under a directory created with mode `0o700`.
+
+## Install
+
+Each installer builds from source, deploys to a system directory, and registers a service that starts on boot. Run from the repository root.
+
+### Linux
+
+```bash
+sudo ./scripts/install.sh
+```
+
+Options: `--port PORT`, `--install-dir DIR` (default: `/opt/roon-controller`), `--user USER` (default: `roon`), `--reinstall`, `--no-start`
+
+### macOS
+
+```bash
+sudo ./scripts/install-macos.sh
+```
+
+Options: `--port PORT`, `--install-dir DIR` (default: `/opt/roon-controller`), `--reinstall`, `--no-start`
+
+Installs as a launchd daemon. Logs at `/Library/Logs/RoonController/`.
+
+### Windows
+
+Requires [NSSM](https://nssm.cc/) (`winget install nssm` or `choco install nssm`). Run in an elevated PowerShell:
+
+```powershell
+.\scripts\install-windows.ps1
+```
+
+Options: `-Port`, `-InstallDir` (default: `C:\Program Files\RoonController`), `-Reinstall`, `-NoStart`
+
+### Docker
+
+```bash
+cp .env.example .env   # optional — only to override defaults
+docker compose build
+docker compose up -d
+```
+
+With the default paths, the `./config/` and `./data/` volumes persist the Roon
+pairing token, artwork cache, Recently Played history, and
+Favorites across container restarts. If you override any persistence path to a
+location outside those directories, mount that location separately.
+
+## Local Development
+
+```bash
+./scripts/run-local.sh        # installs deps and starts both servers
+```
+
+Or manually:
 
 ```bash
 npm install && npm run dev                        # backend on :3333
-cd ui && npm install && npm run dev -- --host     # frontend on :5173, proxies /api
+cd ui && npm install && npm run dev -- --host     # frontend on :5173 (proxies /api → :3333)
 ```
 
-Verification:
+## Validation
 
 ```bash
-npm run build && npm test -- --runInBand && npm run lint
-npm --prefix ui run check && npm --prefix ui test -- --run && npm --prefix ui run build
+npm run build
+npm test -- --runInBand
+npm run lint
+npm --prefix ui run check
+npm --prefix ui test
+npm --prefix ui run build
 ```
 
-## Tech stack
+## Pairing
 
-Node.js, TypeScript, Express, Socket.IO, and Pino on the backend. SvelteKit with
-the static adapter on the frontend — no SSR. Roon integration uses the official
-extension APIs (`node-roon-api` with its transport, browse, and image modules),
-vendored at pinned commits.
+On first run: Roon → Settings → Extensions → enable **Songr (your machine's name)**
+(installs paired before mid-2026 may still show the older name "Custom Roon
+Controller").
 
-## Known limitations
+Roon's pairing state — `paired_core_id` plus a per-core token map — is persisted to `ROON_TOKEN_PATH` (mode `0o600`, atomic write). Reconnect is automatic on subsequent starts.
 
-- Roon's public transport API exposes no queue remove or reorder operation, so
-  Songr implements every queue control that API offers and no more.
-- Playback is controlled through your Core; Songr is a controller, not an
-  endpoint, and does not output audio itself.
+Older builds accidentally let `node-roon-api` write `config.json` in the working directory. On first run, an existing `config.json` in the cwd is migrated to `ROON_TOKEN_PATH` and the cwd copy removed. No action required from you.
 
-## About the name
+## Handoff
 
-*Sǫngr* is Old Norse for "song". The mark is the name in Younger Futhark runes,
-ᛋᚬᚾᚴᚱ, drawn as original geometry rather than set in a runic font. The app styles
-it `Sǫngr`; everything machine-facing uses the plain ASCII `songr`.
-
-## Support
-
-Songr is free and open source. If it is useful to you, you can support it on
-[GitHub Sponsors](https://github.com/sponsors/roethlar) or
-[Ko-fi](https://ko-fi.com/michaelcoelho).
-
-## License
-
-[MIT](LICENSE).
-
-Songr is an independent project and is not affiliated with, endorsed by, or
-sponsored by Roon Labs LLC. "Roon" is a trademark of Roon Labs LLC, used here
-only to describe what this software interoperates with.
-
+Read `AGENTS.md` (canonical guidance) and `.agents/state.md` (current state, active
+work, next steps) before continuing work. Durable decisions live in
+`.agents/decisions.md`. Update `.agents/state.md` at the end of a session.

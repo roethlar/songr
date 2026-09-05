@@ -22,7 +22,7 @@ import { setZonesSnapshot } from '$lib/stores/zonesStore';
 import { setSelectedZone } from '$lib/stores/selectedZoneStore';
 import { clearCommandFeedback } from '$lib/stores/commandFeedbackStore';
 import { startSpacebarPlayPause } from '$lib/media/spacebarPlayPause';
-import { mountMode, readyState } from './unifiedLibraryModeHarness';
+import { harnessLibrary, mountMode } from './unifiedLibraryModeHarness';
 
 const socket = createFakeSocket();
 
@@ -58,7 +58,7 @@ describe('UnifiedLibraryMode — Space during the palette-open race', () => {
 	});
 
 	it('"a" then an immediate Space opens the palette without toggling playback', async () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		// Same-turn sequence, no flush in between: exactly a fast typist. The
 		// palette state has flipped but its dialog is not in the DOM yet and
@@ -90,7 +90,7 @@ describe('UnifiedLibraryMode — Space during the palette-open race', () => {
 	});
 
 	it('Space with the palette closed still toggles playback', async () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		window.dispatchEvent(
 			new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })

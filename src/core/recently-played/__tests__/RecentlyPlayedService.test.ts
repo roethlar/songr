@@ -1374,6 +1374,100 @@ describe("RecentlyPlayedService", () => {
     });
   });
 
+  /**
+   * The readiness a reader needs when the empty list and the loaded one are
+   * indistinguishable to it (finding b6c-1). The pre-binding sweep is that
+   * reader: Roon discovery starts before this service's disk read finishes.
+   */
+  describe("whenStarted()", () => {
+    it("does not resolve until the persisted list is in hand", async () => {
+      const transport = new FakeTransport();
+      const filePath = await makeTmpPath();
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          entries: [
+            {
+              zone_id: "zone-a",
+              played_at: new Date().toISOString(),
+              title: "Peace Piece",
+              artist: "Bill Evans",
+              album: "Everybody Digs Bill Evans",
+            },
+          ],
+          generation: 3,
+        }),
+        "utf-8"
+      );
+      const svc = new RecentlyPlayedService(
+        transport as unknown as TransportService,
+        mockLogger,
+        { filePath }
+      );
+
+      const started = svc.start();
+      // The window the finding is about: started, not loaded, and the list
+      // reads empty in a way no caller can tell from "nothing was played".
+      expect(svc.getEntries()).toEqual([]);
+
+      await svc.whenStarted();
+
+      expect(svc.getEntries().map((e) => e.artist)).toEqual(["Bill Evans"]);
+      await started;
+    });
+
+    it("resolves for a service nobody started, because there is no load to wait for", async () => {
+      const transport = new FakeTransport();
+      const filePath = await makeTmpPath();
+      const svc = new RecentlyPlayedService(
+        transport as unknown as TransportService,
+        mockLogger,
+        { filePath }
+      );
+
+      await expect(svc.whenStarted()).resolves.toBeUndefined();
+    });
+
+    it("does not start the service it is asked about", async () => {
+      // A reader waiting on the list must not be able to re-attach a
+      // now-playing listener the host has just detached.
+      const transport = new FakeTransport();
+      const filePath = await makeTmpPath();
+      const svc = new RecentlyPlayedService(
+        transport as unknown as TransportService,
+        mockLogger,
+        { filePath }
+      );
+      await svc.start();
+      svc.stop();
+
+      await svc.whenStarted();
+      transport.fireNowPlaying("zone-a", nowPlaying({ title: "After" }));
+      await flushWrites(svc);
+
+      expect(svc.getEntries()).toEqual([]);
+    });
+
+    it("resolves rather than rejecting when the load could not be trusted", async () => {
+      // Degraded startup is still a finished one, and a reader that waited
+      // gets the same answer the service has: nothing.
+      const transport = new FakeTransport();
+      const filePath = await makeTmpPath();
+      await fs.writeFile(filePath, "{ not json", "utf-8");
+      const svc = new RecentlyPlayedService(
+        transport as unknown as TransportService,
+        mockLogger,
+        { filePath }
+      );
+
+      void svc.start();
+
+      await expect(svc.whenStarted()).resolves.toBeUndefined();
+      expect(svc.isDegraded()).toBe(true);
+      expect(svc.getEntries()).toEqual([]);
+    });
+  });
+
   describe("stop()", () => {
     it("detaches the now-playing listener", async () => {
       const transport = new FakeTransport();

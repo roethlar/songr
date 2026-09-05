@@ -73,7 +73,7 @@ Transport.prototype.close = function() {
         this.ws = undefined;
     }
 
-    if (!this._onclosecalled && this._isonopencalled) {
+    if (!this._onclosecalled) {
         this._onclosecalled = true;
         this.onclose();
     }

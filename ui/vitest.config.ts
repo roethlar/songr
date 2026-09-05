@@ -2,7 +2,6 @@ import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import fs from 'node:fs';
 import path from 'node:path';
-import { resolveLibraryScopeSlotsModule } from './src/lib/libraryFeatures/resolveScopeSlots.js';
 
 // Vitest config kept separate from vite.config.ts so the SvelteKit dev
 // server doesn't try to load the test setup. The Svelte plugin compiles
@@ -30,10 +29,7 @@ export default defineConfig({
 		alias: {
 			$app: path.resolve('./src/test/app-stubs'),
 			$lib: path.resolve('./src/lib'),
-			'@shared': path.resolve('../src/shared'),
-			// Resolved by the same function svelte.config.js uses, so the suite
-			// sees exactly the slots the build would.
-			'@libraryFeatures': resolveLibraryScopeSlotsModule()
+			'@shared': path.resolve('../src/shared')
 		},
 		// Tell vite to use the browser conditions when resolving Svelte
 		// packages, so component tests get the browser entry points.

@@ -1,12 +1,5 @@
 /**
  * Shared mount harness for the `UnifiedLibraryMode` component tests.
- *
- * Extracted so the public suite (`__tests__/UnifiedLibraryMode.test.ts`) and the
- * extended-scope suite that lives behind the wall
- * (`../native/__tests__/UnifiedLibraryModeExtendedScopes.test.ts`) mount the
- * component exactly the same way. The harness itself names nothing behind the
- * wall: it is part of the application proper and survives the extended library
- * views being absent from a build.
  */
 import { vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/svelte';
@@ -23,33 +16,36 @@ import {
 	buildUnifiedRootPageState
 } from '$lib/libraryPageState';
 import type { LibraryView } from '$lib/stores/libraryViewStore';
-import {
-	CATALOG_CAPABILITIES,
-	BROWSE_FALLBACK_CAPABILITIES,
-	INCOMPLETE_ARTIST_COUNTS_CAPABILITIES,
-	type LibraryAlbumEntry,
-	type LibraryArtistEntry,
-	type LibraryCapabilities,
-	type LibraryIndexState,
-	type libraryIndexStore
-} from '$lib/stores/libraryIndexStore';
+import { compareLibrarySearchKeys, type LetterBucket } from '$lib/libraryEntries';
 import type {
 	LibraryAlbumController,
 	LibraryAlbumState
 } from '$lib/library/LibraryAlbumController';
-import type { EditorialItemController } from '$lib/library/EditorialItemController';
-import type { CompositionBrowseController } from '$lib/library/CompositionBrowseController';
+import {
+	liveAlbumEntry,
+	liveArtistEntry,
+	type LibraryRootsState
+} from '$lib/stores/libraryRootsStore';
+import type { LibraryRootRow, LibraryRowReference } from '@shared/libraryRootsContracts';
+import {
+	LIBRARY_OPEN_CONTRACT,
+	type LibraryLevelRow,
+	type LibraryNodeKind,
+	type LibraryOpenResponse
+} from '@shared/libraryOpenContracts';
 import { UnifiedSongActionController } from '$lib/library/UnifiedSongActionController';
-import { PublicSongActionController } from '$lib/library/PublicSongActionController';
 import type {
 	UnifiedBrowseActionController,
 	UnifiedBrowseController
 } from '$lib/library/UnifiedBrowseController';
-import type { AddFavoriteRequest } from '@shared/types';
+import type { AddFavoriteRequest, CoreStatusResponse } from '@shared/types';
 import type { FavoritesState } from '$lib/stores/favoritesStore';
-import type { PublicSongResolverClient } from '$lib/publicSongResolverClient';
 import type { UnifiedSearchClient } from '$lib/unifiedSearchClient';
-import type { AlbumActionController } from '$lib/library/AlbumActionController';
+import type {
+	AlbumActionBeginInput,
+	AlbumActionController,
+	AlbumActionState
+} from '$lib/library/AlbumActionController';
 import { clearPendingLibraryPageStateWrite } from '$lib/libraryPageNavigation';
 import {
 	__back,
@@ -64,18 +60,7 @@ import type {
 	unifiedGenresStore,
 	NamedCountEntry
 } from '$lib/stores/unifiedNamedCountsStore';
-import type { unifiedDrillStore, DrillAlbum } from '$lib/stores/unifiedDrillStore';
 import type { recentlyPlayedStore } from '$lib/stores/recentlyPlayedStore';
-import type {
-	MostPlayedState,
-	PlaylistsState,
-	ResolvedLibraryScopeSlots
-} from '@libraryFeatures';
-import type {
-	PlaylistContentsResponse,
-	PlaylistSummaryView
-} from '@shared/playlistContracts';
-import type { PublicSongResolution } from '@shared/publicSongResolverContracts';
 import { setZonesSnapshot } from '$lib/stores/zonesStore';
 import type {
 	ClassicBrowseSessionClaim,
@@ -86,10 +71,9 @@ import type {
 	unifiedPaletteSearchStore
 } from '$lib/stores/unifiedPaletteSearchStore';
 import { createUnifiedLibraryPrefsStore } from '$lib/stores/unifiedLibraryPrefsStore';
-import { syntheticStatus } from '$lib/stores/__tests__/libraryIndexFixtures';
+import { collectionDrillRenderingOf } from '@shared/collectionDrillContracts';
 
 export type SessionClient = typeof classicBrowseSessionClient;
-export type IndexStore = typeof libraryIndexStore;
 
 export function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 	let resolve!: (value: T) => void;
@@ -105,31 +89,47 @@ export function fakeSessionClient(): {
 	release: ReturnType<typeof vi.fn>;
 	recover: ReturnType<typeof vi.fn>;
 	connectionLost: ReturnType<typeof vi.fn>;
+	invalidate: ReturnType<typeof vi.fn>;
 } {
 	let claimId = 0;
+	// The real client re-acquires after an abandon, so a forgotten session comes
+	// back with a new generation. `ready` is a getter for the same reason it is
+	// one on the real claim: every read asks the current lifecycle.
+	let sessionGeneration = 0;
 	const claim = vi.fn(() => {
 		claimId += 1;
+		sessionGeneration += 1;
 		return {
 			owner: 'unified-mode',
 			claimId,
-			ready: Promise.resolve({ handleId: `h-${claimId}`, generation: claimId })
+			get ready() {
+				return Promise.resolve({
+					handleId: `h-${sessionGeneration}`,
+					generation: sessionGeneration
+				});
+			}
 		} as unknown as ClassicBrowseSessionClaim;
 	});
 	const release = vi.fn();
 	const recover = vi.fn(async (activeClaim: ClassicBrowseSessionClaim) => activeClaim.ready);
 	const connectionLost = vi.fn();
+	const invalidate = vi.fn(() => {
+		sessionGeneration += 1;
+	});
 	return {
 		client: {
 			claim,
 			release,
 			recover,
 			connectionLost,
+			invalidate,
 			isClaimCurrent: vi.fn(() => true)
 		} as unknown as SessionClient,
 		claim,
 		release,
 		recover,
-		connectionLost
+		connectionLost,
+		invalidate
 	};
 }
 
@@ -152,79 +152,226 @@ export function fakeConnectionSocket() {
 	};
 }
 
-export function artistEntries(count: number): LibraryArtistEntry[] {
-	const letters = 'abcdefghijklmnopqrstuvwxyz';
-	return Array.from({ length: count }, (_, i) => {
-		const name = `${letters[i % letters.length]} artist ${i}`;
-		return {
-			id: `art-${i}`,
-			name,
-			searchKey: name,
-			albumCount: 1,
-			countComplete: true,
-			catalogLocalId: `art-${i}`
-		};
-	});
+// ---- The live view of Roon, as the harness fakes it ------------------
+//
+// Roon's roots are the ONE description of the fake library since Slice 4
+// deleted the saved catalog. A test states the library once, as the rows Roon
+// would render, and the harness derives both roots and the levels beneath them
+// — so a row click exercises the live path the shipped surface takes, rather
+// than a second path invented for tests.
+
+export const HARNESS_LIVE_GENERATION = 'gen-1';
+
+function liveRef(token: string, generation = HARNESS_LIVE_GENERATION): LibraryRowReference {
+	return { generation, token };
 }
 
-export function bucketsFor(entries: readonly { searchKey: string }[]): {
-	letter: string;
-	start: number;
-	count: number;
-}[] {
-	const buckets: { letter: string; start: number; count: number }[] = [];
-	entries.forEach((entry, i) => {
-		const letter = entry.searchKey[0].toUpperCase();
-		const last = buckets.at(-1);
-		if (last && last.letter === letter) last.count += 1;
-		else buckets.push({ letter, start: i, count: 1 });
+/** One artist's albums in the fake Roon, keyed by the artist's own title. */
+export interface HarnessLiveAlbum {
+	readonly title: string;
+	readonly credit: string;
+	/** Roon's own track titles, in Roon's own order. */
+	readonly tracks: readonly string[];
+	/** Whether Roon renders a whole-album verb row on this album's level. */
+	readonly verbRows?: number;
+}
+
+export interface HarnessLiveLibrary {
+	readonly generation: string;
+	readonly artists: readonly {
+		readonly name: string;
+		readonly albums: readonly HarnessLiveAlbum[];
+		/**
+		 * What Roon writes on this row, when it differs from the album count.
+		 * `null` means Roon wrote no count at all — a row with no subtitle,
+		 * which is a different thing from a row Roon counted as zero.
+		 */
+		readonly albumCount?: number | null;
+	}[];
+	/** The Albums root, when a test needs one; defaults to every artist's albums. */
+	readonly albums?: readonly HarnessLiveAlbum[];
+}
+
+function albumToken(artist: string | null, album: HarnessLiveAlbum): string {
+	return `album:${artist ?? '*'}:${album.title}:${album.credit}`;
+}
+
+export function liveRootsState(library: HarnessLiveLibrary): LibraryRootsState {
+	const generation = library.generation;
+	const artistRows: LibraryRootRow[] = library.artists.map((artist) => {
+		const count = artist.albumCount === undefined ? artist.albums.length : artist.albumCount;
+		return {
+			ref: liveRef(`artist:${artist.name}`, generation),
+			title: artist.name,
+			...(count === null ? {} : { subtitle: `${count} Albums` })
+		};
 	});
+	const albumSource =
+		library.albums ?? library.artists.flatMap((artist) => artist.albums);
+	const albumRows: LibraryRootRow[] = albumSource.map((album) => ({
+		ref: liveRef(albumToken(null, album), generation),
+		title: album.title,
+		subtitle: album.credit
+	}));
+	// Rendered by the shipped renderers, sorted and bucketed the way the store
+	// does it, so a test reads what the surface would actually be handed.
+	const artists = [...artistRows]
+		.map(liveArtistEntry)
+		.sort((left, right) => compareLibrarySearchKeys(left.searchKey, right.searchKey));
+	const albums = [...albumRows]
+		.map(liveAlbumEntry)
+		.sort((left, right) => compareLibrarySearchKeys(left.searchKey, right.searchKey));
+	return {
+		phase: 'ready',
+		generation,
+		coreId: 'core-a',
+		readAt: '2026-09-03T00:00:00.000Z',
+		artists,
+		albums,
+		artistRows,
+		albumRows,
+		artistBuckets: harnessBuckets(artists),
+		albumBuckets: harnessBuckets(albums),
+		artistCount: artistRows.length,
+		albumCount: albumRows.length,
+		unavailable: null,
+		error: null,
+		retirementRevision: 0,
+		retirementReason: null
+	};
+}
+
+/** The letter buckets the roots store computes, over the same sort keys. */
+function harnessBuckets(entries: readonly { searchKey: string }[]): LetterBucket[] {
+	const buckets: LetterBucket[] = [];
+	for (const [index, entry] of entries.entries()) {
+		const first = entry.searchKey.codePointAt(0);
+		const letter =
+			first !== undefined && first >= 0x61 && first <= 0x7a
+				? String.fromCodePoint(first - 0x20)
+				: '#';
+		const last = buckets[buckets.length - 1];
+		if (last && last.letter === letter) last.count += 1;
+		else buckets.push({ letter, start: index, count: 1 });
+	}
 	return buckets;
 }
 
-export function idleState(): LibraryIndexState {
-	return {
-		phase: 'idle',
-		source: null,
-		coreId: null,
-		revision: null,
-		status: null,
-		artists: [],
-		albums: [],
-		artistBuckets: [],
-		albumBuckets: [],
-		capabilities: CATALOG_CAPABILITIES,
-		truncated: false,
-		error: null
+function levelRow(
+	ref: LibraryRowReference,
+	title: string,
+	kind: LibraryNodeKind,
+	subtitle?: string
+): LibraryLevelRow {
+	return { ref, title, kind, ...(subtitle === undefined ? {} : { subtitle }) };
+}
+
+/**
+ * The fake Roon's answer to one open, by the token the reference carries.
+ *
+ * Deliberately keyed by the token and nothing else: the shipped code may only
+ * hand back a reference it was given, so a fake that could be satisfied by a
+ * reconstructed key would stop proving that.
+ */
+export function liveOpenResponder(
+	library: HarnessLiveLibrary
+): (ref: LibraryRowReference) => LibraryOpenResponse {
+	return (ref) => {
+		if (ref.generation !== library.generation) {
+			return { contract: LIBRARY_OPEN_CONTRACT, kind: 'stale' };
+		}
+		const artistMatch = /^artist:(.*)$/u.exec(ref.token);
+		if (artistMatch) {
+			const artist = library.artists.find((entry) => entry.name === artistMatch[1]);
+			if (!artist) return { contract: LIBRARY_OPEN_CONTRACT, kind: 'stale' };
+			const rows = [
+				levelRow(liveRef(`verb:${artist.name}`, library.generation), 'Play Artist', 'action'),
+				...artist.albums.map((album) =>
+					levelRow(
+						liveRef(albumToken(artist.name, album), library.generation),
+						album.title,
+						'album',
+						album.credit
+					)
+				)
+			];
+			return {
+				contract: LIBRARY_OPEN_CONTRACT,
+				kind: 'level',
+				generation: library.generation,
+				title: artist.name,
+				count: rows.length,
+				rows
+			};
+		}
+		const albumMatch = /^album:([^:]*):([^:]*):(.*)$/u.exec(ref.token);
+		if (albumMatch) {
+			const [, owner, title, credit] = albumMatch;
+			const pool =
+				owner === '*'
+					? (library.albums ?? library.artists.flatMap((entry) => entry.albums))
+					: (library.artists.find((entry) => entry.name === owner)?.albums ?? []);
+			const album = pool.find((entry) => entry.title === title && entry.credit === credit);
+			if (!album) return { contract: LIBRARY_OPEN_CONTRACT, kind: 'stale' };
+			const verbCount = album.verbRows ?? 1;
+			const rows = [
+				...Array.from({ length: verbCount }, (_unused, index) =>
+					levelRow(
+						liveRef(`play:${ref.token}:${index}`, library.generation),
+						'Play Album',
+						'action'
+					)
+				),
+				...album.tracks.map((track, index) =>
+					levelRow(
+						liveRef(`track:${ref.token}:${index}`, library.generation),
+						track,
+						'track',
+						credit
+					)
+				)
+			];
+			return {
+				contract: LIBRARY_OPEN_CONTRACT,
+				kind: 'level',
+				generation: library.generation,
+				title: album.title,
+				subtitle: album.credit,
+				count: rows.length,
+				rows
+			};
+		}
+		return { contract: LIBRARY_OPEN_CONTRACT, kind: 'stale' };
 	};
 }
 
 /**
- * The capability answer of a build+Core where editorial presence is
- * positively established (q1-2): the server's editorial read gate
- * requires exactly the date + state-filter features, so the UI's
- * editorial surface keys on the same pair.
+ * `count` artists as Roon would render them, one album each, named so their
+ * initials spread across the alphabet — the A–Z rail and the bucket tests read
+ * these initials.
  */
-export const EDITORIAL_PRESENT_CAPABILITIES: LibraryCapabilities = Object.freeze({
-	...CATALOG_CAPABILITIES,
-	dateFeatures: true,
-	stateFilterFeatures: true
-});
+export function harnessArtists(count: number): HarnessLiveLibrary['artists'] {
+	const letters = 'abcdefghijklmnopqrstuvwxyz';
+	return Array.from({ length: count }, (_unused, i) => {
+		const name = `${letters[i % letters.length]} artist ${i}`;
+		return {
+			name,
+			albums: [
+				{ title: `Album of ${name}`, credit: name, tracks: ['Track one', 'Track two'] }
+			]
+		};
+	});
+}
 
-export function readyState(over: Partial<LibraryIndexState> = {}): LibraryIndexState {
-	const artists = artistEntries(50);
-	const sorted = [...artists].sort((a, b) => (a.searchKey < b.searchKey ? -1 : 1));
+/**
+ * The default populated library: 50 artists with one album apiece. This is the
+ * replacement for the old `readyState()` — a mount that wants "a library with
+ * things in it" asks for this and says no more.
+ */
+export function harnessLibrary(over: Partial<HarnessLiveLibrary> = {}): HarnessLiveLibrary {
 	return {
-		...idleState(),
-		phase: 'ready',
-		source: 'catalog',
-		coreId: 'core-a',
-		revision: 1,
-		status: syntheticStatus(),
-		artists: sorted,
-		albums: [],
-		artistBuckets: bucketsFor(sorted),
-		albumBuckets: [],
+		generation: HARNESS_LIVE_GENERATION,
+		artists: harnessArtists(50),
 		...over
 	};
 }
@@ -247,24 +394,12 @@ export function fakeNamedCountsStore(entries: NamedCountEntry[]) {
 	return { subscribe: store.subscribe, load, reset };
 }
 
-export function fakeDrillStore(albums: DrillAlbum[]) {
-	const empty = {
-		albums: [] as readonly DrillAlbum[],
-		totalCount: 0,
-		loading: false,
-		loaded: false,
-		error: null as string | null
-	};
-	const store = writable(empty);
-	const load = vi.fn(async (_claim: unknown, _hierarchy: string, _label: string) => {
-		store.set({ albums, totalCount: albums.length, loading: false, loaded: true, error: null });
-	});
-	const reset = vi.fn(() => {
-		store.set(empty);
-	});
-	return { subscribe: store.subscribe, load, reset };
-}
-
+/**
+ * A drill row as a test writes one: title, credit and artwork. The canonical
+ * rendering is derived here rather than spelled out at every call site,
+ * because it is derived the same way in production — one canonical form, one
+ * function, both readers of the level.
+ */
 export function fakeRecentStore() {
 	return writable({
 		entries: [
@@ -281,79 +416,22 @@ export function fakeRecentStore() {
 	});
 }
 
-export function fakeMostPlayedStore(over: Partial<MostPlayedState> = {}) {
-	return writable<MostPlayedState>({
-		topPerformers: [],
-		topReleases: [],
-		topTracks: [],
-		pulledAt: '2026-07-26T12:00:00.000Z',
-		loading: false,
-		loaded: true,
-		error: null,
-		...over
-	});
-}
 
-export function fakePlaylistsStore(
-	playlists: PlaylistSummaryView[],
-	over: Partial<PlaylistsState> = {}
-) {
-	return writable<PlaylistsState>({
-		playlists,
-		pulledAt: '2026-07-26T12:00:00.000Z',
-		writes: null,
-		loading: false,
-		loaded: true,
-		error: null,
-		contents: {
-			playlistId: null,
-			data: null,
-			loading: false,
-			loaded: false,
-			error: null
-		},
-		mutation: {
-			busy: false,
-			error: null,
-			conflict: false,
-			code: null,
-			outcomeUnknown: false,
-			detail: null
-		},
-		...over
-	});
-}
 
-/** Fake open that lands canned contents in the store, like the real one. */
-export function fakeOpenPlaylistData(
-	store: ReturnType<typeof fakePlaylistsStore>,
-	contentsById: Record<string, Omit<PlaylistContentsResponse, 'status'>>
-) {
-	return vi.fn(async (_fetchFn: typeof fetch, playlistId: string) => {
-		store.update((s) => ({
-			...s,
-			contents: {
-				playlistId,
-				data: contentsById[playlistId] ?? null,
-				loading: false,
-				loaded: true,
-				error: null
-			}
-		}));
-	});
-}
 
 export interface Harness {
 	sessionClient?: SessionClient;
-	indexState?: LibraryIndexState;
 	withContext?: boolean;
-	fetchStatus?: () => Promise<ReturnType<typeof syntheticStatus>>;
+	/** The Core's own identity, which is what the live roots load asks for. */
+	fetchCoreStatus?: () => Promise<CoreStatusResponse>;
 	/**
 	 * Pairing readiness. The cold-start retry hangs off this: a load that
 	 * bailed while unpaired is re-driven when this flips to `true`.
 	 */
 	corePairedStore?: Writable<boolean>;
-	loadIndex?: ReturnType<typeof vi.fn>;
+	/** The live roots load, so a test can drive the roots phases by hand. */
+	loadRoots?: ReturnType<typeof vi.fn>;
+	rootsSource?: { subscribe: Writable<LibraryRootsState>['subscribe'] };
 	genresStore?: ReturnType<typeof fakeNamedCountsStore>;
 	composersStore?: ReturnType<typeof fakeNamedCountsStore>;
 	paletteSearchStore?: Writable<PaletteSearchState>;
@@ -361,25 +439,7 @@ export interface Harness {
 	clearPaletteSearchData?: ReturnType<typeof vi.fn>;
 	resetPaletteSearchData?: ReturnType<typeof vi.fn>;
 	recentStore?: ReturnType<typeof fakeRecentStore>;
-	mostPlayedStore?: ReturnType<typeof fakeMostPlayedStore>;
-	loadMostPlayedData?: ReturnType<typeof vi.fn>;
-	mostPlayedReset?: ReturnType<typeof vi.fn>;
-	playlistsStore?: ReturnType<typeof fakePlaylistsStore>;
-	loadPlaylistsData?: ReturnType<typeof vi.fn>;
-	openPlaylistData?: ReturnType<typeof vi.fn>;
-	closePlaylistView?: ReturnType<typeof vi.fn>;
-	playlistsReset?: ReturnType<typeof vi.fn>;
-	/**
-	 * The extended scope views the mounted build carries. Left unset, the
-	 * surface uses whatever the `@libraryFeatures` alias resolved to; set to a
-	 * pair of nulls, it renders what a build without those views renders.
-	 */
-	scopeSlots?: Pick<ResolvedLibraryScopeSlots, 'mostPlayedView' | 'playlistsView'>;
-	playlistActionController?: PublicSongActionController;
-	drillStore?: ReturnType<typeof fakeDrillStore>;
 	albumController?: LibraryAlbumController;
-	editorialController?: EditorialItemController;
-	compositionController?: CompositionBrowseController;
 	songActionController?: UnifiedSongActionController;
 	browseController?: UnifiedBrowseController;
 	browseActionController?: UnifiedBrowseActionController;
@@ -389,17 +449,52 @@ export interface Harness {
 	removeFavoriteData?: (fetchFn: typeof fetch, id: string) => Promise<void>;
 	songRelationshipClient?: Pick<UnifiedSearchClient, 'relationship'>;
 	albumActionController?: AlbumActionController;
-	hydrateArtistAlbums?: ReturnType<typeof vi.fn>;
 	getSocketClient?: () => ReturnType<typeof fakeConnectionSocket>;
+	/**
+	 * The library this mount reads: Roon's roots and the levels beneath them.
+	 * Left unset, the mount starts with empty, idle roots — a test that wants a
+	 * populated library passes `harnessLibrary()`.
+	 */
+	liveLibrary?: HarnessLiveLibrary;
+	rootsState?: LibraryRootsState;
+	openLiveRef?: (fetchFn: typeof fetch, ref: LibraryRowReference) => Promise<LibraryOpenResponse>;
+	openLiveRoot?: (
+		fetchFn: typeof fetch,
+		root: 'genres' | 'composers'
+	) => Promise<LibraryOpenResponse>;
 }
 
 export function mountMode(options: Harness = {}) {
 	const session = fakeSessionClient();
-	const indexStore = writable<LibraryIndexState>(options.indexState ?? idleState());
-	const loadIndex = options.loadIndex ?? vi.fn(async () => {});
-	const resetIndex = vi.fn();
-	const fetchStatus = vi.fn(
-		options.fetchStatus ?? (async () => syntheticStatus({ coreId: 'core-a' }))
+	const liveLibrary =
+		options.liveLibrary ?? { generation: HARNESS_LIVE_GENERATION, artists: [] };
+	// A mount that named a library means to have it on screen; one that named
+	// none starts idle, which is what a surface sees before its first read.
+	const rootsStore = writable<LibraryRootsState>(
+		options.rootsState ??
+			(options.liveLibrary
+				? liveRootsState(liveLibrary)
+				: { ...liveRootsState(liveLibrary), phase: 'idle' })
+	);
+	const respond = liveOpenResponder(liveLibrary);
+	const openLiveRef = vi.fn(
+		options.openLiveRef ?? (async (_fetchFn: typeof fetch, ref: LibraryRowReference) => respond(ref))
+	);
+	const openLiveRoot = vi.fn(
+		options.openLiveRoot ??
+			(async () => ({ contract: LIBRARY_OPEN_CONTRACT, kind: 'stale' as const }))
+	);
+	const loadRoots =
+		options.loadRoots ??
+		vi.fn(async () => {
+			rootsStore.update((state) => ({ ...state, phase: 'ready' }));
+		});
+	const fetchCoreStatus = vi.fn(
+		options.fetchCoreStatus ??
+			(async (): Promise<CoreStatusResponse> => ({
+				status: 'paired',
+				core: { id: 'core-a', displayName: 'Core', displayVersion: '1' }
+			}))
 	);
 	const corePairedStore = options.corePairedStore ?? writable(true);
 	const prefsStorage = new Map<string, string>();
@@ -450,10 +545,12 @@ export function mountMode(options: Harness = {}) {
 		writable<FavoritesState>({ entries: [], loading: false, loaded: true });
 	const props = {
 		sessionClient: options.sessionClient ?? session.client,
-		indexStore: indexStore as unknown as IndexStore,
+		rootsStore: (options.rootsSource ?? rootsStore) as never,
+		loadRoots: loadRoots as never,
+		openLiveRef: openLiveRef as never,
+		openLiveRoot: openLiveRoot as never,
+		fetchCoreStatusData: fetchCoreStatus as never,
 		corePairedStore: corePairedStore as never,
-		loadIndex: loadIndex as never,
-		resetIndex,
 		prefsStore,
 		genresStore: genresStore as unknown as typeof unifiedGenresStore,
 		composersStore: composersStore as unknown as typeof unifiedComposersStore,
@@ -465,34 +562,10 @@ export function mountMode(options: Harness = {}) {
 		favoritesDataStore: favoritesStore as never,
 		loadFavoritesData: (options.loadFavoritesData ?? vi.fn(async () => {})) as never,
 		removeFavoriteData: (options.removeFavoriteData ?? vi.fn(async () => {})) as never,
-		mostPlayedStore: options.mostPlayedStore as unknown as ResolvedLibraryScopeSlots['mostPlayedStore'],
-		loadMostPlayedData: (options.loadMostPlayedData ?? vi.fn(async () => {})) as never,
-		mostPlayedReset: (options.mostPlayedReset ?? vi.fn()) as never,
-		playlistsStore: (options.playlistsStore ??
-			fakePlaylistsStore([])) as unknown as ResolvedLibraryScopeSlots['playlistsStore'],
-		...(options.scopeSlots ? { scopeSlots: options.scopeSlots } : {}),
-		loadPlaylistsData: (options.loadPlaylistsData ?? vi.fn(async () => {})) as never,
-		openPlaylistData: (options.openPlaylistData ?? vi.fn(async () => {})) as never,
-		closePlaylistView: (options.closePlaylistView ?? vi.fn()) as never,
-		playlistsReset: (options.playlistsReset ?? vi.fn()) as never,
-		...(options.playlistActionController
-			? { playlistActionController: options.playlistActionController }
-			: {}),
-		drillStore: options.drillStore as unknown as typeof unifiedDrillStore,
-		fetchStatus: fetchStatus as never,
 		fetchFn: (() => {
 			throw new Error('modes must not fetch directly');
 		}) as unknown as typeof fetch,
-		...(options.hydrateArtistAlbums
-			? { hydrateArtistAlbums: options.hydrateArtistAlbums as never }
-			: {}),
 		...(options.albumController ? { albumController: options.albumController } : {}),
-		...(options.editorialController
-			? { editorialController: options.editorialController }
-			: {}),
-		...(options.compositionController
-			? { compositionController: options.compositionController }
-			: {}),
 		...(options.songActionController
 			? { songActionController: options.songActionController }
 			: {}),
@@ -539,10 +612,12 @@ export function mountMode(options: Harness = {}) {
 	return {
 		...renderResult,
 		session,
-		indexStore,
-		loadIndex,
-		resetIndex,
-		fetchStatus,
+		rootsStore,
+		liveLibrary,
+		openLiveRef,
+		openLiveRoot,
+		loadRoots,
+		fetchCoreStatus,
 		corePairedStore,
 		prefsStore,
 		genresStore,
@@ -559,19 +634,21 @@ export function mountMode(options: Harness = {}) {
 	};
 }
 
-export function albumEntry(id: string, title: string, artistId: string): LibraryAlbumEntry {
-	return {
-		id,
-		title,
-		artist: `Artist of ${title}`,
-		searchKey: `${title.toLowerCase()} — artist`,
-		artistId
-	};
+/**
+ * One album row as Roon would render it. The credit defaults to the same
+ * `Artist of <title>` convention the old catalog fixture used, so the rows a
+ * test reads back are worded as they always were.
+ */
+export function harnessAlbum(title: string, credit = `Artist of ${title}`): HarnessLiveAlbum {
+	return { title, credit, tracks: ['Track one', 'Track two'] };
 }
 
 export function fakeModeAlbumController(): {
 	controller: LibraryAlbumController;
 	open: ReturnType<typeof vi.fn>;
+	beginLive: ReturnType<typeof vi.fn>;
+	adoptLiveLevel: ReturnType<typeof vi.fn>;
+	failLive: ReturnType<typeof vi.fn>;
 	store: Writable<LibraryAlbumState>;
 } {
 	const store = writable({
@@ -587,16 +664,61 @@ export function fakeModeAlbumController(): {
 		versions: [],
 		selectedVersionId: null,
 		actionsAvailable: false,
+		albumActionsAvailable: false,
 		orderedTracks: [],
 		code: null,
 		error: null,
 		transitionedAt: 1
 	} as unknown as LibraryAlbumState);
 	const open = vi.fn();
+	// The live arm is part of what an album controller IS (Slice 2). A fake
+	// missing it does not stand in for one — it throws the moment a live album
+	// page opens, which is a hole in the double, not a finding about the mode.
+	const beginLive = vi.fn(() => {
+		store.update((state) => ({ ...state, phase: 'opening' }) as LibraryAlbumState);
+	});
+	const adoptLiveLevel = vi.fn(
+		(input: {
+			readonly albumRef: LibraryRowReference;
+			readonly title: string;
+			readonly artist: string | null;
+			readonly rows: readonly {
+				readonly ref: LibraryRowReference;
+				readonly title: string;
+				readonly kind: string;
+			}[];
+		}) => {
+			const verbRows = input.rows.filter((row) => row.kind === 'action');
+			const trackRows = input.rows.filter((row) => row.kind !== 'action');
+			store.update(
+				(state) =>
+					({
+						...state,
+						phase: 'details',
+						title: input.title,
+						artist: input.artist,
+						actionsAvailable: trackRows.length > 0,
+						albumActionsAvailable: verbRows.length === 1,
+						orderedTracks: trackRows.map((row, index) => ({ index, title: row.title })),
+						live: {
+							albumRef: input.albumRef,
+							playRef: verbRows.length === 1 ? verbRows[0].ref : null,
+							trackRefs: trackRows.map((row) => row.ref)
+						}
+					}) as LibraryAlbumState
+			);
+		}
+	);
+	const failLive = vi.fn((code: string, error: string) => {
+		store.update((state) => ({ ...state, phase: 'failed', code, error }) as LibraryAlbumState);
+	});
 	return {
 		controller: {
 			subscribe: store.subscribe,
 			open,
+			beginLive,
+			adoptLiveLevel,
+			failLive,
 			select: vi.fn(),
 			showVersions: vi.fn(),
 			showDetails: vi.fn(),
@@ -604,6 +726,9 @@ export function fakeModeAlbumController(): {
 			reset: vi.fn()
 		} as unknown as LibraryAlbumController,
 		open,
+		beginLive,
+		adoptLiveLevel,
+		failLive,
 		store
 	};
 }
@@ -618,24 +743,63 @@ export function fakeModeActionController(): AlbumActionController {
 	} as unknown as AlbumActionController;
 }
 
-export function fakePublicSongActionController(): PublicSongActionController {
-	const store = writable({
+function fakeAlbumActionState(overrides: Partial<AlbumActionState> = {}): AlbumActionState {
+	return {
 		phase: 'idle',
-		selectionId: null,
-		semantic: null,
+		pageId: null,
+		versionId: null,
 		zoneId: null,
-		candidates: [],
-		selectedCandidateId: null,
+		generation: null,
+		requestId: null,
+		operationId: null,
+		resolvingDeadlineAt: null,
+		choosingDeadlineAt: null,
+		actions: [],
+		selectedActionId: null,
+		executionAttempted: false,
 		code: null,
 		error: null,
-		authorityRetired: false
+		transitionedAt: 0,
+		...overrides
+	};
+}
+
+/** Writable action double for host-level request-correlation and recovery tests. */
+export function fakeRecoveringModeActionController() {
+	const store = writable<AlbumActionState>(fakeAlbumActionState());
+	let requestSequence = 0;
+	const begin = vi.fn((input: AlbumActionBeginInput) => {
+		requestSequence += 1;
+		const requestId = `action-${requestSequence}`;
+		store.set(
+			fakeAlbumActionState({
+				phase: 'resolving',
+				pageId: 'pageId' in input ? input.pageId : null,
+				versionId: 'versionId' in input ? input.versionId : null,
+				zoneId: input.zoneId,
+				generation: input.generation,
+				requestId,
+				transitionedAt: requestSequence
+			})
+		);
+		return { started: true as const, requestId };
 	});
+	const publish = (overrides: Partial<AlbumActionState>): void => {
+		store.update((state) => ({
+			...state,
+			...overrides,
+			transitionedAt: state.transitionedAt + 1
+		}));
+	};
 	return {
-		subscribe: store.subscribe,
-		begin: vi.fn(),
-		choose: vi.fn(),
-		cancel: vi.fn(),
-		reset: vi.fn(),
-		abandon: vi.fn()
-	} as unknown as PublicSongActionController;
+		controller: {
+			subscribe: store.subscribe,
+			begin,
+			cancel: vi.fn(),
+			reset: vi.fn()
+		} as unknown as AlbumActionController,
+		begin,
+		publish,
+		store
+	};
 }

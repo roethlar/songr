@@ -3,10 +3,11 @@
 	 * Spotlight-style palette for the unified library view (plan §3.2,
 	 * slice 7).
 	 *
-	 * Instant sections come from the local index and complete named stores
-	 * (artists, albums, composers, genres) with the prototype's literal labels. Smart
-	 * filters parse from free text: count filters run live against Roon's
-	 * Artists-row counts and are gated on complete count-list coverage; year expressions
+	 * Instant sections come from Roon's own two roots (the live view's Artists
+	 * and Albums snapshot) and the complete named stores (composers, genres) with
+	 * the prototype's literal labels. Smart filters parse from free text: count
+	 * filters run over the count Roon printed in each Artists row's own
+	 * subtitle, and a row Roon gave no count for is not tested; year expressions
 	 * always parse and always render disabled with the no-release-dates
 	 * reason. The async section mirrors the prototype's SONGS group.
 	 * Every song row opens a song-focused panel through its opaque,
@@ -14,8 +15,10 @@
 	 * keyless Roon Browse-search category; See All moves into the semantic
 	 * Browse scope. Artwork is display data only.
 	 */
+	import { onMount } from 'svelte';
 	import type { UnifiedLibraryDrillTarget } from '$lib/libraryPageState';
-	import type { LibraryIndexState } from '$lib/stores/libraryIndexStore';
+	import type { LibraryAlbumEntry, LibraryArtistEntry } from '$lib/libraryEntries';
+	import type { LibraryRootsState } from '$lib/stores/libraryRootsStore';
 	import {
 		formatGenreAlbumCount,
 		type NamedCountsState
@@ -37,7 +40,7 @@
 	const TRY_SEEDS = ['bowie', '>30 albums', 'one album', 'jazz', '1984-1989'] as const;
 
 	let {
-		index,
+		roots,
 		genres,
 		composers,
 		searchStore = unifiedPaletteSearchStore,
@@ -45,13 +48,15 @@
 		selectedRowId = $bindable<string | null>(null),
 		onClose,
 		onDrill,
+		onOpenLiveArtist,
+		onOpenLiveAlbum,
 		onSong,
 		onBrowseResult = () => {},
 		onBrowseCategory = () => {},
 		onApplyFilter,
 		onSearch
 	}: {
-		index: LibraryIndexState;
+		roots: LibraryRootsState;
 		genres: NamedCountsState;
 		composers: NamedCountsState;
 		searchStore?: typeof unifiedPaletteSearchStore;
@@ -59,6 +64,8 @@
 		selectedRowId?: string | null;
 		onClose: () => void;
 		onDrill: (target: UnifiedLibraryDrillTarget) => void;
+		onOpenLiveArtist: (entry: LibraryArtistEntry) => void;
+		onOpenLiveAlbum: (entry: LibraryAlbumEntry) => void;
 		onSong: (song: PaletteSearchRow) => void;
 		onBrowseResult?: (query: string, result: SearchResult) => void;
 		onBrowseCategory?: (query: string, categoryTitle: string) => void;
@@ -112,26 +119,17 @@
 		const lq = q.toLowerCase();
 		const out: PaletteGroup[] = [];
 
-		// Smart filters (§3.2): count filters use the complete Roon Artists
-		// count list; years remain disabled.
+		// Smart filters (§3.2): count filters run over Roon's own Artists root,
+		// on the count Roon printed in each row's own subtitle. A row Roon gave
+		// no count for is not tested — `undefined` is not zero. Years remain
+		// disabled.
 		const filterRows: PaletteRow[] = parseSmartFilters(q).map((filter, i) => {
 			if (filter.kind === 'count') {
-				if (!index.capabilities.countFilters) {
-					return {
-						id: `filter-${i}`,
-						icon: '⋮',
-						primary: filter.label,
-						secondary: '',
-						filter: true,
-						disabled: true,
-						reason:
-							index.capabilities.countFiltersDisabledReason ??
-							'Count filters are unavailable.',
-						activate: null
-					};
-				}
-				const matches = index.artists.reduce(
-					(total, artist) => (filter.test(artist.albumCount ?? 0) ? total + 1 : total),
+				const matches = roots.artists.reduce(
+					(total, artist) =>
+						artist.albumCount !== undefined && filter.test(artist.albumCount)
+							? total + 1
+							: total,
 					0
 				);
 				return {
@@ -158,7 +156,7 @@
 		});
 		if (filterRows.length > 0) out.push({ label: 'FILTERS', rows: filterRows });
 
-		if (index.phase === 'ready') {
+		if (roots.phase === 'ready') {
 			const genreMatches = genres.entries.filter((entry) =>
 				normalizeCatalogText(entry.label).includes(nq)
 			);
@@ -178,7 +176,7 @@
 				});
 			}
 
-			const artistMatches = index.artists.filter(
+			const artistMatches = roots.artists.filter(
 				(entry) => entry.searchKey.includes(nq) || entry.name.toLowerCase().includes(lq)
 			);
 			if (artistMatches.length > 0) {
@@ -194,17 +192,17 @@
 						primary: entry.name,
 						secondary:
 							entry.albumCount !== undefined
-								? `${entry.albumCount} ${pluralize(entry.albumCount, 'album', 'albums')}${index.capabilities.countsApproximate ? ' (approx.)' : ''}`
+								? `${entry.albumCount} ${pluralize(entry.albumCount, 'album', 'albums')}`
 								: '',
 						filter: false,
 						disabled: false,
 						reason: null,
-						activate: () => onDrill({ kind: 'artist', localId: entry.id })
+						activate: () => onOpenLiveArtist(entry)
 					}))
 				});
 			}
 
-			const albumMatches = index.albums.filter(
+			const albumMatches = roots.albums.filter(
 				(entry) => entry.searchKey.includes(nq) || entry.title.toLowerCase().includes(lq)
 			);
 			if (albumMatches.length > 0) {
@@ -218,11 +216,11 @@
 						id: `album-${entry.id}`,
 						icon: '○',
 						primary: entry.title,
-						secondary: `${entry.artist}${(entry.versionCount ?? 1) > 1 ? ` · ${entry.versionCount} versions` : ''}`,
+						secondary: entry.artist,
 						filter: false,
 						disabled: false,
 						reason: null,
-						activate: () => onDrill({ kind: 'album', localId: entry.id })
+						activate: () => onOpenLiveAlbum(entry)
 					}))
 				});
 			}
@@ -401,11 +399,28 @@
 		} else if (event.key === 'Enter') {
 			event.preventDefault();
 			activateSelected();
-		} else if (event.key === 'Escape') {
-			event.preventDefault();
-			onClose();
 		}
 	}
+
+	// Escape is handled on `window` (same pattern as ZoneGroupingModal and
+	// +layout.svelte's zone menu) rather than only on the input, so it
+	// closes the palette no matter what currently has focus. This matters
+	// because a click that swaps the palette's content out from under the
+	// clicked element (e.g. a TRY seed button, which sets `query` and so
+	// unmounts itself in favor of the results list) leaves the browser
+	// focus on `document.body` — an ancestor of this component, not a
+	// descendant — so a keydown handler on the input or the palette's own
+	// container would never see it.
+	onMount(() => {
+		const handleKeydown = (event: KeyboardEvent) => {
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				onClose();
+			}
+		};
+		window.addEventListener('keydown', handleKeydown);
+		return () => window.removeEventListener('keydown', handleKeydown);
+	});
 
 	function rowIndexOf(row: PaletteRow): number {
 		return flatRows.indexOf(row);

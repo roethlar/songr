@@ -1,5 +1,11 @@
 import type { UnifiedLibraryDensity } from '$lib/stores/unifiedLibraryPrefsStore';
 import { CATALOG_DISPLAY_TEXT_MAX_LENGTH } from '@shared/catalogContracts';
+import {
+	normalizeCollectionDrillOpenLocator,
+	type CollectionDrillOpenLocator
+} from '@shared/collectionDrillContracts';
+import { LIBRARY_NODE_KINDS, type LibraryNodeKind } from '@shared/libraryOpenContracts';
+import type { LibraryPathStep, LibraryRenderingPath } from '$lib/library/liveLibraryPath';
 
 export type LibraryViewActivationCause =
 	| 'initial'
@@ -32,7 +38,11 @@ export interface BrowseHistorySnapshot {
 	forward: BrowseHistoryStep[];
 }
 
-export const UNIFIED_LIBRARY_PAGE_STATE_VERSION = 8 as const;
+export const UNIFIED_LIBRARY_PAGE_STATE_VERSION = 10 as const;
+
+const LEGACY_UNIFIED_LIBRARY_LIVE_TARGET_VERSION = 9 as const;
+/** v8 predates the collection-opened album item target (Slice 8d). */
+const LEGACY_UNIFIED_LIBRARY_COLLECTION_TARGET_VERSION = 8 as const;
 /** v7 predates the item origin name (issue #6). */
 const LEGACY_UNIFIED_LIBRARY_ITEM_ORIGIN_VERSION = 7 as const;
 const LEGACY_UNIFIED_LIBRARY_ITEM_SPLIT_VERSION = 6 as const;
@@ -48,7 +58,6 @@ export const UNIFIED_FILTER_TEXT_MAX_LENGTH = 256;
 export const UNIFIED_ITEM_ORIGIN_NAME_MAX_LENGTH = CATALOG_DISPLAY_TEXT_MAX_LENGTH;
 export const UNIFIED_BROWSE_RESTORE_COUNT_MAX = 100_000;
 /** Mirrors the editorial contract's zero-based track-anchor bound. */
-export const UNIFIED_TRACK_INDEX_MAX = 500;
 
 export type UnifiedLibraryScope =
 	| 'artists'
@@ -63,13 +72,15 @@ export type UnifiedLibraryScope =
 	| 'browse';
 
 /**
- * Legacy (v5 and earlier) drill targets: one union carried both collection
- * contexts and item destinations. Kept only to normalize old history
- * entries forward; v6 splits collection drills from item targets.
+ * What a card in a scope view or a palette row can send the mode to.
+ *
+ * It carried `artist` and `album` arms naming a saved catalog record by local
+ * id; those died with the catalog (`.agents/plans/library-live-view.md` Slice
+ * 4). Artists and albums are opened by their live reference now, through
+ * `onOpenLiveArtist` / `onOpenLiveAlbum`, and never by an identifier the
+ * controller minted.
  */
 export type UnifiedLibraryDrillTarget =
-	| { kind: 'artist'; localId: string }
-	| { kind: 'album'; localId: string }
 	| { kind: 'genre'; label: string }
 	| { kind: 'composer'; label: string };
 
@@ -83,22 +94,43 @@ export type UnifiedCollectionDrillTarget =
 	| { kind: 'composer'; label: string };
 
 /**
- * Item targets are first-class entity pages, restored by catalog localId
- * (reconstructible product semantics only; opaque live-session targets are
- * never persisted here).
+ * Item targets are first-class entity pages. Two kinds remain, and neither
+ * names a stored record: the `album` and `artist` arms restored a saved
+ * catalog album or artist by controller-minted local id, and died with the
+ * catalog (`.agents/plans/library-live-view.md` Slice 4).
  */
 export type UnifiedItemTarget =
-	| { kind: 'album'; localId: string }
-	| { kind: 'artist'; localId: string };
+	/**
+	 * An album opened from a genre or composer drill (v9). It is named by the
+	 * drill's own keyless locator and by nothing else: such a row has no
+	 * catalog identity, and minting one for it is the cross-surface text join
+	 * `.agents/plans/library-walk-binding.md` deleted.
+	 *
+	 * Durable for the same reason the locator is durable — it contains nothing
+	 * session-bound. Restoring it re-walks the drill and re-finds the row by
+	 * its rendering, unique or nothing, exactly as the first open did.
+	 */
+	| { kind: 'collection'; locator: CollectionDrillOpenLocator }
+	/**
+	 * A page in the live view of Roon (v10,
+	 * `.agents/plans/library-live-view.md` Slice 2), named by the renderings
+	 * Roon showed on the way to it and by nothing else.
+	 *
+	 * WHY THE REFERENCE IS NOT HERE, AND MUST NEVER BE. A live reference is
+	 * worth exactly one generation; page state outlives generations by design
+	 * — it survives a reload, a reconnect, a refresh. Writing one down would
+	 * put a dead handle in the browser's history and call it an address. What
+	 * is written down is what the reader saw, which is the same question their
+	 * click asked, and Roon can be asked it again.
+	 */
+	| { kind: 'live'; path: LibraryRenderingPath };
 
 /**
- * A reconstructible child surface over an open item page (Slice 8): the
- * exact-track view is the album's zero-based track index — pure product
- * semantics. Opaque live-session destinations (followed performers,
- * similar albums) are deliberately NOT representable here: they restore
- * to the parent, which is the session-bound restoration rule.
+ * A reconstructible child surface over an open album page, named by the exact
+ * track title Roon rendered. Position is not identity: a reorder must still
+ * find the same track, while duplicate titles must resolve to candidates.
  */
-export type UnifiedItemDetailTarget = { kind: 'track'; trackIndex: number };
+export type UnifiedItemDetailTarget = { kind: 'track'; title: string };
 
 /**
  * The composition surface over a composer collection drill (Slice 8):
@@ -322,12 +354,6 @@ function isUnifiedDensity(value: unknown): value is UnifiedLibraryDensity {
 
 function normalizeUnifiedDrillTarget(value: unknown): UnifiedLibraryDrillTarget | null {
 	if (!isRecord(value)) return null;
-	if (value.kind === 'artist' || value.kind === 'album') {
-		return hasExactKeys(value, ['kind', 'localId']) &&
-			isNonEmptyString(value.localId, UNIFIED_LOCAL_ID_MAX_LENGTH)
-			? { kind: value.kind, localId: value.localId }
-			: null;
-	}
 	if (value.kind === 'genre' || value.kind === 'composer') {
 		return hasExactKeys(value, ['kind', 'label']) &&
 			isNonEmptyString(value.label, UNIFIED_LABEL_MAX_LENGTH)
@@ -354,13 +380,100 @@ function normalizeCollectionDrillTarget(
 	return null;
 }
 
-function normalizeItemTarget(value: unknown): UnifiedItemTarget | null {
+/** Bounds one persisted rendering: Roon's strings are far shorter than this. */
+const LIVE_PATH_TEXT_MAX = 1_024;
+/** Bounds one persisted path. Roon's deepest surface here is four rows down. */
+const LIVE_PATH_STEPS_MAX = 8;
+
+function isPathText(value: unknown): value is string {
+	return typeof value === 'string' && value.length <= LIVE_PATH_TEXT_MAX;
+}
+
+function normalizeLibraryPathStep(value: unknown): LibraryPathStep | null {
 	if (!isRecord(value)) return null;
-	if (value.kind === 'album' || value.kind === 'artist') {
-		return hasExactKeys(value, ['kind', 'localId']) &&
-			isNonEmptyString(value.localId, UNIFIED_LOCAL_ID_MAX_LENGTH)
-			? { kind: value.kind, localId: value.localId }
-			: null;
+	const hasCredit = 'credit' in value;
+	const hasEdition = 'edition' in value;
+	if (
+		hasEdition &&
+		!hasCredit
+	) {
+		return null;
+	}
+	if (
+		!hasExactKeys(
+			value,
+			hasCredit
+				? hasEdition
+					? ['kind', 'title', 'credit', 'edition']
+					: ['kind', 'title', 'credit']
+				: ['kind', 'title']
+		)
+	) {
+		return null;
+	}
+	if (!(LIBRARY_NODE_KINDS as readonly string[]).includes(value.kind as string)) return null;
+	// A title is the whole of what a step names, so an empty one names nothing
+	// and would match whichever row Roon happens to render without a title.
+	if (!isPathText(value.title) || value.title.length === 0) return null;
+	if (hasCredit && !isPathText(value.credit)) return null;
+	if (hasEdition && !isPathText(value.edition)) return null;
+	return {
+		kind: value.kind as LibraryNodeKind,
+		title: value.title,
+		// An empty credit is a real answer — Roon renders album rows with no
+		// credit line — and is kept, distinct from carrying no credit at all.
+		...(hasCredit ? { credit: value.credit as string } : {}),
+		...(hasEdition ? { edition: value.edition as string } : {})
+	};
+}
+
+/**
+ * One persisted address into the live view.
+ *
+ * Rejected rather than repaired, like every other persisted shape here: a
+ * partially-understood address would resolve to a partially-right page, and
+ * this whole arm exists so that cannot happen.
+ */
+export function normalizeLibraryRenderingPath(value: unknown): LibraryRenderingPath | null {
+	if (!isRecord(value) || !hasExactKeys(value, ['origin', 'steps'])) return null;
+	if (
+		value.origin !== 'artists' &&
+		value.origin !== 'albums' &&
+		value.origin !== 'genres' &&
+		value.origin !== 'composers'
+	) {
+		return null;
+	}
+	if (!Array.isArray(value.steps)) return null;
+	if (value.steps.length === 0 || value.steps.length > LIVE_PATH_STEPS_MAX) return null;
+	const steps: LibraryPathStep[] = [];
+	for (const entry of value.steps) {
+		const step = normalizeLibraryPathStep(entry);
+		if (step === null) return null;
+		steps.push(step);
+	}
+	return { origin: value.origin, steps };
+}
+
+function normalizeItemTarget(
+	value: unknown,
+	/** v8 and earlier could not carry a collection target; one there is corrupt. */
+	allowCollection = true,
+	/** v9 and earlier could not carry a live target; one there is corrupt. */
+	allowLive = true
+): UnifiedItemTarget | null {
+	if (!isRecord(value)) return null;
+	if (value.kind === 'live' && allowLive) {
+		if (!hasExactKeys(value, ['kind', 'path'])) return null;
+		const path = normalizeLibraryRenderingPath(value.path);
+		return path ? { kind: 'live', path } : null;
+	}
+	if (value.kind === 'collection' && allowCollection) {
+		if (!hasExactKeys(value, ['kind', 'locator'])) return null;
+		// The locator's own normalizer is the authority on its shape; this
+		// file keeps no second copy of those rules.
+		const locator = normalizeCollectionDrillOpenLocator(value.locator);
+		return locator ? { kind: 'collection', locator } : null;
 	}
 	return null;
 }
@@ -368,11 +481,8 @@ function normalizeItemTarget(value: unknown): UnifiedItemTarget | null {
 function normalizeItemDetail(value: unknown): UnifiedItemDetailTarget | null {
 	if (!isRecord(value)) return null;
 	if (value.kind !== 'track') return null;
-	return hasExactKeys(value, ['kind', 'trackIndex']) &&
-		Number.isSafeInteger(value.trackIndex) &&
-		(value.trackIndex as number) >= 0 &&
-		(value.trackIndex as number) < UNIFIED_TRACK_INDEX_MAX
-		? { kind: 'track', trackIndex: value.trackIndex as number }
+	return hasExactKeys(value, ['kind', 'title']) && isNonEmptyString(value.title, LIVE_PATH_TEXT_MAX)
+		? { kind: 'track', title: value.title }
 		: null;
 }
 
@@ -419,7 +529,7 @@ function normalizeSharedSnapshotFields(value: Record<string, unknown>): {
 
 function normalizeUnifiedSnapshot(
 	value: unknown,
-	legacyTier: 'v6' | 'v7' | null = null
+	legacyTier: 'v6' | 'v7' | 'v8' | 'v9' | null = null
 ): UnifiedLibrarySnapshot | null {
 	const keys =
 		legacyTier === 'v6'
@@ -435,7 +545,13 @@ function normalizeUnifiedSnapshot(
 			: normalizeCollectionDrillTarget(value.collectionDrill);
 	if (value.collectionDrill !== null && !collectionDrill) return null;
 	const itemTarget =
-		value.itemTarget === null ? null : normalizeItemTarget(value.itemTarget);
+		value.itemTarget === null
+			? null
+			: normalizeItemTarget(
+					value.itemTarget,
+					legacyTier === null || legacyTier === 'v9',
+					legacyTier === null
+				);
 	if (value.itemTarget !== null && !itemTarget) return null;
 	let itemDetail: UnifiedItemDetailTarget | null = null;
 	let composition: UnifiedCompositionSurface | null = null;
@@ -445,7 +561,16 @@ function normalizeUnifiedSnapshot(
 		if (value.itemDetail !== null && !itemDetail) return null;
 		// A child surface without its exact parent context is not
 		// reconstructible: reject rather than restore something else.
-		if (itemDetail !== null && itemTarget?.kind !== 'album') return null;
+		if (
+			itemDetail !== null &&
+			itemTarget?.kind !== 'collection' &&
+			!(
+				itemTarget?.kind === 'live' &&
+				itemTarget.path.steps.at(-1)?.kind === 'album'
+			)
+		) {
+			return null;
+		}
 		composition =
 			value.composition === null
 				? null
@@ -460,7 +585,9 @@ function normalizeUnifiedSnapshot(
 		if (value.itemOriginName !== null && itemOriginName === null) return null;
 		// The origin label only makes sense over an open album page
 		// (issue #6): without one, it is not a reconstructible back target.
-		if (itemOriginName !== null && itemTarget?.kind !== 'album') return null;
+		if (itemOriginName !== null && itemTarget?.kind !== 'collection') {
+			return null;
+		}
 	}
 	const shared = normalizeSharedSnapshotFields(value);
 	if (!shared) return null;
@@ -480,10 +607,15 @@ function normalizeUnifiedSnapshot(
 
 /**
  * v5-and-earlier snapshots carried one `drill` union plus a redundant
- * `openAlbumLocalId`. They normalize forward: artist/album drills become
- * item targets, genre/composer drills become collection drills, and a
- * dangling `openAlbumLocalId` without an album drill still restores its
- * album page.
+ * `openAlbumLocalId`. They normalize forward: genre/composer drills become
+ * collection drills.
+ *
+ * Their artist and album arms named a saved catalog record by
+ * controller-minted local id, and both are now REFUSED rather than migrated:
+ * the catalog is gone (`.agents/plans/library-live-view.md` Slice 4), so there
+ * is nothing such an id could name. A refused legacy snapshot restores the
+ * scope it belonged to, which is the honest answer — never a page pointing at
+ * a record that no longer exists.
  */
 function normalizeLegacyUnifiedSnapshot(
 	value: unknown,
@@ -502,6 +634,8 @@ function normalizeLegacyUnifiedSnapshot(
 	) {
 		return null;
 	}
+	// A legacy snapshot that named a catalog album has nothing left to name.
+	if (value.openAlbumLocalId !== null) return null;
 	const shared = normalizeSharedSnapshotFields(value);
 	if (!shared) return null;
 	const browseHistory = withoutBrowse
@@ -509,22 +643,13 @@ function normalizeLegacyUnifiedSnapshot(
 		: normalizeBrowseHistorySnapshot(value.browseHistory);
 	if (!browseHistory) return null;
 
-	let collectionDrill: UnifiedCollectionDrillTarget | null = null;
-	let itemTarget: UnifiedItemTarget | null = null;
-	if (drill) {
-		if (drill.kind === 'artist' || drill.kind === 'album') {
-			itemTarget = { kind: drill.kind, localId: drill.localId };
-		} else {
-			collectionDrill = { kind: drill.kind, label: drill.label };
-		}
-	}
-	if (itemTarget === null && value.openAlbumLocalId !== null) {
-		itemTarget = { kind: 'album', localId: value.openAlbumLocalId as string };
-	}
+	const collectionDrill: UnifiedCollectionDrillTarget | null = drill
+		? { kind: drill.kind, label: drill.label }
+		: null;
 	return {
 		scope: value.scope,
 		collectionDrill,
-		itemTarget,
+		itemTarget: null,
 		itemDetail: null,
 		composition: null,
 		itemOriginName: null,
@@ -541,6 +666,38 @@ export function normalizeLibraryPageState(value: unknown): LibraryPageState | nu
 			value.schemaVersion === UNIFIED_LIBRARY_PAGE_STATE_VERSION
 		) {
 			const snapshot = normalizeUnifiedSnapshot(value.snapshot);
+			return snapshot
+				? {
+						libraryView: 'unified',
+						schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+						snapshot
+					}
+				: null;
+		}
+		if (
+			value.libraryView === 'unified' &&
+			value.schemaVersion === LEGACY_UNIFIED_LIBRARY_LIVE_TARGET_VERSION
+		) {
+			// v9 carries every key v10 does; only the item-target union widened,
+			// so a v9 snapshot normalizes forward unchanged — with the live arm
+			// refused, because v9 could never have written one.
+			const snapshot = normalizeUnifiedSnapshot(value.snapshot, 'v9');
+			return snapshot
+				? {
+						libraryView: 'unified',
+						schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+						snapshot
+					}
+				: null;
+		}
+		if (
+			value.libraryView === 'unified' &&
+			value.schemaVersion === LEGACY_UNIFIED_LIBRARY_COLLECTION_TARGET_VERSION
+		) {
+			// v8 carries every key v10 does; only the item-target union widened,
+			// so a v8 snapshot normalizes forward unchanged — with the
+			// collection arm refused, because v8 could never have written one.
+			const snapshot = normalizeUnifiedSnapshot(value.snapshot, 'v8');
 			return snapshot
 				? {
 						libraryView: 'unified',

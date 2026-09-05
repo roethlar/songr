@@ -1,7 +1,6 @@
 import { Request, Response, Router } from "express";
 import type { RecentlyPlayedService } from "../../../core/recently-played/RecentlyPlayedService";
 import type { FavoritesService } from "../../../core/favorites/FavoritesService";
-import type { CatalogService } from "../../../core/catalog/CatalogService";
 // Response shape is shared with the UI (src/shared/) so the client can
 // consume /api/health without duplicating the contract. Historical
 // note: pre-L-1 the response was just `{ status: "ok" }`, which masked
@@ -11,13 +10,10 @@ import type {
   HealthResponse,
   RecentlyPlayedHealth,
 } from "../../../shared/types";
-import { normalizeCatalogStatus } from "../../../shared/catalogContracts";
 
 export const createHealthRouter = (
   recentlyPlayedService?: RecentlyPlayedService,
-  favoritesService?: FavoritesService,
-  catalogService?: Pick<CatalogService, "getStatus">,
-  getCatalogCoreId?: () => string | null
+  favoritesService?: FavoritesService
 ): Router => {
   const router = Router();
 
@@ -51,34 +47,6 @@ export const createHealthRouter = (
         degraded,
         entry_count: favoritesService.getEntries().length,
       };
-    }
-
-    if (catalogService && getCatalogCoreId) {
-      try {
-        const catalogCoreId = getCatalogCoreId();
-        if (catalogCoreId) {
-          const status = normalizeCatalogStatus(
-            catalogService.getStatus(catalogCoreId)
-          );
-          if (status && status.coreId === catalogCoreId) {
-            subsystems.catalog = {
-              critical: false,
-              ready:
-                status.persistence === "healthy" &&
-                status.freshness === "fresh" &&
-                status.complete,
-              degraded:
-                status.persistence === "degraded" ||
-                status.freshness === "stale" ||
-                status.lastProblem !== undefined,
-              status,
-            };
-          }
-        }
-      } catch {
-        // The catalog is a non-critical diagnostic, so its failures must not
-        // impair the controller's global readiness endpoint.
-      }
     }
 
     const body: HealthResponse = {

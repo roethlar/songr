@@ -4,11 +4,14 @@ node_modules/
 # Build output
 dist/
 ui/build/
+# The desktop shell's compiled main process (its node_modules are covered by
+# the rule above, and `dist/` matches at any depth, but both are spelled out
+# here so the desktop workspace's outputs are obvious from one place).
+desktop/dist/
+# electron-builder output, once packaging lands.
+desktop/release/
 ui/playwright-report/
 ui/test-results/
-# The desktop shell's staged engine payload and its installers. `dist/` above
-# already matches desktop/dist at any depth; this is the packaging output.
-desktop/release/
 
 # Runtime data
 data/
@@ -25,3 +28,37 @@ config/roon-token.json
 *.swo
 .vscode/
 .idea/
+
+# Internal development
+comms/
+claudedocs/
+.serena/
+codex_resume
+continueprompt.txt
+error.txt
+.tokensave/
+
+# Private capture artifacts — `scripts/capture-browse-tree.mjs
+# --include-content-samples` produces files with personal library
+# content that must never be committed.
+docs/roon-browse-tree-*-with-content.md
+docs/roon-browse-tree-*-with-content.json
+# Validated timeline captures publish atomically; ignore a crash-left temp inode.
+docs/fixtures/timeline-canvas/**/*.tmp-*
+.review/
+
+# Machine-local reviewer-harness cache (reviewloop playbook)
+.agents/review/harnesses.local.json
+
+.claude/.headroom_wrap_marker.json
+
+# Machine-local, read-only live probes against the owner's Core. These are
+# scratch instruments, not product: they lint, they compile into dist/ via
+# tsconfig's `include: ["src"]`, and a stray `git add -A` has swept them into a
+# commit three times. Ignored so that cannot happen again.
+*.local.ts
+*.local.mjs
+
+# Machine-local assistant state; never repo content.
+.headroom/
+.claude/settings.local.json.lean-ctx.bak

@@ -26,6 +26,7 @@ export interface BrowseSessionLimits {
   maxActionsPerCore: number;
   maxPhysicalSessionsPerCore: number;
   maxPublishedItemKeysPerRole: number;
+  maxPublishedCatalogItemKeys: number;
   modeIdleMs: number;
   disconnectGraceMs: number;
   quarantineReapMs: number;
@@ -33,8 +34,9 @@ export interface BrowseSessionLimits {
 }
 
 // Derived so a new classic role cannot silently under-provision the cap:
-// per-tab classic channels, plus the catalog channel, plus action leases.
-const DEFAULT_ACTIVE_SESSION_CAPACITY = 8 * CLASSIC_SESSION_ROLES.length + 1 + 4;
+// per-tab classic channels, plus the catalog publication channel and its
+// isolated count-check channel, plus action leases.
+const DEFAULT_ACTIVE_SESSION_CAPACITY = 8 * CLASSIC_SESSION_ROLES.length + 2 + 4;
 
 /**
  * The physical cap includes one complete active-capacity generation of
@@ -48,6 +50,13 @@ export const DEFAULT_BROWSE_SESSION_LIMITS: Readonly<BrowseSessionLimits> =
     maxActionsPerCore: 4,
     maxPhysicalSessionsPerCore: DEFAULT_ACTIVE_SESSION_CAPACITY * 2,
     maxPublishedItemKeysPerRole: 8_192,
+    // The catalog channel publishes whole library roots at once, so its bound
+    // is a library size rather than a page size. Measured on the owner's Core
+    // 2026-09-03 (`.agents/state.md`): 5,584 rows for both roots cost 2.08 MB
+    // of heap, about 370 bytes a row. 100,000 rows is therefore roughly 37 MB
+    // held — a bound rather than a target, sized so that no real library is
+    // refused and a runaway one still cannot grow the server without limit.
+    maxPublishedCatalogItemKeys: 100_000,
     modeIdleMs: 15 * 60 * 1_000,
     disconnectGraceMs: 60 * 1_000,
     quarantineReapMs: 5 * 60 * 1_000,
@@ -89,8 +98,22 @@ export interface ModeSessionHandle {
   readonly mode: BrowseMode;
 }
 
+export interface ModeSessionRetiredEvent {
+  readonly coreId: string;
+  readonly socketId: string;
+  readonly tabId: string;
+  readonly session: ModeSessionHandle;
+  readonly reason: "SESSION_LOST";
+}
+
 export interface CatalogSessionHandle {
   readonly kind: "catalog";
+  readonly handleId: string;
+  readonly generation: number;
+}
+
+export interface CatalogCountSessionHandle {
+  readonly kind: "catalog-count";
   readonly handleId: string;
   readonly generation: number;
 }
@@ -113,6 +136,21 @@ export interface ActionSessionAccess {
   socketId: string;
   tabId: string;
   handle: ActionSessionHandle;
+}
+
+/**
+ * Where a set of live library references came from, and which publication they
+ * belong to.
+ *
+ * `.agents/plans/library-live-view.md` Slice 2. An action on a live reference
+ * carries this alongside its lease, because the reference alone does not say
+ * enough: the item key behind it is meaningful only on the channel that minted
+ * it, and only while that channel's publication generation is the one it was
+ * minted in. Both facts are checked before any call is dispatched.
+ */
+export interface LibraryActionAnchor {
+  readonly sessionScope: string;
+  readonly authorityGeneration: number;
 }
 
 export type CoordinatedBrowseOptions = Omit<BrowseOptions, "multiSessionKey"> & {
@@ -164,7 +202,7 @@ export interface BrowseSessionDiagnostics {
   quarantinedSessions: number;
 }
 
-type LeaseKind = "mode" | "catalog" | "action";
+type LeaseKind = "mode" | "catalog" | "catalog-count" | "action";
 type LeaseState =
   | "active"
   | "disconnected"
@@ -172,7 +210,7 @@ type LeaseState =
   | "lost"
   | "closed";
 type ChannelState = "active" | "releasing" | "quarantined" | "closed";
-type SessionRole = ModeSessionRole | "catalog" | "action";
+type SessionRole = ModeSessionRole | "catalog" | "catalog-count" | "action";
 type Timer = ReturnType<typeof setTimeout>;
 
 interface BaseLeaseRecord {
@@ -196,10 +234,15 @@ interface ModeLeaseRecord extends BaseLeaseRecord {
   idleTimer?: Timer;
   graceTimer?: Timer;
   lastActivity: number;
+  retirementAnnounced?: boolean;
 }
 
 interface CatalogLeaseRecord extends BaseLeaseRecord {
   kind: "catalog";
+}
+
+interface CatalogCountLeaseRecord extends BaseLeaseRecord {
+  kind: "catalog-count";
 }
 
 interface ActionLeaseRecord extends BaseLeaseRecord {
@@ -213,7 +256,11 @@ interface ActionLeaseRecord extends BaseLeaseRecord {
   executeIssued: boolean;
 }
 
-type LeaseRecord = ModeLeaseRecord | CatalogLeaseRecord | ActionLeaseRecord;
+type LeaseRecord =
+  | ModeLeaseRecord
+  | CatalogLeaseRecord
+  | CatalogCountLeaseRecord
+  | ActionLeaseRecord;
 
 interface ChannelRecord {
   role: SessionRole;
@@ -227,11 +274,11 @@ interface ChannelRecord {
   quarantineTimer?: Timer;
   quarantineCleaned: boolean;
   quarantineSettlements: number;
-  classicItemGeneration: number;
-  classicItemKeys?: ClassicItemKeyAuthority;
+  publishedItemGeneration: number;
+  publishedItemKeys?: PublishedItemKeyAuthority;
 }
 
-interface ClassicItemKeyAuthority {
+interface PublishedItemKeyAuthority {
   generation: number;
   tokenToRaw: Map<string, string>;
   rawToToken: Map<string, string>;
@@ -256,6 +303,7 @@ interface CoreRegistry {
   epoch: number;
   tabs: Map<string, ModeLeaseRecord>;
   catalog?: CatalogLeaseRecord;
+  catalogCount?: CatalogCountLeaseRecord;
   actions: Map<string, ActionLeaseRecord>;
   sessions: Set<ChannelRecord>;
 }
@@ -397,9 +445,27 @@ export class BrowseSessionCoordinator {
   private readonly randomId: () => string;
   private readonly now: () => number;
   private readonly cores = new Map<string, CoreRegistry>();
+
+  /**
+   * Every live channel by its own session scope.
+   *
+   * The Classic publication path finds its channel from the caller's mode
+   * lease, because a Classic result belongs to one tab's role. The catalog
+   * path cannot: the catalog lease is a process-wide singleton whose work runs
+   * through `runBrowse`, and the only identity that reaches a caller
+   * inside that transaction is `CoordinatedBrowseSession.sessionScope`. That
+   * string is already documented as server-side-only, so indexing by it lends
+   * the catalog publication the same channel-bound lifetime the Classic one
+   * has — including retirement on release, invalidation and shutdown, which
+   * the channel already performs and neither path has to remember to do.
+   */
+  private readonly channelsByScope = new Map<string, ChannelRecord>();
   private readonly coreEpochs = new Map<string, number>();
   private readonly handles = new Map<string, LeaseRecord>();
   private readonly retiredHandles = new Map<string, RetiredHandle>();
+  private readonly modeRetiredListeners = new Set<
+    (event: ModeSessionRetiredEvent) => void
+  >();
   private generation = 0;
   private nonce = 0;
   private stopped = false;
@@ -411,6 +477,15 @@ export class BrowseSessionCoordinator {
     this.limits = this.normalizeLimits(options.limits);
     this.randomId = options.randomId ?? randomUUID;
     this.now = options.now ?? Date.now;
+  }
+
+  public onModeRetired(
+    listener: (event: ModeSessionRetiredEvent) => void
+  ): () => void {
+    this.modeRetiredListeners.add(listener);
+    return () => {
+      this.modeRetiredListeners.delete(listener);
+    };
   }
 
   public acquireMode(input: {
@@ -557,7 +632,7 @@ export class BrowseSessionCoordinator {
     token: string
   ): string {
     const channel = this.resolveClassicChannel(access, role);
-    const raw = channel.classicItemKeys?.tokenToRaw.get(token);
+    const raw = channel.publishedItemKeys?.tokenToRaw.get(token);
     if (!raw) {
       throw new BrowseSessionCoordinatorError(
         "STALE_GENERATION",
@@ -586,7 +661,7 @@ export class BrowseSessionCoordinator {
     token: string
   ): ClassicPublishedItemBinding {
     const channel = this.resolveClassicChannel(access, role);
-    const authority = channel.classicItemKeys;
+    const authority = channel.publishedItemKeys;
     const item = authority?.tokenToItem.get(token);
     if (!authority || !item) {
       throw new BrowseSessionCoordinatorError(
@@ -609,7 +684,7 @@ export class BrowseSessionCoordinator {
     role: ClassicSessionRole
   ): number {
     const channel = this.resolveClassicChannel(access, role);
-    return this.advanceClassicItemGeneration(channel);
+    return this.advancePublishedItemGeneration(channel);
   }
 
   /** Explicit search close: invalidate both visible and still-running results. */
@@ -618,7 +693,7 @@ export class BrowseSessionCoordinator {
     role: ClassicSessionRole
   ): void {
     const channel = this.resolveClassicChannel(access, role);
-    this.advanceClassicItemGeneration(channel);
+    this.advancePublishedItemGeneration(channel);
   }
 
   /**
@@ -635,43 +710,80 @@ export class BrowseSessionCoordinator {
     page: Pick<BrowseResult, "title" | "subtitle" | "level">
   ): ReadonlyArray<{ token: string; item: BrowseItem }> {
     const channel = this.resolveClassicChannel(access, role);
-    if (
-      !Number.isSafeInteger(authorityGeneration) ||
-      authorityGeneration !== channel.classicItemGeneration
-    ) {
-      throw new BrowseSessionCoordinatorError(
-        "STALE_GENERATION",
-        "A newer Classic result generation replaced this query"
-      );
-    }
-    if (
-      items.length > this.limits.maxPublishedItemKeysPerRole ||
-      !Number.isSafeInteger(page.level) ||
-      page.level < 0 ||
-      items.some(
-        (item) =>
-          typeof item.itemKey !== "string" || item.itemKey.length === 0
-      )
-    ) {
-      throw this.backpressure(
-        "The Classic result exceeds the item-key authority limit"
-      );
-    }
-    const authority: ClassicItemKeyAuthority = {
-      generation: authorityGeneration,
-      tokenToRaw: new Map<string, string>(),
-      rawToToken: new Map<string, string>(),
-      tokenToItem: new Map<string, BrowseItem & { itemKey: string }>(),
-      orderedTokens: [],
+    return this.replacePublishedItems(channel, authorityGeneration, items, {
+      tokenPrefix: "classic-item",
+      limit: this.limits.maxPublishedItemKeysPerRole,
+      staleMessage: "A newer Classic result generation replaced this query",
+      backpressureMessage:
+        "The Classic result exceeds the item-key authority limit",
+      // A page whose own level is not a real offset cannot serve as the proof a
+      // restore checks against, so it is refused with the same backpressure
+      // answer and at the same point in the sequence as an oversized page.
+      alsoRefuse: !Number.isSafeInteger(page.level) || page.level < 0,
       pageProof: Object.freeze({
         title: page.title ?? null,
         subtitle: page.subtitle ?? null,
         level: page.level,
       }),
+    });
+  }
+
+  /**
+   * The one atomic swap both publication paths run through.
+   *
+   * Written once rather than twice deliberately. The properties that make a
+   * published token safe — every raw key replaced before anything leaves the
+   * server, the whole set installed in a single assignment, and the generation
+   * re-checked AFTER the tokens are minted so a refresh that landed mid-mint
+   * cannot have its retirement undone — are not properties a second copy would
+   * keep by accident.
+   */
+  private replacePublishedItems(
+    channel: ChannelRecord,
+    authorityGeneration: number,
+    items: readonly BrowseItem[],
+    options: {
+      readonly tokenPrefix: string;
+      readonly limit: number;
+      readonly staleMessage: string;
+      readonly backpressureMessage: string;
+      /** A caller-specific refusal, taken with the size check. */
+      readonly alsoRefuse?: boolean;
+      readonly pageProof?: ClassicPublishedPageProof;
+    }
+  ): ReadonlyArray<{ token: string; item: BrowseItem }> {
+    if (
+      !Number.isSafeInteger(authorityGeneration) ||
+      authorityGeneration !== channel.publishedItemGeneration
+    ) {
+      throw new BrowseSessionCoordinatorError(
+        "STALE_GENERATION",
+        options.staleMessage
+      );
+    }
+    if (
+      items.length > options.limit ||
+      options.alsoRefuse === true ||
+      items.some(
+        (item) =>
+          typeof item.itemKey !== "string" || item.itemKey.length === 0
+      )
+    ) {
+      throw this.backpressure(options.backpressureMessage);
+    }
+    const authority: PublishedItemKeyAuthority = {
+      generation: authorityGeneration,
+      tokenToRaw: new Map<string, string>(),
+      rawToToken: new Map<string, string>(),
+      tokenToItem: new Map<string, BrowseItem & { itemKey: string }>(),
+      orderedTokens: [],
+      ...(options.pageProof !== undefined
+        ? { pageProof: options.pageProof }
+        : {}),
     };
     const published = items.map((item) => {
       const raw = item.itemKey as string;
-      const token = this.uniqueToken("classic-item");
+      const token = this.uniqueToken(options.tokenPrefix);
       const frozen = Object.freeze({ ...item, itemKey: raw });
       authority.tokenToRaw.set(token, raw);
       authority.rawToToken.set(raw, token);
@@ -681,13 +793,13 @@ export class BrowseSessionCoordinator {
       delete descriptor.itemKey;
       return Object.freeze({ token, item: Object.freeze(descriptor) });
     });
-    if (authorityGeneration !== channel.classicItemGeneration) {
+    if (authorityGeneration !== channel.publishedItemGeneration) {
       throw new BrowseSessionCoordinatorError(
         "STALE_GENERATION",
-        "A newer Classic result generation replaced this query"
+        options.staleMessage
       );
     }
-    channel.classicItemKeys = authority;
+    channel.publishedItemKeys = authority;
     return published;
   }
 
@@ -702,9 +814,9 @@ export class BrowseSessionCoordinator {
     restoredPage: BrowseResult
   ): boolean {
     const channel = this.resolveClassicChannel(access, role);
-    const authority = channel.classicItemKeys;
+    const authority = channel.publishedItemKeys;
     if (
-      channel.classicItemGeneration !== authorityGeneration ||
+      channel.publishedItemGeneration !== authorityGeneration ||
       authority?.generation !== authorityGeneration ||
       !authority.pageProof
     ) {
@@ -729,7 +841,7 @@ export class BrowseSessionCoordinator {
             this.samePublishedItem(retained, restored[index])
         );
       });
-    if (!matches) this.advanceClassicItemGeneration(channel);
+    if (!matches) this.advancePublishedItemGeneration(channel);
     return matches;
   }
 
@@ -743,8 +855,8 @@ export class BrowseSessionCoordinator {
     authorityGeneration: number
   ): boolean {
     const channel = this.resolveClassicChannel(access, role);
-    if (channel.classicItemGeneration !== authorityGeneration) return false;
-    this.advanceClassicItemGeneration(channel);
+    if (channel.publishedItemGeneration !== authorityGeneration) return false;
+    this.advancePublishedItemGeneration(channel);
     return true;
   }
 
@@ -778,6 +890,252 @@ export class BrowseSessionCoordinator {
           : { ...item }
       ),
     };
+  }
+
+  // ── Catalog-session publication ──────────────────────────────────────
+  //
+  // The same token authority the Classic path uses, reached by session scope
+  // instead of by mode lease, and restricted to the catalog role so the two
+  // paths can never contend for one channel's single authority.
+  //
+  // `.agents/plans/library-live-view.md` Slice 1. The live library session
+  // reads Roon's roots on the catalog channel and publishes every row to the
+  // UI as `{ generation, token }`. Raw Roon item keys never leave the server,
+  // and a refresh, a reconnect or a lost session retires every outstanding
+  // reference in one step rather than row by row.
+
+  /**
+   * Retire every reference this catalog channel has published and reserve the
+   * generation for the next set.
+   *
+   * Synchronous and total, deliberately: the reader is about to spend a second
+   * or two paging Roon, and the tokens from the previous snapshot must be dead
+   * for that whole interval rather than dying when the new set lands. A
+   * request arriving in between is refused as stale, which is the truth — the
+   * snapshot it was reading is gone.
+   */
+  public beginCatalogPublication(sessionScope: string): number {
+    return this.advancePublishedItemGeneration(
+      this.resolveCatalogChannelByScope(sessionScope)
+    );
+  }
+
+  /** Atomically install one generation's published rows. */
+  public replaceCatalogPublishedItems(
+    sessionScope: string,
+    authorityGeneration: number,
+    items: readonly BrowseItem[]
+  ): ReadonlyArray<{ token: string; item: BrowseItem }> {
+    return this.replacePublishedItems(
+      this.resolveCatalogChannelByScope(sessionScope),
+      authorityGeneration,
+      items,
+      {
+        tokenPrefix: "library-row",
+        limit: this.limits.maxPublishedCatalogItemKeys,
+        staleMessage:
+          "A newer library generation replaced this snapshot while it was being published",
+        backpressureMessage:
+          "The library roots exceed the published-item authority limit",
+      }
+    );
+  }
+
+  /**
+   * One published reference, back to the row that minted it.
+   *
+   * Both halves of the reference are checked. The generation is checked
+   * because a token from a retired snapshot must not resolve even if a later
+   * snapshot happened to mint the same string, and the token is checked
+   * because a caller may hold a reference to a row this generation no longer
+   * carries. Either failure is `STALE_GENERATION`: from the caller's side they
+   * are the same event — the thing you were pointing at is not there any more.
+   */
+  public resolveCatalogPublishedItem(
+    sessionScope: string,
+    authorityGeneration: number,
+    token: string
+  ): BrowseItem & { itemKey: string } {
+    const channel = this.resolveCatalogChannelByScope(sessionScope);
+    const authority = channel.publishedItemKeys;
+    if (
+      authority === undefined ||
+      channel.publishedItemGeneration !== authorityGeneration ||
+      authority.generation !== authorityGeneration
+    ) {
+      throw new BrowseSessionCoordinatorError(
+        "STALE_GENERATION",
+        "The library snapshot that published this reference has been retired"
+      );
+    }
+    const item = authority.tokenToItem.get(token);
+    if (item === undefined) {
+      throw new BrowseSessionCoordinatorError(
+        "STALE_GENERATION",
+        "The library snapshot does not carry this reference"
+      );
+    }
+    return item;
+  }
+
+  /**
+   * Publish one more level's rows into the generation that is already live.
+   *
+   * `.agents/plans/library-live-view.md` Slice 2. The roots are published once
+   * per generation and every page opened inside that generation adds its own
+   * level to the same authority, because a reference is only meaningful
+   * alongside the roots reference it was reached from: an artist's albums have
+   * to stay resolvable while the reader is looking at one of them, and Back
+   * has to find the artist's own rows still alive.
+   *
+   * APPEND RATHER THAN REPLACE, and the distinction is the whole point. A
+   * replace would retire the roots the moment a reader opened anything, which
+   * would make every list on screen dead the instant it was used. The
+   * generation still means exactly what it meant: one library snapshot, whose
+   * references all die together and never one at a time.
+   *
+   * The generation is checked before the tokens are minted and again after,
+   * the same double check `replacePublishedItems` performs and for the same
+   * reason — a refresh that landed mid-mint must not have its retirement
+   * quietly undone by rows published into the authority it just killed.
+   */
+  public appendCatalogPublishedItems(
+    sessionScope: string,
+    authorityGeneration: number,
+    items: readonly BrowseItem[]
+  ): ReadonlyArray<{ token: string; item: BrowseItem }> {
+    const channel = this.resolveCatalogChannelByScope(sessionScope);
+    const authority = channel.publishedItemKeys;
+    if (
+      !Number.isSafeInteger(authorityGeneration) ||
+      channel.publishedItemGeneration !== authorityGeneration ||
+      authority === undefined ||
+      authority.generation !== authorityGeneration
+    ) {
+      throw new BrowseSessionCoordinatorError(
+        "STALE_GENERATION",
+        "The library snapshot that published these references has been retired"
+      );
+    }
+    if (
+      authority.orderedTokens.length + items.length >
+        this.limits.maxPublishedCatalogItemKeys ||
+      items.some(
+        (item) => typeof item.itemKey !== "string" || item.itemKey.length === 0
+      )
+    ) {
+      throw this.backpressure(
+        "The library level exceeds the published-item authority limit"
+      );
+    }
+    const minted = items.map((item) => {
+      const raw = item.itemKey as string;
+      const token = this.uniqueToken("library-row");
+      const frozen = Object.freeze({ ...item, itemKey: raw });
+      const descriptor = { ...item };
+      delete descriptor.itemKey;
+      return {
+        token,
+        raw,
+        frozen,
+        published: Object.freeze({ token, item: Object.freeze(descriptor) }),
+      };
+    });
+    if (
+      channel.publishedItemGeneration !== authorityGeneration ||
+      channel.publishedItemKeys !== authority
+    ) {
+      throw new BrowseSessionCoordinatorError(
+        "STALE_GENERATION",
+        "The library snapshot that published these references has been retired"
+      );
+    }
+    for (const entry of minted) {
+      authority.tokenToRaw.set(entry.token, entry.raw);
+      // First token wins: two levels can legitimately carry one Roon row (an
+      // album on its artist's page and again in a genre), and the reverse map
+      // exists only for the Classic dedupe path. Overwriting it here would
+      // make the reverse map disagree with the forward one for no caller.
+      if (!authority.rawToToken.has(entry.raw)) {
+        authority.rawToToken.set(entry.raw, entry.token);
+      }
+      authority.tokenToItem.set(entry.token, entry.frozen);
+      authority.orderedTokens.push(entry.token);
+    }
+    return minted.map((entry) => entry.published);
+  }
+
+  /**
+   * Retire named references without touching the rest of the generation.
+   *
+   * The one exception to "references die together", and it is narrow on
+   * purpose: it exists so the live session can bound what one generation holds
+   * by dropping the levels a reader has navigated away from. A reference this
+   * retires answers `STALE_GENERATION` afterwards — the same answer, and the
+   * same recovery, as a reference whose whole generation died.
+   *
+   * Answers how many it actually retired rather than throwing on a stale
+   * generation: the caller is pruning, and a generation that has already been
+   * retired wholesale has nothing left for it to prune.
+   */
+  public retireCatalogPublishedTokens(
+    sessionScope: string,
+    authorityGeneration: number,
+    tokens: readonly string[]
+  ): number {
+    const channel = this.resolveCatalogChannelByScope(sessionScope);
+    const authority = channel.publishedItemKeys;
+    if (
+      channel.publishedItemGeneration !== authorityGeneration ||
+      authority === undefined ||
+      authority.generation !== authorityGeneration
+    ) {
+      return 0;
+    }
+    const retiring = new Set(tokens);
+    let retired = 0;
+    for (const token of retiring) {
+      const raw = authority.tokenToRaw.get(token);
+      if (raw === undefined) continue;
+      authority.tokenToRaw.delete(token);
+      authority.tokenToItem.delete(token);
+      if (authority.rawToToken.get(raw) === token) {
+        authority.rawToToken.delete(raw);
+      }
+      retired += 1;
+    }
+    if (retired > 0) {
+      authority.orderedTokens = authority.orderedTokens.filter(
+        (token) => !retiring.has(token)
+      );
+    }
+    return retired;
+  }
+
+  /**
+   * The catalog channel behind one session scope, or a refusal naming why it
+   * cannot be published into.
+   */
+  private resolveCatalogChannelByScope(sessionScope: string): ChannelRecord {
+    const channel = this.channelsByScope.get(sessionScope);
+    if (channel === undefined || channel.state !== "active") {
+      throw new BrowseSessionCoordinatorError(
+        "SESSION_LOST",
+        "The browse session that published these references is gone"
+      );
+    }
+    if (channel.role !== "catalog") {
+      // Not a caller mistake to route around: the Classic roles publish
+      // through their own lease-keyed path, and one channel has exactly one
+      // authority. Two publishers on one channel would silently retire each
+      // other's references.
+      throw new BrowseSessionCoordinatorError(
+        "INVALID_ROLE",
+        "Only the catalog session publishes library references"
+      );
+    }
+    this.assertLeaseUsable(channel.owner);
+    return channel;
   }
 
   public async releaseMode(access: ModeSessionAccess): Promise<void> {
@@ -835,6 +1193,36 @@ export class BrowseSessionCoordinator {
     return this.catalogHandle(lease);
   }
 
+  /**
+   * Acquire the isolated session used only to ask whether root counts moved.
+   * Re-rooting this channel must never invalidate keys published by the
+   * catalog channel.
+   */
+  public acquireCatalogCount(coreId: string): CatalogCountSessionHandle {
+    this.assertRunning();
+    this.assertIdentifier(coreId, "coreId");
+    const core = this.getCore(coreId);
+    if (core.catalogCount) {
+      throw this.backpressure("The Core already has a catalog count session");
+    }
+    this.assertPhysicalCapacity(core, 1);
+
+    const lease: CatalogCountLeaseRecord = {
+      kind: "catalog-count",
+      coreId,
+      coreEpoch: core.epoch,
+      handleId: this.uniqueToken("catalog-count-handle"),
+      generation: this.nextGeneration(),
+      state: "active",
+      channels: new Map(),
+      pending: 0,
+    };
+    this.addChannel(core, lease, "catalog-count");
+    core.catalogCount = lease;
+    this.handles.set(lease.handleId, lease);
+    return this.catalogCountHandle(lease);
+  }
+
   public runCatalog<T>(
     coreId: string,
     handle: CatalogSessionHandle,
@@ -845,6 +1233,30 @@ export class BrowseSessionCoordinator {
     const channel = lease.channels.get("catalog");
     if (!channel) throw this.sessionLost("The catalog session is unavailable");
     return this.runChannel(lease, channel, work);
+  }
+
+  public runCatalogCount<T>(
+    coreId: string,
+    handle: CatalogCountSessionHandle,
+    work: (session: CoordinatedBrowseSession) => Promise<T>
+  ): Promise<T> {
+    const lease = this.resolveLease(coreId, handle, "catalog-count");
+    if (lease.kind !== "catalog-count") throw this.invalidHandle();
+    const channel = lease.channels.get("catalog-count");
+    if (!channel) {
+      throw this.sessionLost("The catalog count session is unavailable");
+    }
+    return this.runChannel(lease, channel, work);
+  }
+
+  public async releaseCatalogCount(
+    coreId: string,
+    handle: CatalogCountSessionHandle
+  ): Promise<void> {
+    if (this.isRetiredHandle(coreId, handle)) return;
+    const lease = this.resolveLease(coreId, handle, "catalog-count", true);
+    if (lease.kind !== "catalog-count") throw this.invalidHandle();
+    await this.beginReleaseLease(lease, "STALE_GENERATION", true);
   }
 
   public async releaseCatalog(
@@ -948,6 +1360,91 @@ export class BrowseSessionCoordinator {
   }
 
   /**
+   * Run one action lease's resolution work on the channel that published the
+   * references it is acting on, inside that channel's own serialized tail.
+   *
+   * `.agents/plans/library-live-view.md` Slice 2, and the one thing the live
+   * album page could not do before it. A live reference names a Roon item key
+   * that was minted on the library's browse session; the same string on the
+   * action lease's own session names some other row, or nothing. So the work
+   * has to happen where the key means something, and this is the entry point
+   * that lets an action lease reach there without owning the channel.
+   *
+   * WHAT DOES NOT MOVE, WHICH IS EVERYTHING THAT MAKES AN ACTION SAFE. The
+   * single-execute claim stays on the lease record and is asserted here
+   * unconsumed. The zone gate is applied to every call the work makes, exactly
+   * as it is on the lease's own channel. Quarantine-on-timeout is per-channel
+   * and already fires for the catalog channel, which is the correct blast
+   * radius rather than a widened one: a Roon call that may still settle must
+   * not be followed by another on the same stack, and taking the library
+   * channel down retires the generation, which is precisely the event every
+   * open page already knows how to recover from.
+   *
+   * Measured against the owner's Core before it was built (2026-09-03,
+   * `.agents/state.md`): an album's `Play Album` reference and a track row's
+   * own reference each answer with the four action leaves when browsed with a
+   * zone bound, both halves of a Roon-duplicated pair answer for themselves,
+   * and the artist level re-opens identically afterwards.
+   */
+  public runLibraryAction<T>(
+    access: ActionSessionAccess,
+    anchor: LibraryActionAnchor,
+    work: (session: CoordinatedBrowseSession) => Promise<T>
+  ): Promise<T> {
+    const lease = this.resolveAction(access);
+    const channel = this.resolveLibraryActionChannel(anchor);
+    return this.runChannel(
+      lease,
+      channel,
+      work,
+      () => {
+        if (lease.socketId !== access.socketId || lease.tabId !== access.tabId) {
+          throw this.ownerMismatch();
+        }
+        if (lease.executeClaimed || lease.executeIssued) {
+          throw new BrowseSessionCoordinatorError(
+            "STALE_GENERATION",
+            "The action lease already crossed its execute boundary"
+          );
+        }
+        this.assertActionModeCurrent(lease);
+        // Re-checked on the tail rather than only at entry: this call may have
+        // waited behind a root re-read that retired the whole snapshot.
+        this.resolveLibraryActionChannel(anchor);
+      },
+      (options) => this.assertActionZone(lease, options.zoneId)
+    );
+  }
+
+  /**
+   * The library channel an anchor names, or a refusal.
+   *
+   * Both halves are checked. The channel must be the one that minted the
+   * references — a different catalog session's keys are somebody else's rows —
+   * and its publication generation must be the one they were minted in. A
+   * reference from a retired snapshot is refused `STALE_GENERATION` here, which
+   * is what the reader is told, rather than dispatched against whatever the key
+   * happens to name now.
+   */
+  private resolveLibraryActionChannel(
+    anchor: LibraryActionAnchor
+  ): ChannelRecord {
+    const channel = this.resolveCatalogChannelByScope(anchor.sessionScope);
+    const authority = channel.publishedItemKeys;
+    if (
+      !Number.isSafeInteger(anchor.authorityGeneration) ||
+      authority === undefined ||
+      authority.generation !== anchor.authorityGeneration
+    ) {
+      throw new BrowseSessionCoordinatorError(
+        "STALE_GENERATION",
+        "The library snapshot that published this reference has been retired"
+      );
+    }
+    return channel;
+  }
+
+  /**
    * Atomically reserve the execute winner while the owning browse
    * generation is still current. All pre-dispatch rechecks run after this
    * claim, so a later mode switch cannot convert the winner into a cancel.
@@ -991,6 +1488,50 @@ export class BrowseSessionCoordinator {
     const lease = this.resolveAction(access, false);
     const channel = lease.channels.get("action");
     if (!channel) throw this.sessionLost("The action session is unavailable");
+    return this.dispatchActionExecute(lease, channel, access, options, onIssued);
+  }
+
+  /**
+   * Cross the same boundary for a live library reference, on the channel that
+   * published it, anchored to that channel's publication generation.
+   *
+   * `.agents/plans/library-live-view.md` Slice 2. Everything the action lease
+   * owns still applies and is applied here — the unconsumed execute claim, the
+   * zone gate, the owner and mode checks, the one-shot dispatch latch. What
+   * changes is only where the call lands, and it has to change: the leaf's item
+   * key was minted on the library's browse session and names nothing anywhere
+   * else. The anchor is re-checked on the tail, so a refresh that retired the
+   * snapshot between the claim and the dispatch refuses the call outright
+   * rather than executing a key whose meaning has expired.
+   */
+  public executeLibraryAction(
+    access: ActionSessionAccess,
+    anchor: LibraryActionAnchor,
+    options: CoordinatedBrowseOptions,
+    onIssued: () => void
+  ): Promise<BrowseResult> {
+    const lease = this.resolveAction(access, false);
+    const channel = this.resolveLibraryActionChannel(anchor);
+    return this.dispatchActionExecute(
+      lease,
+      channel,
+      access,
+      options,
+      onIssued,
+      () => {
+        this.resolveLibraryActionChannel(anchor);
+      }
+    );
+  }
+
+  private dispatchActionExecute(
+    lease: ActionLeaseRecord,
+    channel: ChannelRecord,
+    access: ActionSessionAccess,
+    options: CoordinatedBrowseOptions,
+    onIssued: () => void,
+    assertAnchorCurrent: () => void = () => undefined
+  ): Promise<BrowseResult> {
     if (typeof onIssued !== "function") throw this.invalidHandle();
     if (!lease.executeClaimed || lease.executeIssued) {
       throw new BrowseSessionCoordinatorError(
@@ -1022,6 +1563,11 @@ export class BrowseSessionCoordinator {
         );
       }
       this.assertActionZone(lease, options.zoneId);
+      // For a library action this is the anchor check, run here rather than
+      // only at entry: the snapshot behind the reference may have been retired
+      // while this call waited on the library's own tail, and a key from a
+      // retired snapshot must be refused rather than sent.
+      assertAnchorCurrent();
 
       channel.touchedHierarchies.add(options.hierarchy);
       let issued = false;
@@ -1035,6 +1581,9 @@ export class BrowseSessionCoordinator {
         onTimeout: (lateSettlement) => {
           this.quarantineChannel(channel, lateSettlement);
           this.releaseAfterTimeout(lease, false);
+          if (channel.owner !== lease) {
+            this.releaseAfterTimeout(channel.owner, true);
+          }
         },
       };
       return this.browseService.browse(
@@ -1074,7 +1623,7 @@ export class BrowseSessionCoordinator {
     for (const lease of core.tabs.values()) {
       if (lease.socketId !== socketId || lease.state !== "active") continue;
       lease.state = "disconnected";
-      this.clearClassicItemKeys(lease);
+      this.clearPublishedItemKeys(lease);
       this.clearTimer(lease.idleTimer);
       lease.idleTimer = undefined;
       lease.graceTimer = this.unrefTimer(
@@ -1099,6 +1648,7 @@ export class BrowseSessionCoordinator {
       ...core.tabs.values(),
       ...core.actions.values(),
       ...(core.catalog ? [core.catalog] : []),
+      ...(core.catalogCount ? [core.catalogCount] : []),
       ...[...core.sessions].map((session) => session.owner),
     ]);
     await Promise.all(
@@ -1155,6 +1705,7 @@ export class BrowseSessionCoordinator {
         ...core.tabs.values(),
         ...core.actions.values(),
         ...(core.catalog ? [core.catalog] : []),
+        ...(core.catalogCount ? [core.catalogCount] : []),
       ]) {
         lease.state = "closed";
         if (lease.kind === "mode") {
@@ -1170,11 +1721,13 @@ export class BrowseSessionCoordinator {
       core.tabs.clear();
       core.actions.clear();
       core.catalog = undefined;
+      core.catalogCount = undefined;
       core.sessions.clear();
     }
     this.cores.clear();
     this.handles.clear();
     this.retiredHandles.clear();
+    this.modeRetiredListeners.clear();
   }
 
   private runChannel<T>(
@@ -1204,6 +1757,14 @@ export class BrowseSessionCoordinator {
         onTimeout: (lateSettlement) => {
           this.quarantineChannel(channel, lateSettlement);
           this.releaseAfterTimeout(lease, true);
+          // A lease may run on a channel it does not own — a library action
+          // resolves references on the catalog channel that minted them. The
+          // channel is quarantined either way, so its owner's lease must be
+          // marked lost too, or the owner would keep a lease whose only
+          // channel is dead and every later call on it would fail forever.
+          if (channel.owner !== lease) {
+            this.releaseAfterTimeout(channel.owner, true);
+          }
         },
       };
       const session = new CoordinatedBrowseSessionImpl(
@@ -1275,13 +1836,14 @@ export class BrowseSessionCoordinator {
       if (reason === "SESSION_LOST" && lease.lossCode !== "SESSION_LOST") {
         lease.state = "lost";
         lease.lossCode = "SESSION_LOST";
+        if (lease.kind === "mode") this.announceModeRetired(lease);
       }
       return lease.cleanupPromise;
     }
     if (lease.state === "closed") return;
     lease.state = reason === "SESSION_LOST" ? "lost" : "releasing";
     lease.lossCode ??= reason;
-    this.clearClassicItemKeys(lease);
+    this.clearPublishedItemKeys(lease);
     if (lease.kind === "mode") {
       this.clearTimer(lease.idleTimer);
       this.clearTimer(lease.graceTimer);
@@ -1298,7 +1860,30 @@ export class BrowseSessionCoordinator {
     ).then(() => {
       this.finalizeLease(lease, lease.lossCode ?? reason);
     });
+    if (lease.kind === "mode" && lease.lossCode === "SESSION_LOST") {
+      this.announceModeRetired(lease);
+    }
     return lease.cleanupPromise;
+  }
+
+  private announceModeRetired(lease: ModeLeaseRecord): void {
+    if (lease.retirementAnnounced) return;
+    lease.retirementAnnounced = true;
+    const event: ModeSessionRetiredEvent = Object.freeze({
+      coreId: lease.coreId,
+      socketId: lease.socketId,
+      tabId: lease.tabId,
+      session: Object.freeze(this.modeHandle(lease)),
+      reason: "SESSION_LOST",
+    });
+    for (const listener of this.modeRetiredListeners) {
+      try {
+        listener(event);
+      } catch {
+        // Retirement is lifecycle truth, not part of cleanup authority. A
+        // broken observer cannot strand channels behind a lost lease.
+      }
+    }
   }
 
   private async releaseChannel(
@@ -1395,7 +1980,11 @@ export class BrowseSessionCoordinator {
    * keep the immediate release; their holder is the socket lifecycle itself.
    */
   private releaseAfterTimeout(lease: LeaseRecord, reroot: boolean): void {
-    if (lease.kind !== "catalog" && lease.kind !== "action") {
+    if (
+      lease.kind !== "catalog" &&
+      lease.kind !== "catalog-count" &&
+      lease.kind !== "action"
+    ) {
       void this.beginReleaseLease(lease, "SESSION_LOST", reroot);
       return;
     }
@@ -1433,6 +2022,12 @@ export class BrowseSessionCoordinator {
     if (channel.state === "closed") return;
     channel.state = "closed";
     channel.resolveClosed();
+    // The scope index must not outlive the channel: a scope string that
+    // resolved to a closed channel would let a caller publish into a session
+    // Roon no longer has, and every reference minted there would name nothing.
+    if (this.channelsByScope.get(channel.sessionName) === channel) {
+      this.channelsByScope.delete(channel.sessionName);
+    }
     const core = this.cores.get(channel.owner.coreId);
     core?.sessions.delete(channel);
     if (core) this.pruneCore(core);
@@ -1451,6 +2046,11 @@ export class BrowseSessionCoordinator {
       core.tabs.delete(lease.tabId);
     } else if (lease.kind === "catalog" && core.catalog === lease) {
       core.catalog = undefined;
+    } else if (
+      lease.kind === "catalog-count" &&
+      core.catalogCount === lease
+    ) {
+      core.catalogCount = undefined;
     } else if (
       lease.kind === "action" &&
       core.actions.get(lease.leaseId) === lease
@@ -1499,14 +2099,14 @@ export class BrowseSessionCoordinator {
     raw: string,
     item?: BrowseItem
   ): string {
-    const authority = channel.classicItemKeys ?? {
-      generation: channel.classicItemGeneration,
+    const authority = channel.publishedItemKeys ?? {
+      generation: channel.publishedItemGeneration,
       tokenToRaw: new Map<string, string>(),
       rawToToken: new Map<string, string>(),
       tokenToItem: new Map<string, BrowseItem & { itemKey: string }>(),
       orderedTokens: [],
     };
-    channel.classicItemKeys = authority;
+    channel.publishedItemKeys = authority;
     const existing = authority.rawToToken.get(raw);
     if (existing) {
       authority.tokenToRaw.delete(existing);
@@ -1545,27 +2145,27 @@ export class BrowseSessionCoordinator {
     return token;
   }
 
-  private clearClassicItemKeys(lease: LeaseRecord): void {
+  private clearPublishedItemKeys(lease: LeaseRecord): void {
     for (const channel of lease.channels.values()) {
-      channel.classicItemKeys?.tokenToRaw.clear();
-      channel.classicItemKeys?.rawToToken.clear();
-      channel.classicItemKeys?.tokenToItem.clear();
-      if (channel.classicItemKeys) channel.classicItemKeys.orderedTokens = [];
-      channel.classicItemKeys = undefined;
+      channel.publishedItemKeys?.tokenToRaw.clear();
+      channel.publishedItemKeys?.rawToToken.clear();
+      channel.publishedItemKeys?.tokenToItem.clear();
+      if (channel.publishedItemKeys) channel.publishedItemKeys.orderedTokens = [];
+      channel.publishedItemKeys = undefined;
     }
   }
 
-  private advanceClassicItemGeneration(channel: ChannelRecord): number {
-    if (channel.classicItemGeneration >= Number.MAX_SAFE_INTEGER) {
+  private advancePublishedItemGeneration(channel: ChannelRecord): number {
+    if (channel.publishedItemGeneration >= Number.MAX_SAFE_INTEGER) {
       throw this.backpressure("The Classic item generation space is exhausted");
     }
-    channel.classicItemKeys?.tokenToRaw.clear();
-    channel.classicItemKeys?.rawToToken.clear();
-    channel.classicItemKeys?.tokenToItem.clear();
-    if (channel.classicItemKeys) channel.classicItemKeys.orderedTokens = [];
-    channel.classicItemKeys = undefined;
-    channel.classicItemGeneration += 1;
-    return channel.classicItemGeneration;
+    channel.publishedItemKeys?.tokenToRaw.clear();
+    channel.publishedItemKeys?.rawToToken.clear();
+    channel.publishedItemKeys?.tokenToItem.clear();
+    if (channel.publishedItemKeys) channel.publishedItemKeys.orderedTokens = [];
+    channel.publishedItemKeys = undefined;
+    channel.publishedItemGeneration += 1;
+    return channel.publishedItemGeneration;
   }
 
   private samePublishedItem(
@@ -1635,7 +2235,11 @@ export class BrowseSessionCoordinator {
 
   private resolveLease(
     coreId: string,
-    handle: ModeSessionHandle | CatalogSessionHandle | ActionSessionHandle,
+    handle:
+      | ModeSessionHandle
+      | CatalogSessionHandle
+      | CatalogCountSessionHandle
+      | ActionSessionHandle,
     expectedKind: LeaseKind,
     allowInactive = false
   ): LeaseRecord {
@@ -1715,10 +2319,11 @@ export class BrowseSessionCoordinator {
       resolveClosed,
       quarantineCleaned: false,
       quarantineSettlements: 0,
-      classicItemGeneration: 0,
+      publishedItemGeneration: 0,
     };
     owner.channels.set(role, channel);
     core.sessions.add(channel);
+    this.channelsByScope.set(channel.sessionName, channel);
   }
 
   private getCore(coreId: string): CoreRegistry {
@@ -1740,6 +2345,7 @@ export class BrowseSessionCoordinator {
       core.tabs.size === 0 &&
       core.actions.size === 0 &&
       !core.catalog &&
+      !core.catalogCount &&
       core.sessions.size === 0
     ) {
       this.cores.delete(core.coreId);
@@ -1780,6 +2386,16 @@ export class BrowseSessionCoordinator {
     });
   }
 
+  private catalogCountHandle(
+    lease: CatalogCountLeaseRecord
+  ): CatalogCountSessionHandle {
+    return Object.freeze({
+      kind: "catalog-count" as const,
+      handleId: lease.handleId,
+      generation: lease.generation,
+    });
+  }
+
   private actionHandle(lease: ActionLeaseRecord): ActionSessionHandle {
     return Object.freeze({
       kind: "action" as const,
@@ -1794,7 +2410,11 @@ export class BrowseSessionCoordinator {
    */
   private isRetiredHandle(
     coreId: string,
-    handle: ModeSessionHandle | CatalogSessionHandle | ActionSessionHandle
+    handle:
+      | ModeSessionHandle
+      | CatalogSessionHandle
+      | CatalogCountSessionHandle
+      | ActionSessionHandle
   ): boolean {
     if (!handle || typeof handle.handleId !== "string") return false;
     const retired = this.retiredHandles.get(handle.handleId);

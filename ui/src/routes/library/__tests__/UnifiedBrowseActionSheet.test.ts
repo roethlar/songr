@@ -20,6 +20,7 @@ function state(over: Partial<UnifiedBrowseActionState> = {}): UnifiedBrowseActio
 				categoryTitle: 'Tracks'
 			}
 		},
+		zoneId: 'zone-1',
 		available: { 'play-now': true, 'add-next': true, queue: true },
 		error: null,
 		...over
@@ -28,7 +29,7 @@ function state(over: Partial<UnifiedBrowseActionState> = {}): UnifiedBrowseActio
 
 function mount(options: {
 	actionState?: UnifiedBrowseActionState;
-	zones?: readonly { zoneId: string; name: string }[];
+	zoneId?: string | null;
 } = {}) {
 	const onAction = vi.fn();
 	const onFavorite = vi.fn();
@@ -36,7 +37,7 @@ function mount(options: {
 	const result = render(UnifiedBrowseActionSheet, {
 		props: {
 			state: options.actionState ?? state(),
-			zones: options.zones ?? [{ zoneId: 'zone-a', name: 'Living Room' }],
+			zoneId: options.zoneId === undefined ? 'zone-a' : options.zoneId,
 			onAction,
 			onFavorite,
 			onClose
@@ -66,18 +67,20 @@ describe('UnifiedBrowseActionSheet', () => {
 		expect(harness.onFavorite).toHaveBeenCalledTimes(1);
 	});
 
-	it('preserves the chosen semantic through the explicit zone choice', async () => {
-		const harness = mount({
-			zones: [
-				{ zoneId: 'zone-a', name: 'Living Room' },
-				{ zoneId: 'zone-b', name: 'Office' }
-			]
-		});
+	it('sends the chosen semantic straight to the selected zone (issue #12)', async () => {
+		const harness = mount({ zoneId: 'zone-b' });
 
 		await fireEvent.click(screen.getByTestId('unified-browse-action-queue'));
-		expect(screen.getByTestId('unified-browse-action-zones')).toHaveTextContent('Queue on');
-		await fireEvent.click(screen.getByRole('button', { name: 'Office' }));
 		expect(harness.onAction).toHaveBeenCalledWith('queue', 'zone-b');
+		expect(screen.queryByTestId('unified-browse-action-zones')).toBeNull();
+	});
+
+	it('disables every action while no zone is selectable', async () => {
+		const harness = mount({ zoneId: null });
+
+		expect(screen.getByTestId('unified-browse-action-queue')).toBeDisabled();
+		await fireEvent.click(screen.getByTestId('unified-browse-action-queue'));
+		expect(harness.onAction).not.toHaveBeenCalled();
 	});
 
 	it('moves focus into the modal and traps Tab navigation', async () => {

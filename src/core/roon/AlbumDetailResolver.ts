@@ -2,25 +2,12 @@ import { ALBUM_ACTION_MAX_CHOICES } from "../../shared/albumActionContracts";
 import { ALBUM_DETAIL_MAX_TRACKS } from "../../shared/libraryAlbumContracts";
 import {
   CATALOG_DISPLAY_TEXT_MAX_LENGTH,
-  CATALOG_RELEASE_EVIDENCE_SOURCE_CONTRACT,
-  AlbumRef,
-  ArtistRef,
   normalizeCatalogText,
 } from "../../shared/catalogContracts";
 import { BrowseItem, BrowseResult } from "../../shared/types";
-import {
-  ResolvedSelectedArtistObservation,
-  createCatalogTrackTitleFingerprint,
-} from "../catalog/CatalogReconciliation";
 import { CoordinatedBrowseSession } from "./BrowseSessionCoordinator";
-import {
-  DiscographyResolver,
-  ObservedDiscography,
-} from "./DiscographyResolver";
 
-const MAX_DETAIL_ROWS =
-  ALBUM_DETAIL_MAX_TRACKS + ALBUM_ACTION_MAX_CHOICES;
-const MAX_DUPLICATE_REVALIDATIONS = ALBUM_ACTION_MAX_CHOICES;
+const MAX_DETAIL_ROWS = ALBUM_DETAIL_MAX_TRACKS + ALBUM_ACTION_MAX_CHOICES;
 const CONTROL_CHARACTER = /\p{Cc}/u;
 
 export type AlbumDetailResolverErrorCode =
@@ -41,40 +28,11 @@ export class AlbumDetailResolverError extends Error {
   }
 }
 
-export interface AlbumDetailResolution {
-  readonly observation: ResolvedSelectedArtistObservation;
-  readonly orderedTrackTitles: readonly string[];
-}
-
-export interface AlbumDetailParentObserver {
-  observeCurrent(
-    session: CoordinatedBrowseSession,
-    artist: Readonly<ArtistRef>,
-    first?: BrowseResult
-  ): Promise<ObservedDiscography>;
-}
-
-/** One distinguishable live edition of a catalog album, display data only. */
-export interface AlbumEditionCandidate {
-  readonly observationIndex: number;
-  readonly title: string;
-  readonly artist: string;
-  readonly editionText: string;
-}
-
-/** Chooser echo used to re-bind one previously observed edition candidate. */
-export interface AlbumEditionDescriptor {
-  readonly title: string;
-  readonly artist: string;
-  readonly editionText: string;
-}
-
-interface AlbumCandidate {
-  readonly observationIndex: number;
-}
-
 function canonicalDisplayText(value: unknown): string | null {
-  if (typeof value !== "string" || value.length > CATALOG_DISPLAY_TEXT_MAX_LENGTH) {
+  if (
+    typeof value !== "string" ||
+    value.length > CATALOG_DISPLAY_TEXT_MAX_LENGTH
+  ) {
     return null;
   }
   const canonical = value.normalize("NFKC").trim().replace(/\s+/gu, " ");
@@ -84,412 +42,54 @@ function canonicalDisplayText(value: unknown): string | null {
 }
 
 /**
- * Opens one stable catalog album from a freshly re-observed live artist level,
- * then converts its complete track list into keyless catalog/detail evidence.
+ * Reads one opened album level and returns its ordered track titles.
+ *
+ * WHAT THIS USED TO BE. This class opened a stable catalog album from a
+ * freshly re-observed live artist level and turned it into keyless catalog
+ * evidence — fingerprints, edition candidates, chooser descriptors, duplicate
+ * revalidation. All of that belonged to the saved catalog model and died with
+ * it (`.agents/plans/library-live-view.md` Slice 4). What remains is the one
+ * part that never needed a stored record: given an item key and the title the
+ * row that produced it rendered, read the level under it and say what its
+ * tracks are called, in Roon's own order.
+ *
+ * Its one caller is the collection (genre/composer drill) album page, which
+ * uses the returned titles to build the detail digest an action lease is
+ * granted against.
+ *
+ * The header check is title-only, on purpose. The expected title is the
+ * rendering of the very row this key came from, so this compares one level of
+ * one drill against the level directly under it — the same surface, one step
+ * apart. The subtitle is NOT checked: a drill row's credit line may be absent,
+ * and an absent credit has nothing to compare against a present header
+ * subtitle. Refusing there would report "this album changed" over a page the
+ * reader can plainly see.
  */
 export class AlbumDetailResolver {
-  public constructor(
-    private readonly parentObserver: AlbumDetailParentObserver =
-      new DiscographyResolver()
-  ) {}
-
-  public async resolve(
+  public async readDetailRows(
     session: CoordinatedBrowseSession,
-    artist: Readonly<ArtistRef>,
-    album: Readonly<AlbumRef>,
-    discography: ObservedDiscography
-  ): Promise<AlbumDetailResolution> {
-    if (
-      artist.resolutionStatus !== "resolved" ||
-      album.resolutionStatus !== "resolved" ||
-      album.artistLocalId !== artist.localId ||
-      album.coreId !== artist.coreId
-    ) {
-      throw new AlbumDetailResolverError(
-        "ALBUM_NOT_FOUND",
-        "The requested album is not resolved for this artist"
-      );
-    }
-
-    if (normalizeCatalogText(album.editionText).length > 0) {
-      throw new AlbumDetailResolverError(
-        "ALBUM_AMBIGUOUS",
-        "The live album detail cannot prove the catalog edition"
-      );
-    }
-
-    const candidates = this.candidates(discography, album);
-    if (candidates.length === 0) {
-      throw new AlbumDetailResolverError(
-        "ALBUM_NOT_FOUND",
-        "The album no longer exists in the live discography"
-      );
-    }
-    if (
-      candidates.some(
-        ({ observationIndex }) =>
-          normalizeCatalogText(
-            discography.observation.albums[observationIndex].editionText
-          ).length > 0
-      )
-    ) {
-      throw new AlbumDetailResolverError(
-        "ALBUM_AMBIGUOUS",
-        "The live discography contains edition evidence the detail cannot prove"
-      );
-    }
-
-    if (candidates.length === 1) {
-      const opened = await this.openCandidate(
-        session,
-        album,
-        discography,
-        candidates[0]
-      );
-      if (
-        album.trackTitleFingerprint !== undefined &&
-        album.trackTitleFingerprint !== opened.fingerprint
-      ) {
-        throw new AlbumDetailResolverError(
-          "DETAIL_MISMATCH",
-          "The live album track sequence no longer matches its catalog identity"
-        );
-      }
-      return this.buildResolution(
-        discography,
-        candidates[0].observationIndex,
-        opened.detail,
-        opened.orderedTrackTitles
-      );
-    }
-
-    if (
-      album.trackTitleFingerprint === undefined ||
-      candidates.length > MAX_DUPLICATE_REVALIDATIONS
-    ) {
-      throw new AlbumDetailResolverError(
-        "ALBUM_AMBIGUOUS",
-        "The live discography does not identify one exact album edition"
-      );
-    }
-
-    const expectedFingerprint = album.trackTitleFingerprint;
-    const matchingOrdinals: number[] = [];
-    let current = discography;
-    for (let ordinal = 0; ordinal < candidates.length; ordinal += 1) {
-      const currentCandidates = this.requireStableCandidates(
-        current,
-        album,
-        candidates.length
-      );
-      const opened = await this.openCandidate(
-        session,
-        album,
-        current,
-        currentCandidates[ordinal]
-      );
-      if (opened.fingerprint === expectedFingerprint) {
-        matchingOrdinals.push(ordinal);
-      }
-      if (ordinal + 1 < candidates.length) {
-        current = await this.refreshParent(session, artist);
-      }
-    }
-
-    if (matchingOrdinals.length === 0) {
-      throw new AlbumDetailResolverError(
-        "ALBUM_NOT_FOUND",
-        "No duplicate live album matched the catalog track fingerprint"
-      );
-    }
-    if (matchingOrdinals.length !== 1) {
-      throw new AlbumDetailResolverError(
-        "ALBUM_AMBIGUOUS",
-        "More than one live album matched the catalog track fingerprint"
-      );
-    }
-
-    // Leave the shared interactive session on a freshly revalidated copy of
-    // the winning detail. Authority comes from the refreshed parent even when
-    // Roon happens to repeat the same opaque key string.
-    current = await this.refreshParent(session, artist);
-    const finalCandidates = this.requireStableCandidates(
-      current,
-      album,
-      candidates.length
-    );
-    const winner = finalCandidates[matchingOrdinals[0]];
-    const opened = await this.openCandidate(
-      session,
-      album,
-      current,
-      winner
-    );
-    if (opened.fingerprint !== expectedFingerprint) {
-      throw new AlbumDetailResolverError(
-        "DETAIL_MISMATCH",
-        "The duplicate album changed during final revalidation"
-      );
-    }
-    return this.buildResolution(
-      current,
-      winner.observationIndex,
-      opened.detail,
-      opened.orderedTrackTitles
-    );
-  }
-
-  /**
-   * Every live discography row matching the catalog album's canonical title
-   * and artist, with the display fields a chooser needs to tell them apart.
-   */
-  public observeCandidates(
-    discography: ObservedDiscography,
-    album: Readonly<AlbumRef>
-  ): AlbumEditionCandidate[] {
-    return this.candidates(discography, album).map(({ observationIndex }) => {
-      const observed = discography.observation.albums[observationIndex];
-      return {
-        observationIndex,
-        title: observed.exactTitle,
-        artist: observed.exactArtist,
-        editionText: observed.editionText,
-      };
-    });
-  }
-
-  /**
-   * Open exactly the previously offered edition candidate against a fresh
-   * observation. Header and completeness proofs still apply; the catalog
-   * track fingerprint does not, because editions may differ from the
-   * reconciled catalog edition by design.
-   */
-  public async resolveCandidate(
-    session: CoordinatedBrowseSession,
-    artist: Readonly<ArtistRef>,
-    album: Readonly<AlbumRef>,
-    discography: ObservedDiscography,
-    descriptor: AlbumEditionDescriptor
-  ): Promise<AlbumDetailResolution> {
-    if (
-      artist.resolutionStatus !== "resolved" ||
-      album.resolutionStatus !== "resolved" ||
-      album.artistLocalId !== artist.localId ||
-      album.coreId !== artist.coreId
-    ) {
-      throw new AlbumDetailResolverError(
-        "ALBUM_NOT_FOUND",
-        "The requested album is not resolved for this artist"
-      );
-    }
-    const matches = this.observeCandidates(discography, album).filter(
-      (candidate) =>
-        normalizeCatalogText(candidate.title) ===
-          normalizeCatalogText(descriptor.title) &&
-        normalizeCatalogText(candidate.artist) ===
-          normalizeCatalogText(descriptor.artist) &&
-        normalizeCatalogText(candidate.editionText) ===
-          normalizeCatalogText(descriptor.editionText)
-    );
-    if (matches.length === 0) {
-      throw new AlbumDetailResolverError(
-        "ALBUM_NOT_FOUND",
-        "The chosen edition no longer exists in the live discography"
-      );
-    }
-    if (matches.length > 1) {
-      throw new AlbumDetailResolverError(
-        "ALBUM_AMBIGUOUS",
-        "The chosen edition descriptor does not identify one live album"
-      );
-    }
-    const opened = await this.openCandidate(session, album, discography, {
-      observationIndex: matches[0].observationIndex,
-    });
-    return this.buildResolution(
-      discography,
-      matches[0].observationIndex,
-      opened.detail,
-      opened.orderedTrackTitles
-    );
-  }
-
-  /**
-   * Opens one exact retained parent row. Unlike catalog resolution, the row's
-   * page-scoped item key is the authority, so identical title/artist/edition
-   * rows remain independently selectable and an ambiguous catalog anchor is
-   * acceptable when it is bound to one resolved artist.
-   */
-  public async resolveObservedCandidate(
-    session: CoordinatedBrowseSession,
-    artist: Readonly<ArtistRef>,
-    album: Readonly<AlbumRef>,
-    discography: ObservedDiscography,
-    observationIndex: number
-  ): Promise<AlbumDetailResolution> {
-    if (
-      artist.resolutionStatus !== "resolved" ||
-      album.artistLocalId !== artist.localId ||
-      album.coreId !== artist.coreId ||
-      !Number.isSafeInteger(observationIndex) ||
-      observationIndex < 0
-    ) {
-      throw new AlbumDetailResolverError(
-        "ALBUM_NOT_FOUND",
-        "The requested album row is not bound to this artist"
-      );
-    }
-    const observed = discography.observation.albums[observationIndex];
-    if (
-      !observed ||
-      normalizeCatalogText(observed.exactTitle) !== album.normalizedTitle ||
-      normalizeCatalogText(observed.exactArtist) !== album.normalizedArtist
-    ) {
-      throw new AlbumDetailResolverError(
-        "DETAIL_MISMATCH",
-        "The retained album row no longer matches the album group"
-      );
-    }
-    const opened = await this.openCandidate(session, album, discography, {
-      observationIndex,
-    });
-    return this.buildResolution(
-      discography,
-      observationIndex,
-      opened.detail,
-      opened.orderedTrackTitles
-    );
-  }
-
-  private candidates(
-    discography: ObservedDiscography,
-    album: Readonly<AlbumRef>
-  ): AlbumCandidate[] {
-    return discography.observation.albums
-      .map((_observed, observationIndex) => ({ observationIndex }))
-      .filter(({ observationIndex }) => {
-        const observed = discography.observation.albums[observationIndex];
-        return (
-          normalizeCatalogText(observed.exactTitle) === album.normalizedTitle &&
-          normalizeCatalogText(observed.exactArtist) === album.normalizedArtist
-        );
-      });
-  }
-
-  private requireStableCandidates(
-    discography: ObservedDiscography,
-    album: Readonly<AlbumRef>,
-    expectedCount: number
-  ): AlbumCandidate[] {
-    const candidates = this.candidates(discography, album);
-    if (
-      candidates.length !== expectedCount ||
-      candidates.some(
-        ({ observationIndex }) =>
-          normalizeCatalogText(
-            discography.observation.albums[observationIndex].editionText
-          ).length > 0
-      )
-    ) {
-      throw new AlbumDetailResolverError(
-        "ALBUM_AMBIGUOUS",
-        "The duplicate album set changed during revalidation"
-      );
-    }
-    return candidates;
-  }
-
-  private async refreshParent(
-    session: CoordinatedBrowseSession,
-    artist: Readonly<ArtistRef>
-  ): Promise<ObservedDiscography> {
-    const parent = await session.pop({
-      hierarchy: "artists",
-      levels: 1,
-      refresh: true,
-      pageSize: 100,
-    });
-    return this.parentObserver.observeCurrent(session, artist, parent);
-  }
-
-  private async openCandidate(
-    session: CoordinatedBrowseSession,
-    album: Readonly<AlbumRef>,
-    discography: ObservedDiscography,
-    candidate: AlbumCandidate
-  ): Promise<{
-    readonly detail: BrowseResult;
-    readonly orderedTrackTitles: string[];
-    readonly fingerprint: string;
-  }> {
-    const liveRows = discography.liveAlbums.filter(
-      (row) => row.observationIndex === candidate.observationIndex
-    );
-    if (liveRows.length !== 1) {
-      throw new AlbumDetailResolverError(
-        "ALBUM_AMBIGUOUS",
-        "The live album row could not be bound uniquely"
-      );
-    }
-
+    hierarchy: string,
+    itemKey: string,
+    expectedTitle: string
+  ): Promise<string[]> {
     const detail = await session.browse({
-      hierarchy: "artists",
-      itemKey: liveRows[0].itemKey,
+      hierarchy,
+      itemKey,
       offset: 0,
       pageSize: MAX_DETAIL_ROWS,
     });
-    const orderedTrackTitles = this.readDetail(detail, album);
-    const detailFingerprint = createCatalogTrackTitleFingerprint(
-      orderedTrackTitles
-    );
-    return { detail, orderedTrackTitles, fingerprint: detailFingerprint };
+    return this.readDetail(detail, normalizeCatalogText(expectedTitle));
   }
 
-  private buildResolution(
-    discography: ObservedDiscography,
-    observationIndex: number,
-    detail: BrowseResult,
-    orderedTrackTitles: string[]
-  ): AlbumDetailResolution {
-    const albums = discography.observation.albums.map((observed, index) =>
-      index === observationIndex
-        ? {
-            ...observed,
-            detail: {
-              sourceContract: CATALOG_RELEASE_EVIDENCE_SOURCE_CONTRACT,
-              fieldInventoryComplete: true as const,
-              headerTitle: canonicalDisplayText(detail.title) as string,
-              headerSubtitle: canonicalDisplayText(detail.subtitle) as string,
-              returnedTrackCount: orderedTrackTitles.length,
-              totalTrackCount: orderedTrackTitles.length,
-              orderedTrackTitles,
-              originalReleaseDateField: { status: "not-exposed" as const },
-              editionReleaseDateField: { status: "not-exposed" as const },
-            },
-          }
-        : observed
-    );
-    return {
-      observation: { ...discography.observation, albums },
-      orderedTrackTitles,
-    };
-  }
-
-  private readDetail(
-    detail: BrowseResult,
-    album: Readonly<AlbumRef>
-  ): string[] {
+  private readDetail(detail: BrowseResult, normalizedTitle: string): string[] {
     const headerTitle = canonicalDisplayText(detail.title);
-    const headerSubtitle = canonicalDisplayText(detail.subtitle);
     if (
       !headerTitle ||
-      !headerSubtitle ||
-      normalizeCatalogText(headerTitle) !== album.normalizedTitle ||
-      normalizeCatalogText(headerSubtitle) !== album.normalizedArtist
+      normalizeCatalogText(headerTitle) !== normalizedTitle
     ) {
       throw new AlbumDetailResolverError(
         "DETAIL_MISMATCH",
-        "The live album detail header does not match the catalog album"
+        "The live album detail header does not match the row it was opened from"
       );
     }
 

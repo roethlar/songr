@@ -1246,6 +1246,100 @@ describe("BrowseSessionCoordinator", () => {
     expect(coordinator.diagnostics("core-1").activeTabs).toBe(0);
   });
 
+  it("announces idle retirement once with the exact public mode handle", async () => {
+    jest.useFakeTimers();
+    coordinator.shutdown();
+    coordinator = makeCoordinator({ modeIdleMs: 100 });
+    const retired: unknown[] = [];
+    coordinator.onModeRetired((event) => retired.push(event));
+    const handle = await classicHandle();
+
+    jest.advanceTimersByTime(100);
+    await flushPromises();
+
+    expect(retired).toEqual([
+      {
+        coreId: "core-1",
+        socketId: "socket-1",
+        tabId: "tab-1",
+        session: handle,
+        reason: "SESSION_LOST",
+      },
+    ]);
+    expect(Object.isFrozen(retired[0])).toBe(true);
+    expect(Object.isFrozen((retired[0] as { session: unknown }).session)).toBe(
+      true
+    );
+  });
+
+  it("announces Core retirement once but not client release or same-tab replacement", async () => {
+    const retired: unknown[] = [];
+    coordinator.onModeRetired((event) => retired.push(event));
+
+    const released = await classicHandle();
+    await coordinator.releaseMode(modeAccess(released));
+    expect(retired).toEqual([]);
+
+    const replaced = await classicHandle();
+    const replacement = coordinator.acquireMode({
+      coreId: "core-1",
+      socketId: "socket-1",
+      tabId: "tab-1",
+      mode: "classic",
+    });
+    await flushPromises();
+    expect(retired).toEqual([]);
+
+    await coordinator.invalidateCore("core-1");
+    expect(retired).toEqual([
+      {
+        coreId: "core-1",
+        socketId: "socket-1",
+        tabId: "tab-1",
+        session: replacement,
+        reason: "SESSION_LOST",
+      },
+    ]);
+    expect(replacement.generation).toBeGreaterThan(replaced.generation);
+  });
+
+  it("announces a late release upgrade once and isolates throwing observers", async () => {
+    const observed: unknown[] = [];
+    coordinator.onModeRetired(() => {
+      throw new Error("observer failed");
+    });
+    coordinator.onModeRetired((event) => observed.push(event));
+    const handle = await classicHandle();
+    const gate = deferred<string>();
+    const run = coordinator.runMode(
+      modeAccess(handle),
+      "classic-browse",
+      async () => gate.promise
+    );
+    const runAssertion = expect(run).rejects.toMatchObject({
+      code: "SESSION_LOST",
+    });
+    await flushPromises();
+
+    const release = coordinator.releaseMode(modeAccess(handle));
+    const invalidation = coordinator.invalidateCore("core-1");
+    expect(observed).toEqual([
+      expect.objectContaining({ session: handle, reason: "SESSION_LOST" }),
+    ]);
+
+    gate.resolve("late");
+    await runAssertion;
+    await release;
+    await invalidation;
+    await flushPromises();
+
+    expect(observed).toHaveLength(1);
+    expect(coordinator.diagnostics("core-1")).toMatchObject({
+      activeTabs: 0,
+      sessions: 0,
+    });
+  });
+
   it("does not expire a mode while accepted work is still pending", async () => {
     jest.useFakeTimers();
     coordinator.shutdown();
@@ -1876,6 +1970,55 @@ describe("BrowseSessionCoordinator", () => {
     ).toMatchObject({ kind: "action" });
   });
 
+  it("gives catalog count checks a different physical session", async () => {
+    const catalog = coordinator.acquireCatalog("core-1");
+    const count = coordinator.acquireCatalogCount("core-1");
+
+    await coordinator.runCatalog("core-1", catalog, (session) =>
+      session.browse({ hierarchy: "albums" })
+    );
+    await coordinator.runCatalogCount("core-1", count, (session) =>
+      session.browse({ hierarchy: "albums", popAll: true, refresh: true })
+    );
+
+    const [publicationCall, countCall] = service.browse.mock.calls.map(
+      (call) => call[0] as Record<string, unknown>
+    );
+    expect(publicationCall.multiSessionKey).not.toBe(countCall.multiSessionKey);
+    expect(coordinator.diagnostics("core-1")).toMatchObject({
+      catalog: 1,
+      sessions: 2,
+      activeSessions: 2,
+    });
+
+    await coordinator.releaseCatalogCount("core-1", count);
+    await coordinator.releaseCatalog("core-1", catalog);
+  });
+
+  it("a lost count session does not retire the catalog publication session", async () => {
+    const catalog = coordinator.acquireCatalog("core-1");
+    const count = coordinator.acquireCatalogCount("core-1");
+    const late = deferred<void>();
+    service.browse.mockImplementationOnce((_options, lifecycle) => {
+      lifecycle.onTimeout(late.promise);
+      return Promise.reject(new RoonTimeoutError("browse.browse", 15_000));
+    });
+
+    await expect(
+      coordinator.runCatalogCount("core-1", count, (session) =>
+        session.browse({ hierarchy: "albums", refresh: true })
+      )
+    ).rejects.toBeInstanceOf(RoonTimeoutError);
+    await expect(
+      coordinator.runCatalog("core-1", catalog, async () => "still current")
+    ).resolves.toBe("still current");
+
+    const release = coordinator.releaseCatalogCount("core-1", count);
+    late.resolve();
+    await release;
+    await coordinator.releaseCatalog("core-1", catalog);
+  });
+
   it("serializes the singleton catalog channel", async () => {
     const catalog = coordinator.acquireCatalog("core-1");
     const gate = deferred<void>();
@@ -2059,5 +2202,520 @@ describe("BrowseSessionCoordinator", () => {
         async () => undefined
       )
     ).toThrow(BrowseSessionCoordinatorError);
+  });
+  // ── Catalog-session publication (library-live-view Slice 1) ──────────
+  //
+  // The same authority the Classic path uses, reached by session scope. What
+  // these establish is that a published reference is worth exactly one
+  // generation on one channel, and nothing else.
+
+  async function catalogScope(): Promise<{
+    scope: string;
+    handle: ReturnType<BrowseSessionCoordinator["acquireCatalog"]>;
+  }> {
+    const handle = coordinator.acquireCatalog("core-1");
+    const scope = await coordinator.runCatalog(
+      "core-1",
+      handle,
+      async (session) => session.sessionScope
+    );
+    return { scope, handle };
+  }
+
+  function libraryRow(title: string, itemKey?: string) {
+    return {
+      title,
+      hint: "list",
+      isLoadable: true,
+      isPlayable: false,
+      ...(itemKey !== undefined ? { itemKey } : {}),
+    };
+  }
+
+  const LIBRARY_ROWS = [
+    libraryRow("Invented Artist A", "raw-a"),
+    libraryRow("Invented Artist B", "raw-b"),
+  ];
+
+  it("publishes library rows as tokens and resolves them back", async () => {
+    const { scope } = await catalogScope();
+    const generation = coordinator.beginCatalogPublication(scope);
+    const published = coordinator.replaceCatalogPublishedItems(
+      scope,
+      generation,
+      LIBRARY_ROWS
+    );
+
+    expect(published).toHaveLength(2);
+    // The published descriptor carries the rendering and nothing else: the raw
+    // key is what the token replaces, so a descriptor that still had one would
+    // defeat the whole exercise.
+    expect(published[0].item).toEqual({
+      title: "Invented Artist A",
+      hint: "list",
+      isLoadable: true,
+      isPlayable: false,
+    });
+    expect(published[0].token).not.toBe(published[1].token);
+    expect(
+      coordinator.resolveCatalogPublishedItem(
+        scope,
+        generation,
+        published[1].token
+      ).itemKey
+    ).toBe("raw-b");
+  });
+
+  it("retires every published reference when the next generation begins", async () => {
+    const { scope } = await catalogScope();
+    const first = coordinator.beginCatalogPublication(scope);
+    const published = coordinator.replaceCatalogPublishedItems(
+      scope,
+      first,
+      LIBRARY_ROWS
+    );
+    const second = coordinator.beginCatalogPublication(scope);
+    expect(second).not.toBe(first);
+
+    for (const entry of published) {
+      expect(() =>
+        coordinator.resolveCatalogPublishedItem(scope, first, entry.token)
+      ).toThrow(
+        expect.objectContaining({ code: "STALE_GENERATION" })
+      );
+      // Nor by claiming the new generation with an old token: a token is not a
+      // password that works on whichever generation is current.
+      expect(() =>
+        coordinator.resolveCatalogPublishedItem(scope, second, entry.token)
+      ).toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
+    }
+  });
+
+  it("refuses a publication written against a generation that has moved", async () => {
+    const { scope } = await catalogScope();
+    const stale = coordinator.beginCatalogPublication(scope);
+    coordinator.beginCatalogPublication(scope);
+    expect(() =>
+      coordinator.replaceCatalogPublishedItems(scope, stale, LIBRARY_ROWS)
+    ).toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
+  });
+
+  it("appends a level without retiring the rows already published", async () => {
+    const { scope } = await catalogScope();
+    const generation = coordinator.beginCatalogPublication(scope);
+    const roots = coordinator.replaceCatalogPublishedItems(
+      scope,
+      generation,
+      LIBRARY_ROWS
+    );
+    const level = coordinator.appendCatalogPublishedItems(scope, generation, [
+      libraryRow("Invented Album A", "raw-album-a"),
+    ]);
+
+    // The whole point: opening something in a list does not kill the list.
+    expect(
+      coordinator.resolveCatalogPublishedItem(scope, generation, roots[0].token)
+        .itemKey
+    ).toBe("raw-a");
+    expect(
+      coordinator.resolveCatalogPublishedItem(scope, generation, level[0].token)
+        .itemKey
+    ).toBe("raw-album-a");
+    expect(level[0].item).not.toHaveProperty("itemKey");
+    expect(level[0].token).not.toBe(roots[0].token);
+  });
+
+  it("refuses to append into a generation that has moved", async () => {
+    const { scope } = await catalogScope();
+    const stale = coordinator.beginCatalogPublication(scope);
+    coordinator.replaceCatalogPublishedItems(scope, stale, LIBRARY_ROWS);
+    coordinator.beginCatalogPublication(scope);
+    expect(() =>
+      coordinator.appendCatalogPublishedItems(scope, stale, LIBRARY_ROWS)
+    ).toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
+  });
+
+  it("refuses to append before anything has been published", async () => {
+    const { scope } = await catalogScope();
+    const generation = coordinator.beginCatalogPublication(scope);
+    // A generation was reserved but no set was installed: there is no
+    // authority to add to, and inventing one would publish rows into a
+    // snapshot that does not exist.
+    expect(() =>
+      coordinator.appendCatalogPublishedItems(scope, generation, LIBRARY_ROWS)
+    ).toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
+  });
+
+  it("refuses an append that would cross the authority's own bound", async () => {
+    const bounded = makeCoordinator({ maxPublishedCatalogItemKeys: 2 });
+    const handle = bounded.acquireCatalog("core-1");
+    const scope = await bounded.runCatalog(
+      "core-1",
+      handle,
+      async (session) => session.sessionScope
+    );
+    const generation = bounded.beginCatalogPublication(scope);
+    bounded.replaceCatalogPublishedItems(scope, generation, LIBRARY_ROWS);
+    expect(() =>
+      bounded.appendCatalogPublishedItems(scope, generation, [
+        libraryRow("Invented Album A", "raw-album-a"),
+      ])
+    ).toThrow(expect.objectContaining({ code: "BACKPRESSURE" }));
+    bounded.shutdown();
+  });
+
+  it("retires named tokens and leaves the rest of the generation alone", async () => {
+    const { scope } = await catalogScope();
+    const generation = coordinator.beginCatalogPublication(scope);
+    const roots = coordinator.replaceCatalogPublishedItems(
+      scope,
+      generation,
+      LIBRARY_ROWS
+    );
+    const level = coordinator.appendCatalogPublishedItems(scope, generation, [
+      libraryRow("Invented Album A", "raw-album-a"),
+      libraryRow("Invented Album B", "raw-album-b"),
+    ]);
+
+    expect(
+      coordinator.retireCatalogPublishedTokens(scope, generation, [
+        level[0].token,
+      ])
+    ).toBe(1);
+    expect(() =>
+      coordinator.resolveCatalogPublishedItem(scope, generation, level[0].token)
+    ).toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
+    // Everything not named is untouched, including the other row of the very
+    // same level.
+    expect(() =>
+      coordinator.resolveCatalogPublishedItem(scope, generation, level[1].token)
+    ).not.toThrow();
+    expect(() =>
+      coordinator.resolveCatalogPublishedItem(scope, generation, roots[0].token)
+    ).not.toThrow();
+    // Retiring what is already gone is not an error; there is nothing to undo.
+    expect(
+      coordinator.retireCatalogPublishedTokens(scope, generation, [
+        level[0].token,
+      ])
+    ).toBe(0);
+  });
+
+  it("has nothing to retire once the generation itself has moved", async () => {
+    const { scope } = await catalogScope();
+    const first = coordinator.beginCatalogPublication(scope);
+    const published = coordinator.replaceCatalogPublishedItems(
+      scope,
+      first,
+      LIBRARY_ROWS
+    );
+    coordinator.beginCatalogPublication(scope);
+    expect(
+      coordinator.retireCatalogPublishedTokens(scope, first, [
+        published[0].token,
+      ])
+    ).toBe(0);
+  });
+
+  it("refuses to publish library rows on a Classic channel", async () => {
+    const access = modeAccess(await classicHandle());
+    const scope = await coordinator.runMode(
+      access,
+      "classic-browse",
+      async (session) => session.sessionScope
+    );
+    // One channel, one authority. A second publisher would silently retire the
+    // first one's references.
+    expect(() => coordinator.beginCatalogPublication(scope)).toThrow(
+      expect.objectContaining({ code: "INVALID_ROLE" })
+    );
+  });
+
+  it("refuses a scope whose session is gone", async () => {
+    const { scope, handle } = await catalogScope();
+    const generation = coordinator.beginCatalogPublication(scope);
+    const published = coordinator.replaceCatalogPublishedItems(
+      scope,
+      generation,
+      LIBRARY_ROWS
+    );
+    await coordinator.releaseCatalog("core-1", handle);
+
+    expect(() =>
+      coordinator.resolveCatalogPublishedItem(
+        scope,
+        generation,
+        published[0].token
+      )
+    ).toThrow(expect.objectContaining({ code: "SESSION_LOST" }));
+    expect(() => coordinator.beginCatalogPublication(scope)).toThrow(
+      expect.objectContaining({ code: "SESSION_LOST" })
+    );
+  });
+
+  it("refuses a library publication larger than its own bound", async () => {
+    const bounded = makeCoordinator({ maxPublishedCatalogItemKeys: 1 });
+    const handle = bounded.acquireCatalog("core-1");
+    const scope = await bounded.runCatalog(
+      "core-1",
+      handle,
+      async (session) => session.sessionScope
+    );
+    const generation = bounded.beginCatalogPublication(scope);
+    expect(() =>
+      bounded.replaceCatalogPublishedItems(scope, generation, LIBRARY_ROWS)
+    ).toThrow(expect.objectContaining({ code: "BACKPRESSURE" }));
+    bounded.shutdown();
+  });
+
+  it("refuses a row that carries no key rather than publishing a dead token", async () => {
+    const { scope } = await catalogScope();
+    const generation = coordinator.beginCatalogPublication(scope);
+    expect(() =>
+      coordinator.replaceCatalogPublishedItems(scope, generation, [
+        libraryRow("Invented Artist A", "raw-a"),
+        libraryRow("Keyless row"),
+      ])
+    ).toThrow(expect.objectContaining({ code: "BACKPRESSURE" }));
+  });
+
+  // `.agents/plans/library-live-view.md` Slice 2. An action on a live library
+  // reference runs where the reference means something — the catalog channel
+  // that minted it — while everything that makes an action safe stays on the
+  // action lease. These tests hold each of those halves down separately.
+  describe("library actions", () => {
+    async function libraryAction() {
+      const mode = await classicHandle();
+      const { scope, handle: catalog } = await catalogScope();
+      const generation = coordinator.beginCatalogPublication(scope);
+      const published = coordinator.replaceCatalogPublishedItems(
+        scope,
+        generation,
+        LIBRARY_ROWS
+      );
+      const action = coordinator.acquireAction({
+        coreId: "core-1",
+        socketId: "socket-1",
+        tabId: "tab-1",
+        leaseId: "lease-1",
+        zoneId: "zone-1",
+        generation: mode.generation,
+      });
+      return { scope, generation, action, catalog, published };
+    }
+
+    it("runs the lease's work on the channel that published the reference", async () => {
+      const { scope, generation, action } = await libraryAction();
+      service.browse.mockClear();
+
+      const seen = await coordinator.runLibraryAction(
+        actionAccess(action),
+        { sessionScope: scope, authorityGeneration: generation },
+        async (session) => {
+          await session.browse({
+            hierarchy: "albums",
+            zoneId: "zone-1",
+            itemKey: "raw-a",
+          });
+          return session.sessionScope;
+        }
+      );
+
+      // The work saw the library's own session, not the action lease's, which
+      // is the whole point: a key minted there names nothing anywhere else.
+      expect(seen).toBe(scope);
+      expect(service.browse).toHaveBeenCalledTimes(1);
+      expect(service.browse.mock.calls[0][0]).toMatchObject({
+        itemKey: "raw-a",
+        zoneId: "zone-1",
+      });
+    });
+
+    it("refuses a reference whose publication generation has been retired", async () => {
+      const { scope, generation, action } = await libraryAction();
+      // Exactly what a roots re-read does: a fresh publication installs a new
+      // authority and retires every outstanding reference at once. The new
+      // authority is present and populated, so nothing but the generation
+      // comparison can tell the retired reference from a live one.
+      coordinator.replaceCatalogPublishedItems(
+        scope,
+        coordinator.beginCatalogPublication(scope),
+        LIBRARY_ROWS
+      );
+
+      expect(() =>
+        coordinator.runLibraryAction(
+          actionAccess(action),
+          { sessionScope: scope, authorityGeneration: generation },
+          async () => "unreachable"
+        )
+      ).toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
+    });
+
+    it("applies the action lease's zone gate to work on the library channel", async () => {
+      const { scope, generation, action } = await libraryAction();
+
+      await expect(
+        coordinator.runLibraryAction(
+          actionAccess(action),
+          { sessionScope: scope, authorityGeneration: generation },
+          async (session) => {
+            await session.browse({
+              hierarchy: "albums",
+              zoneId: "zone-2",
+              itemKey: "raw-a",
+            });
+          }
+        )
+      ).rejects.toMatchObject({ code: "OWNER_MISMATCH" });
+      // Refused before Roon saw it, which is what the gate is for.
+      expect(service.browse).not.toHaveBeenCalledWith(
+        expect.objectContaining({ zoneId: "zone-2" }),
+        expect.anything()
+      );
+    });
+
+    it("refuses a library dispatch that never took the execute claim", async () => {
+      const { scope, generation, action } = await libraryAction();
+      const issued = jest.fn();
+
+      expect(() =>
+        coordinator.executeLibraryAction(
+          actionAccess(action),
+          { sessionScope: scope, authorityGeneration: generation },
+          { hierarchy: "albums", zoneId: "zone-1", itemKey: "raw-play" },
+          issued
+        )
+      ).toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
+      expect(issued).not.toHaveBeenCalled();
+    });
+
+    it("dispatches once on the claim and refuses the second crossing", async () => {
+      const { scope, generation, action } = await libraryAction();
+      const anchor = { sessionScope: scope, authorityGeneration: generation };
+      expect(coordinator.claimActionExecute(actionAccess(action))).toBe(true);
+      const issued = jest.fn();
+      service.browse.mockImplementation((_options, lifecycle) => {
+        lifecycle.onIssued();
+        return Promise.resolve(EMPTY_RESULT);
+      });
+
+      await coordinator.executeLibraryAction(
+        actionAccess(action),
+        anchor,
+        { hierarchy: "albums", zoneId: "zone-1", itemKey: "raw-play" },
+        issued
+      );
+      expect(issued).toHaveBeenCalledTimes(1);
+
+      expect(() =>
+        coordinator.executeLibraryAction(
+          actionAccess(action),
+          anchor,
+          { hierarchy: "albums", zoneId: "zone-1", itemKey: "raw-play" },
+          issued
+        )
+      ).toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
+      expect(issued).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a dispatch whose snapshot was retired after the claim", async () => {
+      const { scope, generation, action } = await libraryAction();
+      expect(coordinator.claimActionExecute(actionAccess(action))).toBe(true);
+      coordinator.replaceCatalogPublishedItems(
+        scope,
+        coordinator.beginCatalogPublication(scope),
+        LIBRARY_ROWS
+      );
+      const issued = jest.fn();
+
+      expect(() =>
+        coordinator.executeLibraryAction(
+          actionAccess(action),
+          { sessionScope: scope, authorityGeneration: generation },
+          { hierarchy: "albums", zoneId: "zone-1", itemKey: "raw-play" },
+          issued
+        )
+      ).toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
+      expect(issued).not.toHaveBeenCalled();
+    });
+
+    it("refuses a dispatch whose snapshot is retired while it waits on the tail", async () => {
+      const { scope, generation, action, catalog } = await libraryAction();
+      const anchor = { sessionScope: scope, authorityGeneration: generation };
+      expect(coordinator.claimActionExecute(actionAccess(action))).toBe(true);
+      // Hold the library channel busy, retire the snapshot underneath, and only
+      // then let the queued dispatch reach the front. The entry check passed;
+      // the one on the tail is the one that has to catch this.
+      const gate = deferred<void>();
+      const held = coordinator.runCatalog("core-1", catalog, () => gate.promise);
+      const issued = jest.fn();
+      const dispatch = coordinator.executeLibraryAction(
+        actionAccess(action),
+        anchor,
+        { hierarchy: "albums", zoneId: "zone-1", itemKey: "raw-play" },
+        issued
+      );
+      const rejection = expect(dispatch).rejects.toMatchObject({
+        code: "STALE_GENERATION",
+      });
+      coordinator.replaceCatalogPublishedItems(
+        scope,
+        coordinator.beginCatalogPublication(scope),
+        LIBRARY_ROWS
+      );
+      gate.resolve();
+      await held;
+      await rejection;
+      expect(issued).not.toHaveBeenCalled();
+    });
+
+    it("quarantines the library channel on timeout, retiring its references", async () => {
+      const { scope, generation, action, catalog, published } =
+        await libraryAction();
+      const late = deferred<void>();
+      service.browse.mockImplementationOnce((_options, lifecycle) => {
+        lifecycle.onTimeout(late.promise);
+        return Promise.reject(new RoonTimeoutError("browse.browse", 15_000));
+      });
+
+      await expect(
+        coordinator.runLibraryAction(
+          actionAccess(action),
+          { sessionScope: scope, authorityGeneration: generation },
+          async (session) => {
+            await session.browse({
+              hierarchy: "albums",
+              zoneId: "zone-1",
+              itemKey: "raw-a",
+            });
+          }
+        )
+      ).rejects.toBeInstanceOf(RoonTimeoutError);
+      await flushPromises();
+      expect(coordinator.diagnostics("core-1").quarantinedSessions).toBe(1);
+
+      // The blast radius is the library, and that is correct: a call that may
+      // still settle must not be followed by another on the same stack, and
+      // retiring the generation is the recovery every open page already knows.
+      expect(() =>
+        coordinator.resolveCatalogPublishedItem(
+          scope,
+          generation,
+          published[0].token
+        )
+      ).toThrow(expect.objectContaining({ code: "SESSION_LOST" }));
+      // The channel's own owner is marked lost too. Without that the catalog
+      // lease would survive holding a dead channel, `core.catalog` would stay
+      // occupied forever, and the library could never reacquire — a wedge, not
+      // a recovery.
+      expect(() =>
+        coordinator.runCatalog("core-1", catalog, async () => undefined)
+      ).toThrow(expect.objectContaining({ code: "SESSION_LOST" }));
+      late.resolve();
+      await flushPromises();
+      expect(coordinator.diagnostics("core-1").quarantinedSessions).toBe(0);
+      expect(() => coordinator.acquireCatalog("core-1")).not.toThrow();
+    });
   });
 });

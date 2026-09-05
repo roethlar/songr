@@ -56,6 +56,16 @@ export interface ClassicBrowseSessionRef {
   readonly generation: number;
 }
 
+export const CLASSIC_SESSION_RETIRED_CONTRACT =
+  "classic-session-retired-v1" as const;
+
+export interface ClassicSessionRetiredEvent {
+  readonly contract: typeof CLASSIC_SESSION_RETIRED_CONTRACT;
+  readonly tabId: string;
+  readonly session: ClassicBrowseSessionRef;
+  readonly reason: "SESSION_LOST";
+}
+
 export interface ClassicSessionAcquireRequest {
   readonly requestId: string;
   readonly tabId: string;
@@ -187,6 +197,29 @@ function normalizeSession(value: unknown): ClassicBrowseSessionRef | null {
   if (!isRecord(value) || !hasExactKeys(value, ["handleId", "generation"])) return null;
   if (!isOpaqueId(value.handleId) || !isNonNegativeInteger(value.generation)) return null;
   return { handleId: value.handleId, generation: value.generation };
+}
+
+export function normalizeClassicSessionRetiredEvent(
+  value: unknown
+): ClassicSessionRetiredEvent | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["contract", "tabId", "session", "reason"]) ||
+    value.contract !== CLASSIC_SESSION_RETIRED_CONTRACT ||
+    !isOpaqueId(value.tabId) ||
+    value.reason !== "SESSION_LOST"
+  ) {
+    return null;
+  }
+  const session = normalizeSession(value.session);
+  return session
+    ? {
+        contract: CLASSIC_SESSION_RETIRED_CONTRACT,
+        tabId: value.tabId,
+        session,
+        reason: "SESSION_LOST",
+      }
+    : null;
 }
 
 function normalizeBrowseOptions(value: unknown): ClassicBrowseOptions | null {

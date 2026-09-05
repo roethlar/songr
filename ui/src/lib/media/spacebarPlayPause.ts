@@ -13,13 +13,10 @@
  * us to stand down.
  */
 import { get } from 'svelte/store';
+import { swallowsTypedText } from '$lib/a11y/keyboardOwnership';
 import { hasOpenModalSurface } from '$lib/actions/focusTrap';
 import { selectedZoneStore } from '$lib/stores/selectedZoneStore';
 import { createSocketMediaTransport } from './mediaSessionBinding';
-
-/** Where Space types a character rather than meaning "play/pause". */
-const EDITABLE_SELECTOR =
-	'input, textarea, select, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]';
 
 /**
  * Controls the platform already activates with Space. Hijacking those would
@@ -43,10 +40,11 @@ function eventElement(event: KeyboardEvent): Element | null {
 
 function ownsTheKey(element: Element | null): boolean {
 	if (!element) return false;
-	// `closest` rather than a match on the target itself: a press inside a
-	// contenteditable region, or on the icon inside a button, reports the
-	// inner node as the target.
-	if (element.closest(EDITABLE_SELECTOR) !== null) return true;
+	// Where Space types a character rather than meaning "play/pause" — the
+	// same predicate the library's palette capture stands down for.
+	if (swallowsTypedText(element)) return true;
+	// `closest` rather than a match on the target itself: a press on the icon
+	// inside a button reports the inner node as the target.
 	return element.closest(SPACE_ACTIVATED_SELECTOR) !== null;
 }
 

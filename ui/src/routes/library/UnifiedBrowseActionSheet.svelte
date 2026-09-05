@@ -3,14 +3,9 @@
 	import { focusTrap, isTopModalOwner } from '$lib/actions/focusTrap';
 	import type { UnifiedBrowseActionState } from '$lib/library/UnifiedBrowseController';
 
-	interface ZoneOption {
-		readonly zoneId: string;
-		readonly name: string;
-	}
-
 	let {
 		state: actionState,
-		zones,
+		zoneId,
 		onAction,
 		onFavorite,
 		favoriteEnabled = true,
@@ -18,7 +13,11 @@
 		onClose
 	}: {
 		state: UnifiedBrowseActionState;
-		zones: readonly ZoneOption[];
+		/**
+		 * The zone every action here targets: the one the user has selected.
+		 * `null` disables them. The sheet never asks (public issue #12).
+		 */
+		zoneId: string | null;
 		onAction: (semantic: UnifiedSongActionSemantic, zoneId: string) => void;
 		onFavorite: () => void;
 		favoriteEnabled?: boolean;
@@ -28,23 +27,12 @@
 
 	const ACTIONS: readonly UnifiedSongActionSemantic[] = ['play-now', 'add-next', 'queue'];
 	let dialogEl = $state<HTMLElement | null>(null);
-	let pending = $state<UnifiedSongActionSemantic | null>(null);
 	const item = $derived(actionState.source?.item ?? null);
 	const busy = $derived(actionState.phase === 'loading' || actionState.phase === 'executing');
 
 	function begin(semantic: UnifiedSongActionSemantic): void {
-		if (busy || !actionState.available[semantic] || zones.length === 0) return;
-		if (zones.length === 1) {
-			onAction(semantic, zones[0].zoneId);
-			return;
-		}
-		pending = semantic;
-	}
-
-	function chooseZone(zoneId: string): void {
-		if (!pending || busy) return;
-		onAction(pending, zoneId);
-		pending = null;
+		if (busy || !actionState.available[semantic] || zoneId === null) return;
+		onAction(semantic, zoneId);
 	}
 
 	function label(semantic: UnifiedSongActionSemantic): string {
@@ -92,7 +80,7 @@
 				<button
 					type="button"
 					data-testid="unified-browse-action-{semantic}"
-					disabled={busy || zones.length === 0 || !actionState.available[semantic]}
+					disabled={busy || zoneId === null || !actionState.available[semantic]}
 					onclick={() => begin(semantic)}
 				>
 					{label(semantic)}
@@ -107,16 +95,6 @@
 				Favorite
 			</button>
 		</div>
-
-		{#if pending && zones.length > 1}
-			<div class="browse-action-zones" data-testid="unified-browse-action-zones">
-				<p>{label(pending)} on</p>
-				{#each zones as zone (zone.zoneId)}
-					<button type="button" onclick={() => chooseZone(zone.zoneId)}>{zone.name}</button>
-				{/each}
-				<button type="button" class="ghost" onclick={() => (pending = null)}>Cancel</button>
-			</div>
-		{/if}
 
 		{#if actionState.phase === 'loading'}
 			<p class="browse-action-status" data-testid="unified-browse-action-loading">
@@ -134,7 +112,7 @@
 			<p class="browse-action-status error" data-testid="unified-browse-action-error">
 				{actionState.error ?? 'Actions are unavailable.'}
 			</p>
-		{:else if zones.length === 0}
+		{:else if zoneId === null}
 			<p class="browse-action-status">Select a zone before playing or queueing.</p>
 		{/if}
 		{#if favoriteStatus}
@@ -180,8 +158,7 @@
 	}
 
 	.browse-action-kicker,
-	.browse-action-status,
-	.browse-action-zones p {
+	.browse-action-status {
 		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 		font-size: 11px;
 		letter-spacing: 0.12em;
@@ -203,16 +180,14 @@
 		color: var(--songr-text-58);
 	}
 
-	.browse-action-buttons,
-	.browse-action-zones {
+	.browse-action-buttons {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 8px;
 		margin-top: 24px;
 	}
 
-	.browse-action-buttons button,
-	.browse-action-zones button {
+	.browse-action-buttons button {
 		min-height: 44px;
 		border: 1px solid var(--songr-line-22);
 		border-radius: 7px;
@@ -222,14 +197,12 @@
 		cursor: pointer;
 	}
 
-	.browse-action-buttons button:hover:not(:disabled),
-	.browse-action-zones button:hover:not(:disabled) {
+	.browse-action-buttons button:hover:not(:disabled) {
 		border-color: var(--unified-accent);
 		color: var(--unified-accent);
 	}
 
 	.browse-action-buttons button:focus-visible,
-	.browse-action-zones button:focus-visible,
 	.browse-action-close:focus-visible {
 		outline: 2px solid var(--unified-accent);
 		outline-offset: 2px;
@@ -238,21 +211,6 @@
 	.browse-action-buttons button:disabled {
 		opacity: 0.32;
 		cursor: default;
-	}
-
-	.browse-action-zones {
-		grid-template-columns: 1fr;
-		padding-top: 12px;
-		border-top: 1px solid var(--songr-line-12);
-	}
-
-	.browse-action-zones p {
-		margin: 0;
-		color: var(--unified-accent);
-	}
-
-	.browse-action-zones .ghost {
-		background: transparent;
 	}
 
 	.browse-action-status {

@@ -9,18 +9,8 @@ import {
 	UNIFIED_LIBRARY_PAGE_STATE_VERSION,
 	type BrowseHistorySnapshot
 } from '$lib/libraryPageState';
-import {
-	CATALOG_CAPABILITIES,
-	BROWSE_FALLBACK_CAPABILITIES,
-	INCOMPLETE_ARTIST_COUNTS_CAPABILITIES,
-	type LibraryAlbumEntry,
-	type LibraryArtistEntry,
-	type LibraryIndexState
-} from '$lib/stores/libraryIndexStore';
 import type { LibraryAlbumController, LibraryAlbumState } from '$lib/library/LibraryAlbumController';
 import { UnifiedSongActionController } from '$lib/library/UnifiedSongActionController';
-import { PublicSongActionController } from '$lib/library/PublicSongActionController';
-import type { PublicSongResolverClient } from '$lib/publicSongResolverClient';
 import type { UnifiedSearchClient } from '$lib/unifiedSearchClient';
 import type { AlbumActionController } from '$lib/library/AlbumActionController';
 import type {
@@ -30,9 +20,19 @@ import type {
 	UnifiedBrowseController,
 	UnifiedBrowseState
 } from '$lib/library/UnifiedBrowseController';
-import type { BrowseItem } from '@shared/types';
+import type { BrowseItem, CoreStatusResponse } from '@shared/types';
+import { LIBRARY_OPEN_CONTRACT, type LibraryNodeKind } from '@shared/libraryOpenContracts';
+import { LIBRARY_ROOTS_CONTRACT, LIBRARY_SESSION_RETIRED_CONTRACT } from '@shared/libraryRootsContracts';
+import {
+	libraryRootsStore,
+	loadLibraryRoots,
+	refreshLibraryRootsNow,
+	resetLibraryRoots,
+	retireLibraryGeneration
+} from '$lib/stores/libraryRootsStore';
 import { clearPendingLibraryPageStateWrite } from '$lib/libraryPageNavigation';
-import { libraryScopeSlots } from '@libraryFeatures';
+import { decodeLibraryRoute } from '$lib/libraryRoute';
+import { libraryPageStateFromRoute } from '$lib/libraryRouteState';
 import {
 	__back,
 	__forward,
@@ -42,15 +42,14 @@ import {
 } from '../../../test/app-stubs/navigation';
 import { NO_GENRE_SORT_REASON, NO_IMPORT_DATES_REASON, NO_RELEASE_DATES_REASON } from '$lib/unifiedLibrarySorts';
 import type { NamedCountEntry } from '$lib/stores/unifiedNamedCountsStore';
-import type { DrillAlbum } from '$lib/stores/unifiedDrillStore';
-import type { PublicSongResolution } from '@shared/publicSongResolverContracts';
+import { COLLECTION_DRILL_SOURCE_CONTRACT } from '@shared/collectionDrillContracts';
 import { setZonesSnapshot } from '$lib/stores/zonesStore';
+import { setSelectedZone } from '$lib/stores/selectedZoneStore';
 import { settingsMenuOpen } from '$lib/stores/settingsMenuStore';
 import { requestUnifiedLibraryDensity } from '$lib/stores/unifiedLibraryPrefsStore';
 import { setCoreStatus } from '$lib/stores/coreStore';
 import { setSocketStatus } from '$lib/stores/socketStatusStore';
 import type { CommittedLibraryModeActivation } from '$lib/libraryModeActivationContext';
-import { syntheticStatus } from '$lib/stores/__tests__/libraryIndexFixtures';
 import type { ClassicBrowseSessionClaim } from '$lib/stores/classicBrowseSessionStore';
 import type { PaletteSearchState } from '$lib/stores/unifiedPaletteSearchStore';
 import {
@@ -58,26 +57,22 @@ import {
 	publishLibraryIntent,
 	resetLibraryIntentStore
 } from '$lib/stores/libraryIntentStore';
-import type { PlaylistContentsResponse, PlaylistSummaryView } from '@shared/playlistContracts';
 import {
-	albumEntry,
-	artistEntries,
-	bucketsFor,
 	deferred,
-	EDITORIAL_PRESENT_CAPABILITIES,
 	fakeConnectionSocket,
-	fakeDrillStore,
 	fakeModeActionController,
+	fakeRecoveringModeActionController,
 	fakeModeAlbumController,
-	fakeMostPlayedStore,
 	fakeNamedCountsStore,
-	fakePlaylistsStore,
-	fakePublicSongActionController,
 	fakeRecentStore,
 	fakeSessionClient,
-	idleState,
+	harnessAlbum,
+	harnessArtists,
+	harnessLibrary,
+	liveOpenResponder,
+	liveRootsState,
 	mountMode,
-	readyState
+	type HarnessLiveLibrary
 } from './unifiedLibraryModeHarness';
 
 function fakeBrowseController() {
@@ -161,14 +156,18 @@ function fakeBrowseActionController() {
 	const idle = (): UnifiedBrowseActionState => ({
 		phase: 'idle',
 		source: null,
+		zoneId: null,
 		available: { 'play-now': false, 'add-next': false, queue: false },
 		error: null
 	});
 	const store = writable<UnifiedBrowseActionState>(idle());
-	const open = vi.fn(async (_claim, source: UnifiedBrowseActionSource) => {
+	// Records the probed zone the way the real controller does, so the
+	// surface's re-probe effect can tell a stale answer from a current one.
+	const open = vi.fn(async (_claim, source: UnifiedBrowseActionSource, zoneId?: string) => {
 		store.set({
 			phase: 'ready',
 			source,
+			zoneId: zoneId ?? null,
 			available: { 'play-now': true, 'add-next': true, queue: true },
 			error: null
 		});
@@ -185,22 +184,43 @@ function fakeBrowseActionController() {
 	};
 }
 
+function standaloneLiveLevel(
+	title: string,
+	rows: readonly {
+		readonly token: string;
+		readonly title: string;
+		readonly kind: LibraryNodeKind;
+		readonly subtitle?: string;
+	}[]
+) {
+	return {
+		contract: LIBRARY_OPEN_CONTRACT,
+		kind: 'level' as const,
+		generation: 'gen-1',
+		title,
+		count: rows.length,
+		rows: rows.map((row) => ({
+			ref: { generation: 'gen-1', token: row.token },
+			title: row.title,
+			kind: row.kind,
+			...(row.subtitle === undefined ? {} : { subtitle: row.subtitle })
+		}))
+	};
+}
+
 describe('UnifiedLibraryMode — lifecycle', () => {
-	it('auto-resumes without a host context: claims unified-mode and loads the index', async () => {
+	it("auto-resumes without a host context: claims unified-mode and reads Roon's roots", async () => {
 		const harness = mountMode();
 
 		expect(harness.session.claim).toHaveBeenCalledWith('unified-mode');
-		await waitFor(() => expect(harness.loadIndex).toHaveBeenCalledTimes(1));
-		expect(harness.fetchStatus).toHaveBeenCalledTimes(1);
-		const [, loadOptions] = harness.loadIndex.mock.calls[0] as [
-			unknown,
-			{ coreId: string; claim: ClassicBrowseSessionClaim }
-		];
+		await waitFor(() => expect(harness.loadRoots).toHaveBeenCalledTimes(1));
+		const [, loadOptions] = harness.loadRoots.mock.calls[0] as [unknown, { coreId: string }];
 		expect(loadOptions.coreId).toBe('core-a');
-		expect(loadOptions.claim).toBe(harness.session.claim.mock.results[0]?.value);
+		// The Core's own identity, not the catalog's account of it: the live view
+		// has to read the library on a build where the catalog is gone.
+		expect(harness.fetchCoreStatus).toHaveBeenCalledTimes(1);
 
 		harness.unmount();
-		expect(harness.resetIndex).toHaveBeenCalled();
 		expect(harness.session.release).toHaveBeenCalledWith(
 			harness.session.claim.mock.results[0]?.value
 		);
@@ -230,17 +250,16 @@ describe('UnifiedLibraryMode — lifecycle', () => {
 		);
 
 		harness.registered.lifecycle!.suspend();
-		// The release and index reset are synchronous; only the DOM flush waits.
-		expect(harness.resetIndex).toHaveBeenCalled();
+		// The release is synchronous; only the DOM flush waits.
 		expect(harness.session.release).toHaveBeenCalledTimes(1);
 		await waitFor(() => expect(screen.getByText('Suspended.')).toBeInTheDocument());
 	});
 
-	it('drops a status fetch that resolves after suspend', async () => {
-		const status = deferred<ReturnType<typeof syntheticStatus>>();
+	it('drops a Core status fetch that resolves after suspend', async () => {
+		const status = deferred<CoreStatusResponse>();
 		const harness = mountMode({
 			withContext: true,
-			fetchStatus: () => status.promise
+			fetchCoreStatus: () => status.promise
 		});
 
 		harness.registered.lifecycle!.resume({
@@ -253,29 +272,30 @@ describe('UnifiedLibraryMode — lifecycle', () => {
 				surpriseSeed: null
 			})
 		} as CommittedLibraryModeActivation);
-		await waitFor(() => expect(harness.fetchStatus).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(harness.fetchCoreStatus).toHaveBeenCalledTimes(1));
 
 		harness.registered.lifecycle!.suspend();
-		status.resolve(syntheticStatus({ coreId: 'core-a' }));
+		status.resolve({
+			status: 'paired',
+			core: { id: 'core-a', displayName: 'Core', displayVersion: '1' }
+		});
 		await Promise.resolve();
 		await Promise.resolve();
-		expect(harness.loadIndex).not.toHaveBeenCalled();
+		expect(harness.loadRoots).not.toHaveBeenCalled();
 	});
 
-	it('retries the initial index load after the socket connects', async () => {
+	it('retries the initial roots load after the socket connects', async () => {
 		const socket = fakeConnectionSocket();
-		const playlistActionController = fakePublicSongActionController();
 		const harness = mountMode({
-			getSocketClient: () => socket,
-			playlistActionController
+			getSocketClient: () => socket
 		});
 
-		await waitFor(() => expect(harness.loadIndex).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(harness.loadRoots).toHaveBeenCalledTimes(1));
 		socket.connected = true;
 		socket.emit('connect');
 
 		await waitFor(() => expect(harness.session.recover).toHaveBeenCalledTimes(1));
-		await waitFor(() => expect(harness.loadIndex).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(harness.loadRoots).toHaveBeenCalledTimes(2));
 		expect(harness.session.recover).toHaveBeenCalledWith(
 			harness.session.claim.mock.results[0]?.value
 		);
@@ -285,7 +305,6 @@ describe('UnifiedLibraryMode — lifecycle', () => {
 		expect(harness.session.connectionLost).toHaveBeenCalledWith(
 			harness.session.claim.mock.results[0]?.value
 		);
-		expect(playlistActionController.abandon).toHaveBeenCalledTimes(1);
 
 		harness.unmount();
 		socket.connected = true;
@@ -293,7 +312,35 @@ describe('UnifiedLibraryMode — lifecycle', () => {
 		expect(harness.session.recover).toHaveBeenCalledTimes(1);
 	});
 
-	it('retries the index load when the Core pairs after a cold start', async () => {
+	it('retries the active claim-scoped page load after a cold socket connects', async () => {
+		const socket = fakeConnectionSocket();
+		const genresStore = fakeNamedCountsStore([
+			{ label: 'Jazz', albumCount: 1, itemKey: 'genre:jazz', imageKey: null }
+		]);
+		const harness = mountMode({ withContext: true, getSocketClient: () => socket, genresStore });
+
+		harness.registered.lifecycle!.resume({
+			cause: 'initial',
+			pageState: buildUnifiedLibraryPageState({
+				scope: 'genres',
+				collectionDrill: null,
+				itemTarget: null,
+				filterText: '',
+				surpriseSeed: null
+			})
+		} as CommittedLibraryModeActivation);
+		await waitFor(() => expect(genresStore.load).toHaveBeenCalledTimes(1));
+
+		// The disconnected attempt leaves no usable scope data.
+		genresStore.reset();
+		socket.connected = true;
+		socket.emit('connect');
+
+		await waitFor(() => expect(harness.session.recover).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(genresStore.load).toHaveBeenCalledTimes(2));
+	});
+
+	it('retries the roots load when the Core pairs after a cold start', async () => {
 		// The desktop shell opens the window as soon as the engine's HTTP port
 		// is up, which on a cold start can be ~25s before Roon pairing
 		// completes. The mount-time status call loses that race and rejects
@@ -303,24 +350,25 @@ describe('UnifiedLibraryMode — lifecycle', () => {
 		const corePairedStore = writable(false);
 		const harness = mountMode({
 			corePairedStore,
-			fetchStatus: vi.fn(async () => {
+			fetchCoreStatus: vi.fn(async () => {
 				throw new Error('Roon core not paired');
 			}) as never
 		});
 
-		await waitFor(() => expect(harness.fetchStatus).toHaveBeenCalledTimes(1));
-		expect(harness.loadIndex).not.toHaveBeenCalled();
+		await waitFor(() => expect(harness.fetchCoreStatus).toHaveBeenCalledTimes(1));
+		expect(harness.loadRoots).not.toHaveBeenCalled();
 		expect(screen.getByText('Idle.')).toBeInTheDocument();
 
 		// Pairing arrives on the `core-status` event the socket registrar
 		// feeds into `coreStore`; the deferred load rides that signal.
-		harness.fetchStatus.mockImplementation(async () =>
-			syntheticStatus({ coreId: 'core-a' })
-		);
+		harness.fetchCoreStatus.mockImplementation(async () => ({
+			status: 'paired',
+			core: { id: 'core-a', displayName: 'Core', displayVersion: '1' }
+		}));
 		corePairedStore.set(true);
 
-		await waitFor(() => expect(harness.loadIndex).toHaveBeenCalledTimes(1));
-		const [, loadOptions] = harness.loadIndex.mock.calls[0] as [
+		await waitFor(() => expect(harness.loadRoots).toHaveBeenCalledTimes(1));
+		const [, loadOptions] = harness.loadRoots.mock.calls[0] as [
 			unknown,
 			{ coreId: string }
 		];
@@ -331,55 +379,54 @@ describe('UnifiedLibraryMode — lifecycle', () => {
 		const corePairedStore = writable(false);
 		const harness = mountMode({
 			corePairedStore,
-			fetchStatus: vi.fn(async () => {
+			fetchCoreStatus: vi.fn(async () => {
 				throw new Error('Roon core not paired');
 			}) as never
 		});
 
-		await waitFor(() => expect(harness.fetchStatus).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(harness.fetchCoreStatus).toHaveBeenCalledTimes(1));
 		corePairedStore.set(true);
 
 		// Exactly one retry: the initial attempt plus the deferred one. The
 		// retry's own failure must not re-arm the deferral.
-		await waitFor(() => expect(harness.fetchStatus).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(harness.fetchCoreStatus).toHaveBeenCalledTimes(2));
 		await Promise.resolve();
 		await Promise.resolve();
-		expect(harness.fetchStatus).toHaveBeenCalledTimes(2);
-		expect(harness.loadIndex).not.toHaveBeenCalled();
+		expect(harness.fetchCoreStatus).toHaveBeenCalledTimes(2);
+		expect(harness.loadRoots).not.toHaveBeenCalled();
 		expect(screen.getByText('Idle.')).toBeInTheDocument();
 	});
 });
 
 describe('UnifiedLibraryMode — shell', () => {
-	it('renders load, error, and ready states with the degraded-notice rule', async () => {
+	it("renders load, error and ready states from Roon's own roots", async () => {
+		// The Artists scope is the live view (Slice 2), so its readiness, its
+		// error and its count all come from the roots — never from the catalog
+		// index, which this surface no longer reads.
+		const library = harnessLibrary();
 		const harness = mountMode({
-			indexState: { ...idleState(), phase: 'loading' }
+			loadRoots: vi.fn(async () => {}),
+			rootsState: { ...liveRootsState(library), phase: 'loading' }
 		});
 		expect(screen.getByTestId('unified-loading')).toBeInTheDocument();
 
-		harness.indexStore.set({ ...idleState(), phase: 'error', error: 'boom' });
+		harness.rootsStore.set({
+			...liveRootsState(library),
+			phase: 'error',
+			error: 'boom'
+		});
 		await waitFor(() =>
 			expect(screen.getByTestId('unified-error')).toHaveTextContent('boom')
 		);
 
-		harness.indexStore.set(readyState());
+		harness.rootsStore.set(liveRootsState(library));
 		await waitFor(() =>
 			expect(screen.getByTestId('unified-summary')).toHaveTextContent('50 TOTAL')
 		);
+		// Roon's roots are read whole or not at all, so a ready list never
+		// qualifies its own count: no degraded notice, no truncation marker.
 		expect(screen.queryByTestId('unified-degraded-notice')).toBeNull();
-
-		harness.indexStore.set(
-			readyState({
-				source: 'browse',
-				revision: null,
-				capabilities: BROWSE_FALLBACK_CAPABILITIES,
-				truncated: true
-			})
-		);
-		await waitFor(() =>
-			expect(screen.getByTestId('unified-degraded-notice')).toBeInTheDocument()
-		);
-		expect(screen.getByTestId('unified-summary')).toHaveTextContent('(truncated)');
+		expect(screen.getByTestId('unified-summary')).not.toHaveTextContent('(truncated)');
 	});
 
 	it('exposes only working scope chips and reports their totals', async () => {
@@ -388,11 +435,8 @@ describe('UnifiedLibraryMode — shell', () => {
 			{ label: 'Rock', albumCount: 9, itemKey: 'genre:rock', imageKey: null }
 		]);
 		mountMode({
-			indexState: readyState({
-				albums: [
-					albumEntry('alb-1', 'Arrival', 'art-0'),
-					albumEntry('alb-2', 'Blue', 'art-1')
-				]
+			liveLibrary: harnessLibrary({
+				albums: [harnessAlbum('Arrival'), harnessAlbum('Blue')]
 			}),
 			genresStore
 		});
@@ -405,10 +449,7 @@ describe('UnifiedLibraryMode — shell', () => {
 			'Browse',
 			'Recently played',
 			'Favorites',
-			'Surprise me',
-			// Whatever workspace links this build's slot resolution provides
-			// render after the chips; a public resolution provides none.
-			...libraryScopeSlots.workspaceLinks.map((link) => link.label)
+			'Surprise me'
 		]);
 		expect(screen.queryByText('Most played')).toBeNull();
 		expect(screen.queryByText('Recently added')).toBeNull();
@@ -442,7 +483,7 @@ describe('UnifiedLibraryMode — shell', () => {
 				entries: state.entries.filter((favorite) => favorite.id !== id)
 			}));
 		});
-		mountMode({ indexState: readyState(), favoritesStore, removeFavoriteData });
+		mountMode({ liveLibrary: harnessLibrary(), favoritesStore, removeFavoriteData });
 
 		await fireEvent.click(screen.getByTestId('unified-scope-favorites'));
 		expect(screen.getByTestId('unified-favorites-view')).toHaveTextContent('Heroes');
@@ -463,7 +504,7 @@ describe('UnifiedLibraryMode — shell', () => {
 			imageKey: null
 		}));
 		const harness = mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			genresStore: fakeNamedCountsStore(genreEntries)
 		});
 
@@ -477,28 +518,23 @@ describe('UnifiedLibraryMode — shell', () => {
 		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
 		expect(screen.queryByTestId('unified-rail')).toBeNull();
 
-		// Back to artists, but with too few items.
+		// Back to artists, but with too few items. The rail addresses the list on
+		// screen, and that list is Roon's own root (Slice 2).
 		await fireEvent.click(screen.getByTestId('unified-scope-artists'));
-		const few = artistEntries(10);
-		harness.indexStore.set(
-			readyState({ artists: few, artistBuckets: bucketsFor(few) })
-		);
+		harness.rootsStore.set(liveRootsState(harnessLibrary({ artists: harnessArtists(10) })));
 		await waitFor(() => expect(screen.queryByTestId('unified-rail')).toBeNull());
 
 		// Enough items but under 3 letters — still hidden.
-		const twoLetters = artistEntries(50).map((entry, i) => {
-			const name = `${i % 2 === 0 ? 'a' : 'b'} artist ${i}`;
-			return { ...entry, name, searchKey: name };
-		});
-		const sorted = [...twoLetters].sort((a, b) => (a.searchKey < b.searchKey ? -1 : 1));
-		harness.indexStore.set(
-			readyState({ artists: sorted, artistBuckets: bucketsFor(sorted) })
-		);
+		const twoLetters = harnessArtists(50).map((entry, i) => ({
+			...entry,
+			name: `${i % 2 === 0 ? 'a' : 'b'} artist ${i}`
+		}));
+		harness.rootsStore.set(liveRootsState(harnessLibrary({ artists: twoLetters })));
 		await waitFor(() => expect(screen.queryByTestId('unified-rail')).toBeNull());
 	});
 
 	it('wires sort to the persisted prefs store per scope and leaves density out of the bar', async () => {
-		const harness = mountMode({ indexState: readyState() });
+		const harness = mountMode({ liveLibrary: harnessLibrary() });
 
 		await fireEvent.click(screen.getByTestId('unified-sort'));
 		await fireEvent.click(screen.getByTestId('unified-sort-option-za'));
@@ -538,7 +574,7 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 	it('uses the existing Unified claim and records only semantic Browse history', async () => {
 		const browse = fakeBrowseController();
 		const harness = mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			browseController: browse.controller
 		});
 
@@ -546,29 +582,28 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 		await waitFor(() => expect(browse.restore).toHaveBeenCalledTimes(1));
 		expect(harness.session.claim).toHaveBeenCalledTimes(1);
 		expect(screen.getByTestId('unified-browse-view')).toBeInTheDocument();
-		await fireEvent.click(screen.getByRole('button', { name: 'Open Library' }));
+		const libraryLink = screen.getByRole('link', { name: 'Open Library' });
+		expect(libraryLink).toHaveAttribute('href', '/library/browse/Library;;;0');
+		libraryLink.addEventListener('click', (event) => event.preventDefault(), { once: true });
+		await fireEvent.click(libraryLink, { ctrlKey: true });
+		expect(browse.openItem).not.toHaveBeenCalled();
+		await fireEvent.click(libraryLink);
 		await waitFor(() => expect(browse.openItem).toHaveBeenCalledTimes(1));
 
-		const navigation = __getNavigationLog();
-		const latest = navigation.at(-1)?.state as {
-			library?: { snapshot?: { scope?: string; browseHistory?: unknown } };
-		};
-		expect(latest.library?.snapshot?.scope).toBe('browse');
-		expect(latest.library?.snapshot?.browseHistory).toEqual({
-			context: { hierarchy: 'browse' },
-			history: [{ hierarchy: 'browse', breadcrumb: { title: 'Library' } }],
-			forward: []
+		const latest = __getNavigationLog().at(-1);
+		expect(decodeLibraryRoute(new URL(latest!.url))).toEqual({
+			kind: 'browse',
+			steps: [{ title: 'Library' }],
+			search: null
 		});
-		expect(JSON.stringify(latest.library?.snapshot?.browseHistory)).not.toContain(
-			'live-library-key'
-		);
+		expect(latest?.state).toEqual({});
 	});
 
 	it('restores a persisted search hierarchy through the injected semantic controller', async () => {
 		const browse = fakeBrowseController();
 		const harness = mountMode({
 			withContext: true,
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			browseController: browse.controller
 		});
 		const browseHistory = {
@@ -632,7 +667,7 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 			error: null
 		});
 		mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			browseController: browse.controller,
 			paletteSearchStore,
 			clearPaletteSearchData: vi.fn(async () => {})
@@ -653,34 +688,30 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 			)
 		);
 		expect(screen.getByTestId('unified-browse-view')).toBeInTheDocument();
-		const latest = __getNavigationLog().at(-1)?.state as {
-			library?: { snapshot?: { browseHistory?: unknown } };
-		};
-		expect(latest.library?.snapshot?.browseHistory).toEqual({
-			context: { hierarchy: 'search', query: 'bowie' },
-			history: [
-				{
-					hierarchy: 'search',
-					breadcrumb: { title: 'Albums', searchCategory: true }
-				}
-			],
-			forward: []
+		const latest = __getNavigationLog().at(-1);
+		expect(decodeLibraryRoute(new URL(latest!.url))).toEqual({
+			kind: 'browse',
+			steps: [{ title: 'Albums', searchCategory: true }],
+			search: 'bowie'
 		});
+		expect(latest?.state).toEqual({});
 	});
 
-	it('leaves Browse when a local Genre search result opens its drill', async () => {
+	it('leaves Browse when a local Genre search result opens its live page', async () => {
 		const browse = fakeBrowseController();
 		const genresStore = fakeNamedCountsStore([
 			{ label: 'Jazz', albumCount: 60, itemKey: 'genre:jazz', imageKey: null }
 		]);
-		const drillStore = fakeDrillStore([
-			{ title: 'Kind of Blue', artist: 'Miles Davis', imageKey: null }
-		]);
+		const openLiveRoot = vi.fn(async () =>
+			standaloneLiveLevel('Genres', [{ token: 'genre:jazz', title: 'Jazz', kind: 'genre' }])
+		);
+		const openLiveRef = vi.fn(async () => standaloneLiveLevel('Jazz', []));
 		mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			browseController: browse.controller,
 			genresStore,
-			drillStore
+			openLiveRoot,
+			openLiveRef
 		});
 
 		await fireEvent.click(screen.getByTestId('unified-scope-browse'));
@@ -691,12 +722,12 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 		});
 		await fireEvent.click(await screen.findByRole('button', { name: /Genre: Jazz/ }));
 
-		await waitFor(() =>
-			expect(drillStore.load).toHaveBeenCalledWith(expect.anything(), 'genres', 'Jazz')
+		expect(await screen.findByTestId('unified-live-collection-page')).toHaveAttribute(
+			'data-level-kind',
+			'genre'
 		);
 		expect(screen.queryByTestId('unified-browse-view')).toBeNull();
 		expect(screen.getByTestId('unified-scope-browse')).toHaveAttribute('aria-pressed', 'true');
-		expect(screen.getByTestId('unified-drill-label')).toHaveTextContent('Jazz');
 	});
 
 	it('retires palette authority before a keyless category result opens explicit actions', async () => {
@@ -729,7 +760,7 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 		});
 		const clearPaletteSearchData = vi.fn(async () => {});
 		mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			browseController: browse.controller,
 			browseActionController: actions.controller,
 			paletteSearchStore,
@@ -766,15 +797,149 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 		);
 	});
 
+	// Issue #12: which actions Roon offers is a question asked OF a zone. The
+	// sheet used to probe availability under `sheetZones[0]` while executing
+	// on the selected zone, so on a multi-zone Core every button on the sheet
+	// was gated by an answer given for a zone it would never act on.
+	it('probes browse action availability under the zone it will execute on', async () => {
+		const zone = (zone_id: string, display_name: string) => ({
+			zone_id,
+			display_name,
+			state: 'paused' as const,
+			is_play_allowed: true,
+			is_pause_allowed: true,
+			is_previous_allowed: true,
+			is_next_allowed: true,
+			is_seek_allowed: true,
+			outputs: []
+		});
+		// The user's pick is NOT the first zone — the two only ever agreed
+		// because every existing test seeded exactly one.
+		setZonesSnapshot([zone('zone-1', 'Living Room'), zone('zone-2', 'Kitchen')]);
+		setSelectedZone('zone-2');
+		const actions = fakeBrowseActionController();
+		const paletteSearchStore = writable<PaletteSearchState>({
+			phase: 'ready',
+			query: 'bowie',
+			groups: [],
+			browseGroups: [
+				{
+					title: 'Albums',
+					categoryTitle: 'Albums',
+					resultType: 'album',
+					total: 1,
+					rows: [
+						{
+							title: 'Low',
+							subtitle: 'David Bowie',
+							hint: 'action_list',
+							isLoadable: false,
+							isPlayable: false,
+							resultType: 'album',
+							categoryTitle: 'Albums'
+						}
+					]
+				}
+			],
+			error: null
+		});
+		mountMode({
+			liveLibrary: harnessLibrary(),
+			browseActionController: actions.controller,
+			paletteSearchStore
+		});
+
+		await fireEvent.click(screen.getByTestId('unified-find'));
+		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
+			target: { value: 'bowie' }
+		});
+		await fireEvent.click(screen.getByRole('button', { name: /Low/ }));
+
+		await waitFor(() => expect(actions.open).toHaveBeenCalled());
+		expect(actions.open.mock.calls[0][2]).toBe('zone-2');
+
+		await fireEvent.click(screen.getByTestId('unified-browse-action-queue'));
+		expect(actions.execute).toHaveBeenCalledWith(expect.anything(), 'queue', 'zone-2');
+	});
+
+	// The zone picker lives in the layout, outside the sheet's backdrop, and
+	// stays clickable while the sheet is open. A moved selection leaves the
+	// buttons gated by an answer for the old zone unless the sheet re-asks.
+	it('re-probes availability when the zone moves while the sheet is open', async () => {
+		const zone = (zone_id: string, display_name: string) => ({
+			zone_id,
+			display_name,
+			state: 'paused' as const,
+			is_play_allowed: true,
+			is_pause_allowed: true,
+			is_previous_allowed: true,
+			is_next_allowed: true,
+			is_seek_allowed: true,
+			outputs: []
+		});
+		setZonesSnapshot([zone('zone-1', 'Living Room'), zone('zone-2', 'Kitchen')]);
+		setSelectedZone('zone-1');
+		const actions = fakeBrowseActionController();
+		const paletteSearchStore = writable<PaletteSearchState>({
+			phase: 'ready',
+			query: 'bowie',
+			groups: [],
+			browseGroups: [
+				{
+					title: 'Albums',
+					categoryTitle: 'Albums',
+					resultType: 'album',
+					total: 1,
+					rows: [
+						{
+							title: 'Low',
+							subtitle: 'David Bowie',
+							hint: 'action_list',
+							isLoadable: false,
+							isPlayable: false,
+							resultType: 'album',
+							categoryTitle: 'Albums'
+						}
+					]
+				}
+			],
+			error: null
+		});
+		mountMode({
+			liveLibrary: harnessLibrary(),
+			browseActionController: actions.controller,
+			paletteSearchStore
+		});
+
+		await fireEvent.click(screen.getByTestId('unified-find'));
+		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
+			target: { value: 'bowie' }
+		});
+		await fireEvent.click(screen.getByRole('button', { name: /Low/ }));
+		await waitFor(() => expect(actions.open).toHaveBeenCalledTimes(1));
+		expect(actions.open.mock.calls[0][2]).toBe('zone-1');
+
+		setSelectedZone('zone-2');
+
+		await waitFor(() => expect(actions.open).toHaveBeenCalledTimes(2));
+		// Same target, re-asked of the zone the buttons will now act on.
+		expect(actions.open.mock.calls[1][1]).toEqual(actions.open.mock.calls[0][1]);
+		expect(actions.open.mock.calls[1][2]).toBe('zone-2');
+		// And it settles: a re-probe that agreed with the zone must not loop.
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(actions.open).toHaveBeenCalledTimes(2);
+	});
+
 	it('keeps Favorite available after See All enters a keyless Tracks hierarchy', async () => {
 		const actions = fakeBrowseActionController();
 		mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			browseActionController: actions.controller
 		});
 
 		actions.store.set({
 			phase: 'ready',
+			zoneId: 'zone-1',
 			source: {
 				kind: 'browse',
 				snapshot: {
@@ -804,30 +969,6 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 		);
 	});
 
-	it('shows a named drill failure instead of leaving an endless loading message', async () => {
-		const genresStore = fakeNamedCountsStore([
-			{ label: 'Jazz', albumCount: 60, itemKey: 'genre:jazz', imageKey: null }
-		]);
-		const failed = writable({
-			albums: [] as readonly DrillAlbum[],
-			totalCount: 0,
-			loading: false,
-			loaded: false,
-			error: 'stale target'
-		});
-		const drillStore = {
-			subscribe: failed.subscribe,
-			load: vi.fn(async () => {}),
-			reset: vi.fn()
-		};
-		mountMode({ indexState: readyState(), genresStore, drillStore });
-
-		await fireEvent.click(screen.getByTestId('unified-scope-genres'));
-		await fireEvent.click(await screen.findByText('Jazz'));
-
-		expect(screen.getByTestId('unified-drill-error')).toHaveTextContent('stale target');
-		expect(screen.queryByTestId('unified-drill-loading')).toBeNull();
-	});
 });
 
 describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
@@ -844,52 +985,126 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		clearPendingLibraryPageStateWrite();
 	});
 
-	it('shows one version-count badge for a grouped album tile', async () => {
-		const grouped = {
-			...albumEntry('alb-group', 'Same Album', 'art-0'),
-			catalogLocalId: 'alb-group',
-			versionCount: 2
+	/**
+	 * The locator a collection-opened album page is named by. Since Slice 4 this
+	 * is the durable way to address an album page: the drill it came from, plus
+	 * the row's own rendering. No catalog identity is minted for it.
+	 */
+	function albumLocator(title = 'Arrival', credit = 'Artist of Arrival') {
+		return {
+			sourceContract: COLLECTION_DRILL_SOURCE_CONTRACT,
+			hierarchy: 'genres' as const,
+			collectionExactName: 'Bright Machinery',
+			rendering: { exactTitle: title, exactCredit: credit }
 		};
-		mountMode({
-			indexState: readyState({
-				albums: [grouped],
-				albumBuckets: bucketsFor([grouped])
-			})
-		});
+	}
 
-		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
-		expect(screen.getAllByTestId('unified-tile')).toHaveLength(1);
-		expect(screen.getByTestId('unified-album-version-count')).toHaveTextContent(
-			'2 versions'
-		);
-	});
+	/**
+	 * Restore an album page from committed page state, the way a reload or a
+	 * Back into a recorded entry does. The page's contents come from the
+	 * injected album controller, so what this fixes is which page is open —
+	 * not what the server said about it.
+	 */
+	function resumeCollectionAlbum(
+		harness: ReturnType<typeof mountMode>,
+		locator = albumLocator()
+	): void {
+		harness.registered.lifecycle!.resume({
+			cause: 'history-pop',
+			pageState: buildUnifiedLibraryPageState({
+				scope: 'albums',
+				collectionDrill: null,
+				itemTarget: { kind: 'collection', locator },
+				filterText: '',
+				surpriseSeed: null
+			})
+		} as CommittedLibraryModeActivation);
+	}
+
+	function collectionActionState(): LibraryAlbumState {
+		return {
+			phase: 'details',
+			activeTab: 'details',
+			generation: 1,
+			requestId: 'request-1',
+			operationId: 'page-1',
+			resolvingDeadlineAt: 2,
+			artist: 'Artist',
+			title: 'Album',
+			versions: [
+				{
+					versionId: 'version-2',
+					editionText: '',
+					phase: 'loaded',
+					trackCount: 1,
+					code: null,
+					error: null
+				}
+			],
+			degraded: false,
+			selectedVersionId: 'version-2',
+			actionsAvailable: true,
+			albumActionsAvailable: true,
+			orderedTracks: [{ index: 0, title: 'Exact track' }],
+			live: null,
+			code: null,
+			error: null,
+			collectionFailure: null,
+			transitionedAt: 2
+		};
+	}
+
+	async function mountCollectionActionPage(session = fakeSessionClient()) {
+		setZonesSnapshot([
+			{
+				zone_id: 'zone-1',
+				display_name: 'Living Room',
+				state: 'paused',
+				is_play_allowed: true,
+				is_pause_allowed: true,
+				is_previous_allowed: true,
+				is_next_allowed: true,
+				is_seek_allowed: true,
+				outputs: []
+			}
+		]);
+		setSelectedZone('zone-1');
+		const album = fakeModeAlbumController();
+		const actions = fakeRecoveringModeActionController();
+		const harness = mountMode({
+			withContext: true,
+			sessionClient: session.client,
+			liveLibrary: harnessLibrary(),
+			albumController: album.controller,
+			albumActionController: actions.controller
+		});
+		resumeCollectionAlbum(harness);
+		await waitFor(() => expect(album.open).toHaveBeenCalledTimes(1));
+		album.store.set(collectionActionState());
+		await screen.findByTestId('unified-album-play');
+		return { session, album, actions, harness };
+	}
 
 	it('records scope and drill transitions so browser Back stays inside Library', async () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
 		await fireEvent.click(screen.getByTestId('unified-scope-artists'));
-		await fireEvent.click(screen.getByText('a artist 0').closest('button')!);
+		await fireEvent.click(screen.getByText('a artist 0').closest('a,button')!);
 
 		const enteredDrill = __getHistorySnapshot();
 		expect(enteredDrill).toMatchObject({ index: 3 });
 		expect(enteredDrill.entries).toHaveLength(4);
 		expect(enteredDrill.entries.map((entry) => new URL(entry.url).pathname)).toEqual([
 			'/library',
-			'/library',
-			'/library',
-			'/library'
+			'/library/albums',
+			'/library/artists',
+			'/library/artists/a%20artist%200'
 		]);
-		expect(enteredDrill.entries[3].state).toMatchObject({
-			library: {
-				libraryView: 'unified',
-				snapshot: {
-					scope: 'artists',
-					collectionDrill: null,
-					itemTarget: { kind: 'artist', localId: 'art-0' },
-				}
-			}
-		});
+		// What goes into history is the ADDRESS — the rendering Roon showed on
+		// the way to this page — and never the reference that opened it, which
+		// is worth exactly one generation (Slice 2).
+		expect(enteredDrill.entries[3].state).toEqual({});
 
 		expect(__back()).toBe(true);
 		expect(__getHistorySnapshot()).toMatchObject({
@@ -898,20 +1113,8 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 				expect.anything(),
 				expect.anything(),
 				{
-					url: 'http://localhost/library',
-					state: {
-						library: {
-							libraryView: 'unified',
-							schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
-							snapshot: {
-								scope: 'artists',
-								collectionDrill: null,
-								itemTarget: null,
-								filterText: '',
-								surpriseSeed: null
-							}
-						}
-					}
+					url: 'http://localhost/library/artists',
+					state: {}
 				},
 				expect.anything()
 			]
@@ -919,8 +1122,9 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		expect(__forward()).toBe(true);
 	});
 
-	it('records density changes and restores the previous size on browser Back', async () => {
-		const harness = mountMode({ withContext: true, indexState: readyState() });
+	it('changes density without creating a navigation entry', async () => {
+		__resetNavigation('http://localhost/library/artists');
+		const harness = mountMode({ withContext: true, liveLibrary: harnessLibrary() });
 		harness.registered.lifecycle!.resume({
 			cause: 'initial',
 			pageState: buildUnifiedRootPageState()
@@ -930,71 +1134,41 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		expect(requestUnifiedLibraryDensity('pi')).toBe(true);
 
 		expect(get(harness.prefsStore).density).toBe('pi');
-		const changed = __getHistorySnapshot();
-		expect(changed).toMatchObject({ index: 1 });
-		expect(changed.entries).toHaveLength(2);
-		expect(changed.entries[0].state).toMatchObject({
-			library: { snapshot: { density: 'normal' } }
-		});
-		expect(changed.entries[1].state).toMatchObject({
-			library: { snapshot: { density: 'pi' } }
-		});
-		expect(__getNavigationLog().map((entry) => entry.operation)).toEqual([
-			'replaceState',
-			'pushState'
-		]);
-
-		harness.registered.lifecycle!.suspend();
-		expect(__back()).toBe(true);
-		harness.registered.lifecycle!.resume({
-			cause: 'history-pop',
-			pageState: changed.entries[0].state.library
-		} as CommittedLibraryModeActivation);
-
-		expect(get(harness.prefsStore).density).toBe('normal');
+		expect(__getHistorySnapshot()).toMatchObject({ index: 0, entries: [expect.anything()] });
+		expect(__getNavigationLog()).toEqual([]);
+		expect(requestUnifiedLibraryDensity('pi')).toBe(true);
+		expect(__getNavigationLog()).toEqual([]);
 		await waitFor(() =>
 			expect(screen.getByTestId('library-mode-target')).toHaveAttribute(
 				'data-density',
-				'normal'
+				'pi'
 			)
 		);
 	});
 
 	it('renders the exact Roon album count on every artist row', () => {
-		const artists: LibraryArtistEntry[] = [
-			{
-				id: 'art-counted',
-				name: 'Counted Artist',
-				searchKey: 'counted artist',
-				albumCount: 27,
-				countComplete: true
-			},
-			{
-				id: 'art-zero',
-				name: 'Zero Artist',
-				searchKey: 'zero artist',
-				albumCount: 0,
-				countComplete: true
-			}
-		];
+		// The count is whatever Roon wrote on its own Artists row, read back off
+		// the row's subtitle — not a number this surface totalled up itself.
 		mountMode({
-			indexState: readyState({
-				artists,
-				artistBuckets: bucketsFor(artists)
+			liveLibrary: harnessLibrary({
+				artists: [
+					{ name: 'Counted Artist', albums: [], albumCount: 27 },
+					{ name: 'Zero Artist', albums: [], albumCount: 0 }
+				]
 			})
 		});
 
-		const countedRow = screen.getByText('Counted Artist').closest('button');
-		const zeroRow = screen.getByText('Zero Artist').closest('button');
+		const countedRow = screen.getByText('Counted Artist').closest('a,button');
+		const zeroRow = screen.getByText('Zero Artist').closest('a,button');
 		expect(countedRow?.querySelector('.ac')).toHaveTextContent('27');
 		expect(zeroRow?.querySelector('.ac')).toHaveTextContent('0');
 	});
 
 	it('redraws Surprise me by re-selecting its chip and renders the prototype hint after the tiles', async () => {
-		const albums = Array.from({ length: 40 }, (_, index) =>
-			albumEntry(`alb-${index}`, `Album ${index.toString().padStart(2, '0')}`, 'art-0')
+		const albums = Array.from({ length: 40 }, (_unused, index) =>
+			harnessAlbum(`Album ${index.toString().padStart(2, '0')}`)
 		);
-		mountMode({ indexState: readyState({ albums }) });
+		mountMode({ liveLibrary: harnessLibrary({ albums }) });
 
 		const surpriseChip = screen.getByTestId('unified-scope-surprise');
 		await fireEvent.click(surpriseChip);
@@ -1011,10 +1185,10 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 	});
 
 	it('redraws Album Shuffle on chip re-selection without a Surprise hint', async () => {
-		const albums = Array.from({ length: 40 }, (_, index) =>
-			albumEntry(`alb-${index}`, `Album ${index.toString().padStart(2, '0')}`, 'art-0')
+		const albums = Array.from({ length: 40 }, (_unused, index) =>
+			harnessAlbum(`Album ${index.toString().padStart(2, '0')}`)
 		);
-		mountMode({ indexState: readyState({ albums }) });
+		mountMode({ liveLibrary: harnessLibrary({ albums }) });
 
 		const albumsChip = screen.getByTestId('unified-scope-albums');
 		await fireEvent.click(albumsChip);
@@ -1030,489 +1204,162 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 	});
 
 	it('renders the reference Recently played subtitle without appending the album', async () => {
-		mountMode({ indexState: readyState(), recentStore: fakeRecentStore() });
+		mountMode({ liveLibrary: harnessLibrary(), recentStore: fakeRecentStore() });
 
 		await fireEvent.click(screen.getByTestId('unified-scope-recently-played'));
-		const tile = screen.getByText('A Recent Track').closest('button');
+		const tile = screen.getByText('A Recent Track').closest('a,button');
 		expect(tile?.querySelector('.ta')).toHaveTextContent('Reference Artist');
 		expect(tile?.querySelector('.ta')).not.toHaveTextContent('Album must not appear');
 	});
 
-	it('keeps unavailable album sorts visible and disabled with their verified reasons', async () => {
-		mountMode({ indexState: readyState() });
-
-		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
-		const releaseYear = screen.getByTestId(
-			'unified-sort-option-release-year'
-		) as HTMLOptionElement;
-		expect(releaseYear.disabled).toBe(true);
-		expect(releaseYear.title).toBe(NO_RELEASE_DATES_REASON);
-		const byGenre = screen.getByTestId('unified-sort-option-by-genre') as HTMLOptionElement;
-		expect(byGenre.disabled).toBe(true);
-		expect(byGenre.title).toBe(NO_GENRE_SORT_REASON);
-	});
-
-	it('enables release-year sorting when the native date features are available (Slice 4)', async () => {
-		const albums = [
-			{
-				...albumEntry('alb-mid', 'Middle', 'art-0'),
-				originalReleaseDate: { year: 1975, month: 6, day: 1 }
-			},
-			{
-				...albumEntry('alb-old', 'Earliest', 'art-1'),
-				originalReleaseDate: { year: 1959, month: 8, day: 17 }
-			},
-			// ReleaseDate is the fallback key when no original exists.
-			{
-				...albumEntry('alb-new', 'Latest', 'art-2'),
-				releaseDate: { year: 1997, month: 9, day: 22 }
-			},
-			albumEntry('alb-undated', 'Undated', 'art-3')
-		];
+	/**
+	 * Slice 2: the Albums list is Roon's own root, and one of its rows renders a
+	 * title and a credit line — no date and no genre. So the menu offers what it
+	 * can perform and nothing else, the same ruling the drill menus carry
+	 * (Slice 8d): an offered sort that cannot order is a fabricated affordance,
+	 * and here it is structural rather than a matter of timing, because the date
+	 * features being present would not put a date on a Roon browse row. A sort
+	 * persisted from the catalog listing falls back to A-Z rather than selecting
+	 * an entry the menu no longer offers.
+	 */
+	it('offers the live Albums list no chronological or genre order, date features or not', async () => {
 		const harness = mountMode({
-			indexState: readyState({
-				albums,
-				capabilities: { ...CATALOG_CAPABILITIES, dateFeatures: true }
+			liveLibrary: harnessLibrary({
+				albums: [harnessAlbum('Beta'), harnessAlbum('Alpha')]
 			})
 		});
+		// Persisted as if selected while the old catalog listing was on screen.
+		harness.prefsStore.setSort('albums', 'year-asc');
 
 		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
+		expect(screen.getByTestId('unified-sort')).toHaveTextContent('Sort: A to Z');
+		expect(renderedTileTitles()).toEqual(['Alpha', 'Beta']);
+
 		await fireEvent.click(screen.getByTestId('unified-sort'));
 		expect(screen.queryByTestId('unified-sort-option-release-year')).toBeNull();
-		await fireEvent.click(screen.getByTestId('unified-sort-option-year-asc'));
-		expect(get(harness.prefsStore).sorts.albums).toBe('year-asc');
-		expect(renderedTileTitles()).toEqual(['Earliest', 'Middle', 'Latest', 'Undated']);
-
-		await fireEvent.click(screen.getByTestId('unified-sort'));
-		await fireEvent.click(screen.getByTestId('unified-sort-option-year-desc'));
-		expect(get(harness.prefsStore).sorts.albums).toBe('year-desc');
-		// Undated albums stay last in both directions.
-		expect(renderedTileTitles()).toEqual(['Latest', 'Middle', 'Earliest', 'Undated']);
+		expect(screen.queryByTestId('unified-sort-option-year-asc')).toBeNull();
+		expect(screen.queryByTestId('unified-sort-option-year-desc')).toBeNull();
+		expect(screen.queryByTestId('unified-sort-option-by-genre')).toBeNull();
+		// What Roon's rows can be ordered by is offered, and works.
+		expect(screen.getByTestId('unified-sort-option-az')).toBeInTheDocument();
+		expect(screen.getByTestId('unified-sort-option-by-artist')).toBeInTheDocument();
+		await fireEvent.click(screen.getByTestId('unified-sort-option-za'));
+		expect(renderedTileTitles()).toEqual(['Beta', 'Alpha']);
 	});
 
-	it('hides the A–Z rail for the chronological album orders exactly as for Shuffle', async () => {
-		const albums = Array.from({ length: 44 }, (_, index) => ({
-			...albumEntry(
-				`alb-${index}`,
-				`${'abcd'[index % 4]} Album ${index.toString().padStart(2, '0')}`,
-				`art-${index}`
-			),
-			originalReleaseDate: { year: 1960 + index, month: 0, day: 0 }
-		})).sort((left, right) => (left.searchKey < right.searchKey ? -1 : 1));
-		mountMode({
-			indexState: readyState({
-				albums,
-				albumBuckets: bucketsFor(albums),
-				capabilities: { ...CATALOG_CAPABILITIES, dateFeatures: true }
-			})
-		});
+	it('hides the A-Z rail for Shuffle over the live Albums list', async () => {
+		const albums = Array.from({ length: 44 }, (_unused, index) =>
+			harnessAlbum(`${'abcd'[index % 4]} Album ${index.toString().padStart(2, '0')}`)
+		);
+		mountMode({ liveLibrary: harnessLibrary({ albums }) });
 
 		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
 		expect(screen.getByTestId('unified-rail')).toBeInTheDocument();
 		await fireEvent.click(screen.getByTestId('unified-sort'));
-		await fireEvent.click(screen.getByTestId('unified-sort-option-year-asc'));
-		expect(screen.queryByTestId('unified-rail')).toBeNull();
-		await fireEvent.click(screen.getByTestId('unified-sort'));
-		await fireEvent.click(screen.getByTestId('unified-sort-option-year-desc'));
+		await fireEvent.click(screen.getByTestId('unified-sort-option-shuffle'));
 		expect(screen.queryByTestId('unified-rail')).toBeNull();
 		await fireEvent.click(screen.getByTestId('unified-sort'));
 		await fireEvent.click(screen.getByTestId('unified-sort-option-az'));
 		expect(screen.getByTestId('unified-rail')).toBeInTheDocument();
 	});
 
-	it('degrades with the carried reason and falls a persisted year sort back to A–Z', async () => {
-		const albums = [
-			{
-				...albumEntry('alb-b', 'Beta', 'art-0'),
-				originalReleaseDate: { year: 1975, month: 0, day: 0 }
-			},
-			{
-				...albumEntry('alb-a', 'Alpha', 'art-1'),
-				originalReleaseDate: { year: 1959, month: 0, day: 0 }
-			}
-		];
-		const harness = mountMode({
-			indexState: readyState({
-				albums,
-				capabilities: {
-					...CATALOG_CAPABILITIES,
-					dateFeatures: false,
-					dateFeaturesDisabledReason: 'no native catalog snapshot is available'
-				}
-			})
-		});
-		// Persisted as if selected while the feature was live.
-		harness.prefsStore.setSort('albums', 'year-asc');
-
-		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
-		// Rendering falls back to A–Z and the control says so honestly.
-		expect(screen.getByTestId('unified-sort')).toHaveTextContent('Sort: A to Z');
-		expect(renderedTileTitles()).toEqual(['Alpha', 'Beta']);
-
-		await fireEvent.click(screen.getByTestId('unified-sort'));
-		const releaseYear = screen.getByTestId(
-			'unified-sort-option-release-year'
-		) as HTMLButtonElement;
-		expect(releaseYear.disabled).toBe(true);
-		expect(releaseYear.title).toBe('no native catalog snapshot is available');
-		expect(screen.queryByTestId('unified-sort-option-year-asc')).toBeNull();
-	});
-
-	it('sorts an artist drill chronologically when date features are available', async () => {
-		const indexState = readyState({
-			capabilities: { ...CATALOG_CAPABILITIES, dateFeatures: true },
-			albums: [
-				{
-					...albumEntry('alb-1', 'Late Work', 'art-0'),
-					originalReleaseDate: { year: 1980, month: 0, day: 0 }
-				},
-				{
-					...albumEntry('alb-2', 'Early Work', 'art-0'),
-					originalReleaseDate: { year: 1968, month: 0, day: 0 }
-				},
-				albumEntry('alb-3', 'Undated Work', 'art-0')
-			]
-		});
-		const harness = mountMode({ indexState });
-
-		const rows = screen.getAllByTestId('unified-row');
-		await fireEvent.click(rows[0]);
-		expect(screen.getByTestId('unified-item-summary')).toHaveTextContent('3 ALBUMS');
-		await fireEvent.click(screen.getByTestId('unified-drill-sort'));
-		await fireEvent.click(screen.getByTestId('unified-drill-sort-option-year-asc'));
-		expect(get(harness.prefsStore).sorts.artist).toBe('year-asc');
-		expect(renderedTileTitles()).toEqual(['Early Work', 'Late Work', 'Undated Work']);
-	});
-
-	// Artist drills join by catalog binding, never by display name (plan:
-	// .agents/plans/artist-drill-binding.md). The three tests below cover
-	// the authoritative load, the folded fallback, and the honest loading
-	// state — the production defect showed "0 ALBUMS / No albums in this
-	// library." for 635 of 1,671 artists.
-	const chainz = {
-		id: 'art-chainz',
-		name: '2 Chainz',
-		searchKey: '2 chainz',
-		albumCount: 1,
-		countComplete: true,
-		catalogLocalId: 'art-chainz'
-	};
-	const collegroveRef = {
-		localId: 'alb-collegrove',
-		coreId: 'core-a',
-		exactTitle: 'Collegrove',
-		exactArtist: '2 Chainz & Lil Wayne',
-		normalizedTitle: 'collegrove',
-		normalizedArtist: '2 chainz & lil wayne',
-		editionText: '',
-		firstSeenAt: '2026-08-08T00:00:00.000Z',
-		lastSeenAt: '2026-08-08T00:00:00.000Z',
-		resolutionStatus: 'resolved',
-		artistLocalId: 'art-chainz'
-	};
-	const artistAlbumsResponse = () => ({
-		status: { ...syntheticStatus({ coreId: 'core-a' }), revision: 2 },
-		artist: { localId: 'art-chainz' },
-		limit: 500,
-		total: 1,
-		truncated: false,
-		albums: [collegroveRef]
-	});
-
-	it('replaces the display-name fallback with the Roon-authoritative discography', async () => {
-		// The credit-string class: the album's artist line matches no artist
-		// name, so no string normalization can ever join it.
-		const hydrate = vi.fn(async () => artistAlbumsResponse());
-		mountMode({
-			indexState: readyState({
-				artists: [chainz],
-				artistBuckets: bucketsFor([chainz]),
-				albums: [
-					{
-						id: 'alb-collegrove',
-						title: 'Collegrove',
-						artist: '2 Chainz & Lil Wayne',
-						searchKey: 'collegrove 2 chainz & lil wayne'
-					}
-				]
-			}),
-			hydrateArtistAlbums: hydrate
-		});
-
-		await fireEvent.click(screen.getAllByTestId('unified-row')[0]);
-		await waitFor(() => expect(renderedTileTitles()).toEqual(['Collegrove']));
-		expect(hydrate).toHaveBeenCalledWith(expect.anything(), 'art-chainz', 1, 500);
-		expect(screen.getByTestId('unified-item-summary')).toHaveTextContent('1 ALBUMS');
-		expect(screen.queryByText('No albums in this library.')).toBeNull();
-	});
-
-	it('joins typographic credit variants through folding when the load fails', async () => {
-		// The measured 'Til Tuesday case: Artists row U+2019, album credit
-		// U+0027, album unbound. With the authoritative load unavailable the
-		// folded fallback must still join.
-		const tilTuesday = {
-			id: 'art-tt',
-			name: '’Til Tuesday',
-			searchKey: 'til tuesday',
-			albumCount: 1,
-			countComplete: true,
-			catalogLocalId: 'art-tt'
-		};
-		const hydrate = vi.fn(async () => {
-			throw new Error('offline');
-		});
-		mountMode({
-			indexState: readyState({
-				artists: [tilTuesday],
-				artistBuckets: bucketsFor([tilTuesday]),
-				albums: [
-					{
-						id: 'alb-vc',
-						title: 'Voices Carry',
-						artist: "'Til Tuesday",
-						searchKey: 'voices carry til tuesday'
-					}
-				]
-			}),
-			hydrateArtistAlbums: hydrate
-		});
-
-		await fireEvent.click(screen.getAllByTestId('unified-row')[0]);
-		await waitFor(() => expect(renderedTileTitles()).toEqual(['Voices Carry']));
-		expect(screen.getByTestId('unified-item-summary')).toHaveTextContent('1 ALBUMS');
-	});
-
-	it('requests the full contract limit and never claims a complete count for a truncated discography', async () => {
-		// cr-1: the default page size silently capped a discography at 200 and
-		// then reported that cap as an exact count.
-		const hydrate = vi.fn(async () => ({ ...artistAlbumsResponse(), truncated: true }));
-		mountMode({
-			indexState: readyState({
-				artists: [chainz],
-				artistBuckets: bucketsFor([chainz]),
-				albums: []
-			}),
-			hydrateArtistAlbums: hydrate
-		});
-
-		await fireEvent.click(screen.getAllByTestId('unified-row')[0]);
-		await waitFor(() => expect(renderedTileTitles()).toEqual(['Collegrove']));
-		expect(hydrate).toHaveBeenCalledWith(expect.anything(), 'art-chainz', 1, 500);
-		expect(screen.getByTestId('unified-item-summary')).toHaveTextContent('1+ ALBUMS');
-	});
-
-	it('retries a revision conflict once so a racing hydration does not strand the open drill', async () => {
-		// cr-2: the catalog compares revisions with strict equality, so a load
-		// that lost a race was turned into a permanent per-artist failure with
-		// no retry while the drill stayed open.
-		// The conflict here is an EXTERNAL refresh: the catalog has moved to
-		// revision 9 while the mounted index still says 1, so a retry that
-		// re-derives the revision locally resends the rejected value and fails
-		// again. The stub is revision-sensitive exactly so it cannot pass that
-		// way — it accepts only the revision the Core currently reports.
-		const CURRENT_REVISION = 9;
-		const attempted: number[] = [];
-		const hydrate = vi.fn(async (_fetch: unknown, _id: string, revision: number) => {
-			attempted.push(revision);
-			if (revision !== CURRENT_REVISION) throw new Error('REVISION_CONFLICT');
-			return artistAlbumsResponse();
-		});
-		mountMode({
-			indexState: readyState({
-				artists: [chainz],
-				artistBuckets: bucketsFor([chainz]),
-				albums: []
-			}),
-			hydrateArtistAlbums: hydrate,
-			fetchStatus: async () => syntheticStatus({ coreId: 'core-a', revision: CURRENT_REVISION })
-		});
-
-		await fireEvent.click(screen.getAllByTestId('unified-row')[0]);
-		await waitFor(() => expect(renderedTileTitles()).toEqual(['Collegrove']));
-		expect(attempted).toEqual([1, CURRENT_REVISION]);
-		expect(screen.queryByTestId('unified-drill-error')).toBeNull();
-	});
-
-	it('never claims an empty library while the discography is still loading', async () => {
-		const pending = deferred<ReturnType<typeof artistAlbumsResponse>>();
-		const hydrate = vi.fn(() => pending.promise);
-		mountMode({
-			indexState: readyState({
-				artists: [chainz],
-				artistBuckets: bucketsFor([chainz]),
-				albums: []
-			}),
-			hydrateArtistAlbums: hydrate
-		});
-
-		await fireEvent.click(screen.getAllByTestId('unified-row')[0]);
-		expect(screen.getByTestId('unified-drill-loading')).toBeInTheDocument();
-		expect(screen.queryByText('No albums in this library.')).toBeNull();
-		// The summary span renders only with text — no "0 ALBUMS" claim exists.
-		expect(screen.queryByTestId('unified-item-summary')).toBeNull();
-
-		pending.resolve(artistAlbumsResponse());
-		await waitFor(() => expect(renderedTileTitles()).toEqual(['Collegrove']));
-		expect(screen.getByTestId('unified-item-summary')).toHaveTextContent('1 ALBUMS');
-	});
-
-	it('orders a genre drill chronologically through reconciled catalog dates', async () => {
+	/**
+	 * Slice 8d. Slice 7 deleted the title+artist lookup that used to pin a
+	 * catalog identity onto a live drill row, and these cards stopped opening
+	 * as a result. They open again here — through the drill they came from,
+	 * named by their own rendering and by nothing else.
+	 */
+	it('renders one live genre page for both a card click and URL restoration', async () => {
 		const genresStore = fakeNamedCountsStore([
-			{ label: 'Jazz', albumCount: 2, itemKey: 'k:jazz', imageKey: null }
+			{ label: 'Bright Machinery', albumCount: 2, itemKey: 'k:bm', imageKey: null }
 		]);
-		const drillStore = fakeDrillStore([
-			{ title: 'Alpha Jazz', artist: 'J Artist', imageKey: null },
-			{ title: 'Zulu Jazz', artist: 'J Artist', imageKey: null }
-		]);
-		const harness = mountMode({
-			indexState: readyState({
-				capabilities: { ...CATALOG_CAPABILITIES, dateFeatures: true },
-				albums: [
-					{
-						id: 'cat-alpha',
-						title: 'Alpha Jazz',
-						artist: 'J Artist',
-						searchKey: 'alpha jazz j artist',
-						catalogLocalId: 'cat-alpha',
-						resolutionStatus: 'resolved',
-						originalReleaseDate: { year: 1975, month: 0, day: 0 }
-					},
-					{
-						id: 'cat-zulu',
-						title: 'Zulu Jazz',
-						artist: 'J Artist',
-						searchKey: 'zulu jazz j artist',
-						catalogLocalId: 'cat-zulu',
-						resolutionStatus: 'resolved',
-						originalReleaseDate: { year: 1959, month: 0, day: 0 }
-					}
-				]
-			}),
+		const openLiveRoot = vi.fn(async () => ({
+			contract: LIBRARY_OPEN_CONTRACT,
+			kind: 'level' as const,
+			generation: 'gen-1',
+			title: 'Genres',
+			count: 1,
+			rows: [
+				{
+					ref: { generation: 'gen-1', token: 'genre:bright-machinery' },
+					title: 'Bright Machinery',
+					kind: 'genre' as const
+				}
+			]
+		}));
+		const openLiveRef = vi.fn(async () => ({
+			contract: LIBRARY_OPEN_CONTRACT,
+			kind: 'level' as const,
+			generation: 'gen-1',
+			title: 'Bright Machinery',
+			count: 1,
+			rows: [
+				{
+					ref: { generation: 'gen-1', token: 'section:albums' },
+					title: 'Albums',
+					kind: 'section' as const
+				}
+			]
+		}));
+		const clicked = mountMode({
+			liveLibrary: harnessLibrary(),
 			genresStore,
-			drillStore
+			openLiveRoot,
+			openLiveRef
 		});
 
 		await fireEvent.click(screen.getByTestId('unified-scope-genres'));
-		await fireEvent.click(await screen.findByText('Jazz'));
-		// A–Z order first: Alpha before Zulu.
-		await screen.findByText('Alpha Jazz');
-		expect(renderedTileTitles()).toEqual(['Alpha Jazz', 'Zulu Jazz']);
+		await fireEvent.click(await screen.findByText('Bright Machinery'));
+		expect(await screen.findByTestId('unified-live-collection-page')).toHaveAttribute(
+			'data-level-kind',
+			'genre'
+		);
+		expect(screen.queryByTestId('unified-drill-label')).toBeNull();
+		const clickedUrl = window.location.href;
+		clicked.unmount();
 
-		await fireEvent.click(screen.getByTestId('unified-drill-sort'));
-		await fireEvent.click(screen.getByTestId('unified-drill-sort-option-year-asc'));
-		expect(get(harness.prefsStore).sorts.genre).toBe('year-asc');
-		// Chronological order flips it: Zulu (1959) before Alpha (1975).
-		expect(renderedTileTitles()).toEqual(['Zulu Jazz', 'Alpha Jazz']);
+		__resetNavigation(clickedUrl);
+		const restored = mountMode({
+			withContext: true,
+			liveLibrary: harnessLibrary(),
+			genresStore,
+			openLiveRoot,
+			openLiveRef
+		});
+		restored.registered.lifecycle!.resume({
+			cause: 'initial',
+			pageState: libraryPageStateFromRoute({ kind: 'genre', genre: 'Bright Machinery' })
+		} as CommittedLibraryModeActivation);
+		expect(await screen.findByTestId('unified-live-collection-page')).toHaveAttribute(
+			'data-level-kind',
+			'genre'
+		);
+		expect(screen.queryByTestId('unified-drill-label')).toBeNull();
 	});
 
-	it('restores the Recently added chip when date features are available, library-added timestamp descending (Slice 5)', async () => {
-		const albums = [
-			{
-				...albumEntry('alb-tie-b', 'Zebra Tie', 'art-0'),
-				importDate: '2026-07-20T10:00:00.000Z'
-			},
-			{
-				...albumEntry('alb-new', 'Newest', 'art-1'),
-				importDate: '2026-07-24T09:30:00.000Z'
-			},
-			{
-				...albumEntry('alb-tie-a', 'Alpha Tie', 'art-2'),
-				importDate: '2026-07-20T10:00:00.000Z'
-			},
-			albumEntry('alb-undated', 'Undated', 'art-3'),
-			{
-				...albumEntry('alb-old', 'Oldest', 'art-4'),
-				importDate: '2026-07-18T12:00:00.000Z'
-			}
-		];
+
+
+
+	it('never offers the Recently added chip, having no import date to order by', async () => {
+		// Roon's public browse API exposes no import date, and Slice 4 deleted
+		// the native layer that used to supply one. The chip is therefore gone
+		// unconditionally — absent, never rendered disabled (2026-07-24 owner
+		// correction).
 		mountMode({
-			indexState: readyState({
-				albums,
-				capabilities: { ...CATALOG_CAPABILITIES, dateFeatures: true }
-			})
+			liveLibrary: harnessLibrary({ albums: [harnessAlbum('Alpha')] })
 		});
 
-		await fireEvent.click(screen.getByTestId('unified-scope-recently-added'));
-		// Library-added timestamp descending; equal timestamps break by the normalized
-		// title key; the album without an importDate goes last.
-		expect(renderedTileTitles()).toEqual([
-			'Newest',
-			'Alpha Tie',
-			'Zebra Tie',
-			'Oldest',
-			'Undated'
-		]);
-		expect(screen.getByTestId('unified-summary')).toHaveTextContent('5 TOTAL');
-		// The ordering is pinned: no sort control on this scope.
-		expect(screen.queryByTestId('unified-sort')).toBeNull();
-	});
-
-	it('hides the Recently added chip when date features are unavailable (Slice 5)', async () => {
-		mountMode({
-			indexState: readyState({
-				albums: [albumEntry('alb-1', 'Alpha', 'art-0')],
-				capabilities: {
-					...CATALOG_CAPABILITIES,
-					dateFeatures: false,
-					dateFeaturesDisabledReason: 'no native catalog snapshot is available'
-				}
-			})
-		});
-
-		// Absent, never rendered disabled (2026-07-24 owner correction).
 		expect(screen.queryByTestId('unified-scope-recently-added')).toBeNull();
 		expect(screen.queryByText('Recently added')).toBeNull();
 	});
 
-	it('degrades a restored Recently added page to the carried reason when the feature is gone (Slice 5)', async () => {
+	it('gates a restored Recently added page on the one honest reason (Slice 5)', async () => {
+		// A page state written before the chip was withdrawn still restores, and
+		// the surface has exactly one thing left to say about it: Roon does not
+		// give it import dates. There is no second, carried reason any more.
 		const harness = mountMode({
 			withContext: true,
-			indexState: readyState({
-				albums: [
-					{
-						...albumEntry('alb-1', 'Alpha', 'art-0'),
-						importDate: '2026-07-24T09:30:00.000Z'
-					}
-				],
-				capabilities: {
-					...CATALOG_CAPABILITIES,
-					dateFeatures: false,
-					dateFeaturesDisabledReason: 'no native catalog snapshot is available'
-				}
-			})
-		});
-		harness.registered.lifecycle!.resume({
-			cause: 'initial',
-			pageState: buildUnifiedLibraryPageState({
-				scope: 'recently-added',
-				collectionDrill: null,
-				itemTarget: null,
-				filterText: '',
-				surpriseSeed: null
-			})
-		} as CommittedLibraryModeActivation);
-
-		await waitFor(() =>
-			expect(screen.getByTestId('unified-recently-added-gated')).toHaveTextContent(
-				'no native catalog snapshot is available'
-			)
-		);
-		// No guessed ordering is rendered.
-		expect(screen.queryByTestId('unified-tile')).toBeNull();
-		expect(screen.queryByTestId('unified-scope-recently-added')).toBeNull();
-	});
-
-	it('falls a restored Recently added page back to the default honest reason when none is carried (Slice 5)', async () => {
-		const harness = mountMode({
-			withContext: true,
-			indexState: readyState({
-				albums: [
-					{
-						...albumEntry('alb-1', 'Alpha', 'art-0'),
-						importDate: '2026-07-24T09:30:00.000Z'
-					}
-				]
-			})
+			liveLibrary: harnessLibrary({ albums: [harnessAlbum('Alpha')] })
 		});
 		harness.registered.lifecycle!.resume({
 			cause: 'initial',
@@ -1533,29 +1380,8 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		expect(screen.queryByTestId('unified-tile')).toBeNull();
 	});
 
-	it('hides only the Most played chip when play features are unavailable (Slice 6/12)', async () => {
-		mountMode({
-			indexState: readyState({
-				capabilities: {
-					...CATALOG_CAPABILITIES,
-					dateFeatures: true,
-					playFeatures: false,
-					playFeaturesDisabledReason:
-						'the Core does not report play-statistics support; most played is unavailable',
-					playlistFeatures: true
-				}
-			})
-		});
-
-		// Absent, never rendered disabled (2026-07-24 owner correction).
-		expect(screen.queryByTestId('unified-scope-most-played')).toBeNull();
-		expect(screen.queryByText('Most played')).toBeNull();
-		expect(screen.getByTestId('unified-scope-recently-added')).toBeInTheDocument();
-		expect(screen.getByTestId('unified-scope-playlists')).toBeInTheDocument();
-	});
-
 	it('reverses the rail buckets under za so letters mirror the list', async () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		const letters = () =>
 			Array.from(
@@ -1574,16 +1400,12 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 	});
 
 	it('hides the rail whenever the active sort has no letter-grouped result order', async () => {
-		const albums = Array.from({ length: 52 }, (_, index) =>
-			({
-				...albumEntry(
-					`alb-${index}`,
-					`${'abcd'[index % 4]} Album ${index.toString().padStart(2, '0')}`,
-					`art-${index}`
-				),
-				artist: `${'wxyz'[index % 4]} Artist ${index}`
-			})
-		).sort((left, right) => (left.searchKey < right.searchKey ? -1 : 1));
+		const albums = Array.from({ length: 52 }, (_unused, index) =>
+			harnessAlbum(
+				`${'abcd'[index % 4]} Album ${index.toString().padStart(2, '0')}`,
+				`${'wxyz'[index % 4]} Artist ${index}`
+			)
+		);
 		const genresStore = fakeNamedCountsStore(
 			Array.from({ length: 42 }, (_, index) => ({
 				label: `${'abc'[index % 3]} genre ${index}`,
@@ -1593,10 +1415,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			}))
 		);
 		mountMode({
-			indexState: readyState({
-				albums,
-				albumBuckets: bucketsFor(albums)
-			}),
+			liveLibrary: harnessLibrary({ albums }),
 			genresStore
 		});
 
@@ -1635,22 +1454,14 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 
 	it('switches Albums to the reference article-stripped artist groups without duplicate keys', async () => {
 		const albums = [
-			{ ...albumEntry('faith', 'Angel Dust', 'faith'), artist: 'Faith No More' },
-			{ ...albumEntry('flaming', 'King’s Mouth', 'flaming'), artist: 'The Flaming Lips' },
-			{ ...albumEntry('foo', 'There Is Nothing Left to Lose', 'foo'), artist: 'Foo Fighters' },
-			{
-				...albumEntry('breakfast', 'Soft Sounds', 'breakfast'),
-				artist: 'Japanese Breakfast'
-			},
-			{ ...albumEntry('the', 'Solitude', 'the'), artist: 'The The' },
-			{ ...albumEntry('verve', 'Urban Hymns', 'verve'), artist: 'The Verve' }
-		].sort((left, right) => (left.searchKey < right.searchKey ? -1 : 1));
-		mountMode({
-			indexState: readyState({
-				albums,
-				albumBuckets: bucketsFor(albums)
-			})
-		});
+			harnessAlbum('Angel Dust', 'Faith No More'),
+			harnessAlbum('King’s Mouth', 'The Flaming Lips'),
+			harnessAlbum('There Is Nothing Left to Lose', 'Foo Fighters'),
+			harnessAlbum('Soft Sounds', 'Japanese Breakfast'),
+			harnessAlbum('Solitude', 'The The'),
+			harnessAlbum('Urban Hymns', 'The Verve')
+		];
+		mountMode({ liveLibrary: harnessLibrary({ albums }) });
 
 		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
 		await fireEvent.click(screen.getByTestId('unified-sort'));
@@ -1684,7 +1495,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			{ label: 'Dance', albumCount: 1, itemKey: 'genre:d', imageKey: null },
 			{ label: 'Électronique', albumCount: 1, itemKey: 'genre:e', imageKey: null }
 		]);
-		mountMode({ indexState: readyState(), genresStore });
+		mountMode({ liveLibrary: harnessLibrary(), genresStore });
 
 		await fireEvent.click(screen.getByTestId('unified-scope-genres'));
 		await waitFor(() =>
@@ -1701,156 +1512,19 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		).toEqual([['60s', 'Česká', 'Électronique'], ['Alternative'], ['Dance']]);
 	});
 
-	it('loads genres on scope entry, drills a genre to albums, and backs out', async () => {
-		const genresStore = fakeNamedCountsStore([
-			{ label: 'Blues', albumCount: 75, itemKey: 'k:blues', imageKey: null }
-		]);
-		const drillAlbums: DrillAlbum[] = [
-			{ title: 'Kind of Blue', artist: 'Miles Davis', imageKey: null },
-			{ title: 'The Black Rider', artist: 'Tom Waits', imageKey: null },
-			{ title: 'Blood Money', artist: 'Tom Waits', imageKey: null },
-			...Array.from({ length: 37 }, (_value, index) => ({
-				title: `${String.fromCharCode(67 + (index % 3))} Album ${index}`,
-				artist: `Artist ${index}`,
-				imageKey: null
-			}))
-		];
-		const drillStore = fakeDrillStore(drillAlbums);
-		mountMode({ indexState: readyState(), genresStore, drillStore });
 
-		await fireEvent.click(screen.getByTestId('unified-scope-genres'));
-		await waitFor(() => expect(genresStore.load).toHaveBeenCalledTimes(1));
-		const row = await screen.findByText('Blues');
-		expect(screen.getByText('60+ ALBUMS')).toBeInTheDocument();
-		expect(
-			screen.getByText("Counts marked + are Roon's page bound, not the full genre.")
-		).toBeInTheDocument();
 
-		await fireEvent.click(row.closest('button')!);
-		await waitFor(() =>
-			expect(drillStore.load).toHaveBeenCalledWith(expect.anything(), 'genres', 'Blues')
-		);
-		expect(screen.getByTestId('unified-drill-label')).toHaveTextContent('Blues');
-		expect(screen.getByTestId('unified-drill-back')).toHaveTextContent('← Genres');
-		expect(screen.getByTestId('unified-drill-summary')).toHaveTextContent('40 ALBUMS');
-		expect(screen.getByTestId('unified-rail')).toBeInTheDocument();
-		expect(screen.getByTestId('unified-drill-sort')).toHaveTextContent('Sort: A to Z');
-		expect(screen.getByTestId('unified-drill-sort-option-by-artist')).toBeInTheDocument();
-		expect(screen.getByTestId('unified-drill-sort-option-shuffle')).toBeInTheDocument();
-		expect(screen.queryByTestId('unified-drill-sort-option-release-year')).toBeNull();
-		await screen.findByText('Kind of Blue');
-		await screen.findByText('The Black Rider');
-		await screen.findByText('Blood Money');
-
-		await fireEvent.click(screen.getByTestId('unified-drill-back'));
-		expect(drillStore.reset).toHaveBeenCalled();
-		expect(screen.queryByTestId('unified-drill-label')).toBeNull();
-		await screen.findByText('Blues');
-	});
-
-	it('opens a genre album after its live row reconciles to one catalog identity', async () => {
-		const genresStore = fakeNamedCountsStore([
-			{ label: 'Blues', albumCount: 1, itemKey: 'k:blues', imageKey: null }
-		]);
-		const drillStore = fakeDrillStore([
-			{ title: 'Kind of Blue', artist: 'Miles Davis', imageKey: 'kind-cover' }
-		]);
+	it('labels the back button with the artist name when an album opens from the artist page (issue #6)', async () => {
 		const album = fakeModeAlbumController();
 		mountMode({
-			indexState: readyState({
-				albums: [
+			liveLibrary: harnessLibrary({
+				artists: [
 					{
-						id: 'cat-kind',
-						title: 'Kind of Blue',
-						artist: 'Miles Davis',
-						searchKey: 'kind of blue miles davis',
-						imageKey: 'kind-cover',
-						catalogLocalId: 'cat-kind',
-						resolutionStatus: 'resolved'
+						name: 'a artist 0',
+						albums: [harnessAlbum('Bound One'), harnessAlbum('Bound Two')]
 					}
 				]
 			}),
-			genresStore,
-			drillStore,
-			albumController: album.controller,
-			albumActionController: fakeModeActionController()
-		});
-
-		await fireEvent.click(screen.getByTestId('unified-scope-genres'));
-		await fireEvent.click(await screen.findByText('Blues'));
-		const tile = (await screen.findByText('Kind of Blue')).closest('button');
-		expect(tile).toBeEnabled();
-		await fireEvent.click(tile!);
-		await waitFor(() =>
-			expect(album.open).toHaveBeenCalledWith(
-				expect.objectContaining({ albumLocalId: 'cat-kind' })
-			)
-		);
-	});
-
-	it('drills an artist to exactly the albums bound to it', async () => {
-		const indexState = readyState({
-			albums: [
-				albumEntry('alb-1', 'Bound One', 'art-0'),
-				albumEntry('alb-2', 'Bound Two', 'art-0'),
-				albumEntry('alb-3', 'Other Artist Album', 'art-1'),
-				{
-					id: 'alb-name-fallback',
-					title: 'Name Fallback',
-					artist: 'A ARTIST 0',
-					searchKey: 'name fallback — a artist 0'
-				},
-				{
-					id: 'alb-other-unbound',
-					title: 'Other Unbound',
-					artist: 'a artist 1',
-					searchKey: 'other unbound — a artist 1'
-				}
-			]
-		});
-		const harness = mountMode({ indexState });
-
-		// First row is the alphabetically-first artist, id art-0. The row
-		// itself is the drill button (prototype `.arow`).
-		const rows = screen.getAllByTestId('unified-row');
-		const pane = screen.getByTestId('unified-pane');
-		pane.scrollTop = 450;
-		await fireEvent.click(rows[0]);
-
-		await waitFor(() => expect(pane.scrollTop).toBe(0));
-		expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('a artist 0');
-		expect(screen.getByTestId('unified-artist-name').closest('.ctx')).not.toBeNull();
-		expect(screen.getByTestId('unified-item-summary')).toHaveTextContent('3 ALBUMS');
-		expect(screen.getByTestId('unified-drill-sort')).toHaveTextContent('Sort: A to Z');
-		expect(screen.queryByTestId('unified-drill-sort-option-by-artist')).toBeNull();
-		expect(screen.getByTestId('unified-drill-sort-option-release-year')).toBeDisabled();
-		expect(
-			within(screen.getByTestId('unified-item-page'))
-				.getByTestId('unified-scope-view')
-				.querySelector('.gl')
-		).toBeNull();
-		await screen.findByText('Bound One');
-		await screen.findByText('Bound Two');
-		await screen.findByText('Name Fallback');
-		expect(screen.queryByText('Other Artist Album')).toBeNull();
-		expect(screen.queryByText('Other Unbound')).toBeNull();
-
-		await fireEvent.click(screen.getByTestId('unified-drill-sort'));
-		await fireEvent.click(screen.getByTestId('unified-drill-sort-option-za'));
-		expect(get(harness.prefsStore).sorts.artist).toBe('za');
-		expect(renderedTileTitles()).toEqual(['Name Fallback', 'Bound Two', 'Bound One']);
-	});
-
-	it('labels the back button with the artist name when an album opens from the artist page (issue #6)', async () => {
-		const indexState = readyState({
-			albums: [
-				{ ...albumEntry('alb-1', 'Bound One', 'art-0'), catalogLocalId: 'alb-1' },
-				{ ...albumEntry('alb-2', 'Bound Two', 'art-0'), catalogLocalId: 'alb-2' }
-			]
-		});
-		const album = fakeModeAlbumController();
-		mountMode({
-			indexState,
 			albumController: album.controller,
 			albumActionController: fakeModeActionController()
 		});
@@ -1871,35 +1545,32 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 	// used to open as a reference modal over the Albums page; it is now a
 	// first-class page that REPLACES the collection contents, with Back
 	// returning to the exact invoking collection.
-	it('opens an album as a first-class page replacing the collection contents', async () => {
-		const albums: LibraryAlbumEntry[] = Array.from({ length: 52 }, (_, index) => {
+	it('opens a live album as a first-class page replacing the collection contents', async () => {
+		const albums = Array.from({ length: 52 }, (_unused, index) => {
 			const letter = String.fromCharCode(65 + (index % 26));
-			const entry = albumEntry(`alb-${index}`, `${letter} Album ${index}`, 'art-0');
-			if (index === 0) {
-				return {
-					id: entry.id,
-					title: entry.title,
-					artist: 'a artist 0',
-					searchKey: entry.searchKey,
-					catalogLocalId: entry.id
-				};
-			}
-			return { ...entry, catalogLocalId: entry.id };
-		}).sort((a, b) => (a.searchKey < b.searchKey ? -1 : 1));
+			return harnessAlbum(`${letter} Album ${index}`, 'a artist 0');
+		});
 		const album = fakeModeAlbumController();
 		mountMode({
-			indexState: readyState({
-				albums,
-				albumBuckets: bucketsFor(albums)
-			}),
+			liveLibrary: harnessLibrary({ albums }),
 			albumController: album.controller,
 			albumActionController: fakeModeActionController()
 		});
 
 		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
 		expect(screen.getByTestId('unified-rail')).toBeInTheDocument();
-		await fireEvent.click(screen.getAllByTestId('unified-tile')[0]);
-		await waitFor(() => expect(album.open).toHaveBeenCalled());
+		const tiles = screen.getAllByTestId('unified-tile');
+		const clickedTitle = tiles[0].querySelector('.tt')?.textContent ?? '';
+		expect(clickedTitle).not.toBe('');
+		await fireEvent.click(tiles[0]);
+
+		// The tile opened by the reference Roon put on that row (Slice 2), and
+		// the page shows the album that row named — not whichever came back.
+		await waitFor(() => expect(album.adoptLiveLevel).toHaveBeenCalledTimes(1));
+		expect(album.open).not.toHaveBeenCalled();
+		expect(
+			(album.adoptLiveLevel.mock.calls[0][0] as { title: string }).title
+		).toBe(clickedTitle);
 
 		// The page owns the pane: no modal, no scrim; the collection stays
 		// mounted but hidden so Back restores its exact transient state.
@@ -1911,388 +1582,19 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		// Back names the exact invoking collection.
 		expect(screen.getByTestId('unified-album-back')).toHaveTextContent('Albums');
 
-		await fireEvent.click(screen.getByTestId('unified-album-artist-link'));
-		expect(screen.queryByTestId('unified-album-page')).toBeNull();
-		expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('a artist 0');
-	});
-
-	it('retries a failed follow against the followed target (ri4-3)', async () => {
-		const entry = { ...albumEntry('alb-1', 'Album', 'art-1'), catalogLocalId: 'alb-1' };
-		const album = fakeModeAlbumController();
-		const editorialStore = writable<
-			import('$lib/library/EditorialItemController').EditorialItemState
-		>({
-			phase: 'ready',
-			requestId: 'r-1',
-			sessionId: 's-1',
-			generation: 1,
-			view: {
-				kind: 'album',
-				title: 'Album',
-				sections: {},
-				creditGroups: [
-					{
-						label: 'Album',
-						credits: [{ role: 'Producer', name: 'P', followTarget: 'bt-0' }]
-					}
-				]
-			},
-			code: null,
-			section: null,
-			retryable: false,
-			error: null
-		});
-		const editorialOpen = vi.fn().mockResolvedValue(true);
-		const editorialFollow = vi.fn().mockResolvedValue(true);
-		const editorial = {
-			subscribe: editorialStore.subscribe,
-			open: editorialOpen,
-			follow: editorialFollow,
-			cancel: vi.fn(),
-			reset: vi.fn()
-		} as unknown as import('$lib/library/EditorialItemController').EditorialItemController;
-		mountMode({
-			indexState: readyState({
-				albums: [entry],
-				albumBuckets: bucketsFor([entry]),
-				// Editorial flows need the feature positively present (q1-2).
-				capabilities: EDITORIAL_PRESENT_CAPABILITIES
-			}),
-			albumController: album.controller,
-			albumActionController: fakeModeActionController(),
-			editorialController: editorial
-		});
-
-		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
-		await fireEvent.click(screen.getAllByTestId('unified-tile')[0]);
-		await waitFor(() => expect(album.open).toHaveBeenCalled());
-		expect(editorialOpen).toHaveBeenCalledTimes(1);
-
-		// The page reaches single-version Details so the credits render.
-		album.store.set({
-			phase: 'details',
-			activeTab: 'details',
-			albumLocalId: 'alb-1',
-			generation: 1,
-			requestId: 'r-1',
-			operationId: null,
-			resolvingDeadlineAt: null,
-			artist: 'Artist',
-			title: 'Album',
-			versions: [
-				{
-					versionId: 'v1',
-					editionText: '',
-					phase: 'loaded',
-					trackCount: 1,
-					code: null,
-					error: null
-				}
-			],
-			selectedVersionId: 'v1',
-			actionsAvailable: false,
-			orderedTracks: [{ index: 0, title: 'T1' }],
-			code: null,
-			error: null,
-			transitionedAt: 2
-		} as unknown as LibraryAlbumState);
-		await waitFor(() => screen.getByTestId('unified-album-credits-follow-0-0'));
-		await fireEvent.click(screen.getByTestId('unified-album-credits-follow-0-0'));
-		expect(editorialFollow).toHaveBeenCalledTimes(1);
-		expect(editorialFollow.mock.calls[0][0].target).toBe('bt-0');
-
-		// The follow fails retryable: Try again must re-follow the exact
-		// performer target, never fall back to reopening the anchor.
-		editorialStore.set({
-			phase: 'failed',
-			requestId: 'r-2',
-			sessionId: 's-1',
-			generation: 1,
-			view: null,
-			code: 'READ_TIMEOUT',
-			section: null,
-			retryable: true,
-			error: 'The editorial read did not answer in time.'
-		});
-		await fireEvent.click(await screen.findByTestId('unified-album-review-retry'));
-		expect(editorialFollow).toHaveBeenCalledTimes(2);
-		expect(editorialFollow.mock.calls[1][0].target).toBe('bt-0');
-		expect(editorialOpen).toHaveBeenCalledTimes(1);
-	});
-
-	it('falls back to the parent anchor when a follow fails terminally (ri7-3)', async () => {
-		const entry = { ...albumEntry('alb-1', 'Album', 'art-1'), catalogLocalId: 'alb-1' };
-		const album = fakeModeAlbumController();
-		const editorialStore = writable<
-			import('$lib/library/EditorialItemController').EditorialItemState
-		>({
-			phase: 'ready',
-			requestId: 'r-1',
-			sessionId: 's-1',
-			generation: 1,
-			view: {
-				kind: 'album',
-				title: 'Album',
-				sections: {},
-				relationshipGroups: [
-					{
-						label: 'Similar albums',
-						items: [{ title: 'Spaces', followTarget: 'bt-9' }]
-					}
-				]
-			},
-			code: null,
-			section: null,
-			retryable: false,
-			error: null
-		});
-		const editorialOpen = vi.fn().mockResolvedValue(true);
-		const editorialFollow = vi.fn().mockResolvedValue(true);
-		const editorial = {
-			subscribe: editorialStore.subscribe,
-			open: editorialOpen,
-			follow: editorialFollow,
-			cancel: vi.fn(),
-			reset: vi.fn()
-		} as unknown as import('$lib/library/EditorialItemController').EditorialItemController;
-		mountMode({
-			indexState: readyState({
-				albums: [entry],
-				albumBuckets: bucketsFor([entry]),
-				// Editorial flows need the feature positively present (q1-2).
-				capabilities: EDITORIAL_PRESENT_CAPABILITIES
-			}),
-			albumController: album.controller,
-			albumActionController: fakeModeActionController(),
-			editorialController: editorial
-		});
-
-		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
-		await fireEvent.click(screen.getAllByTestId('unified-tile')[0]);
-		await waitFor(() => expect(album.open).toHaveBeenCalled());
-		expect(editorialOpen).toHaveBeenCalledTimes(1);
-
-		album.store.set({
-			phase: 'details',
-			activeTab: 'details',
-			albumLocalId: 'alb-1',
-			generation: 1,
-			requestId: 'r-1',
-			operationId: null,
-			resolvingDeadlineAt: null,
-			artist: 'Artist',
-			title: 'Album',
-			versions: [
-				{
-					versionId: 'v1',
-					editionText: '',
-					phase: 'loaded',
-					trackCount: 1,
-					code: null,
-					error: null
-				}
-			],
-			selectedVersionId: 'v1',
-			actionsAvailable: false,
-			orderedTracks: [{ index: 0, title: 'T1' }],
-			code: null,
-			error: null,
-			transitionedAt: 2
-		} as unknown as LibraryAlbumState);
-		await waitFor(() => screen.getByTestId('unified-album-related-follow-0-0'));
-		await fireEvent.click(screen.getByTestId('unified-album-related-follow-0-0'));
-		expect(editorialFollow).toHaveBeenCalledTimes(1);
-		expect(editorialFollow.mock.calls[0][0].target).toBe('bt-9');
-
-		// The relationship expired: a terminal ITEM_NOT_FOUND must clear the
-		// dead follow destination and reopen the reconstructible parent
-		// anchor rather than stranding the editorial surface.
-		editorialStore.set({
-			phase: 'failed',
-			requestId: 'r-2',
-			sessionId: 's-1',
-			generation: 1,
-			view: null,
-			code: 'ITEM_NOT_FOUND',
-			section: null,
-			retryable: false,
-			error: 'That related item is not available.'
-		});
-		await waitFor(() => expect(editorialOpen).toHaveBeenCalledTimes(2));
-		expect(editorialOpen.mock.calls[1][0].anchor).toEqual({
-			kind: 'album',
-			albumLocalId: 'alb-1'
-		});
-		// The dead target is gone: no follow retry was issued.
-		expect(editorialFollow).toHaveBeenCalledTimes(1);
-
-		// A DELIVERED child whose optional section then fails non-retryably
-		// is a section-scoped outcome, not a dead destination: the child
-		// view (and its follow context) must stay put.
-		editorialStore.set({
-			phase: 'ready',
-			requestId: 'r-3',
-			sessionId: 's-1',
-			generation: 1,
-			view: {
-				kind: 'album',
-				title: 'Album',
-				sections: {},
-				relationshipGroups: [
-					{
-						label: 'Similar albums',
-						items: [{ title: 'Spaces', followTarget: 'bt-9' }]
-					}
-				]
-			},
-			code: null,
-			section: null,
-			retryable: false,
-			error: null
-		});
-		await fireEvent.click(await screen.findByTestId('unified-album-related-follow-0-0'));
-		expect(editorialFollow).toHaveBeenCalledTimes(2);
-		editorialStore.set({
-			phase: 'failed',
-			requestId: 'r-4',
-			sessionId: 's-1',
-			generation: 1,
-			// The ready child view is retained through the section failure.
-			view: { kind: 'album', title: 'Spaces', sections: {} },
-			code: 'INVALID_RESPONSE',
-			section: 'review',
-			retryable: false,
-			error: 'The review violated its shape.'
-		});
-		// No parent fallback fires for a section-scoped failure: the anchor
-		// is not reopened again.
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(editorialOpen).toHaveBeenCalledTimes(2);
-	});
-
-	it('renders no editorial DOM at any phase without positive capability (q1-2)', async () => {
-		// The public build / absent capability: idle, opening, and the
-		// unavailable ack all render nothing — no skeleton flash, no
-		// section — and no read is ever issued.
-		for (const phase of ['idle', 'opening', 'unavailable'] as const) {
-			const editorialStore = writable<
-				import('$lib/library/EditorialItemController').EditorialItemState
-			>({
-				phase,
-				requestId: phase === 'idle' ? null : 'r-1',
-				sessionId: null,
-				generation: 1,
-				view: null,
-				code: phase === 'unavailable' ? 'FEATURE_UNAVAILABLE' : null,
-				section: null,
-				retryable: false,
-				error: null
-			});
-			const editorialOpen = vi.fn().mockResolvedValue(true);
-			const { unmount } = mountMode({
-				indexState: readyState(),
-				editorialController: {
-					subscribe: editorialStore.subscribe,
-					open: editorialOpen,
-					follow: vi.fn().mockResolvedValue(true),
-					cancel: vi.fn(),
-					reset: vi.fn()
-				} as unknown as import('$lib/library/EditorialItemController').EditorialItemController
-			});
-
-			await fireEvent.click(screen.getAllByTestId('unified-row')[0]);
-			await screen.findByTestId('unified-artist-name');
-			expect(screen.queryByTestId('unified-artist-biography')).toBeNull();
-			expect(screen.queryByTestId('unified-artist-biography-skeleton')).toBeNull();
-			expect(screen.queryByTestId('unified-artist-biography-empty')).toBeNull();
-			expect(screen.queryByTestId('unified-artist-relationships')).toBeNull();
-			expect(screen.queryByTestId('unified-artist-relationships-skeleton')).toBeNull();
-			expect(screen.queryByTestId('unified-artist-links')).toBeNull();
-			expect(screen.queryByTestId('unified-artist-links-skeleton')).toBeNull();
-			expect(editorialOpen).not.toHaveBeenCalled();
-			unmount();
-		}
-	});
-
-	it('issues the open and reserves the slots only with capability positively present (q1-2)', async () => {
-		const editorialStore = writable<
-			import('$lib/library/EditorialItemController').EditorialItemState
-		>({
-			phase: 'idle',
-			requestId: null,
-			sessionId: null,
-			generation: null,
-			view: null,
-			code: null,
-			section: null,
-			retryable: false,
-			error: null
-		});
-		const editorialOpen = vi.fn().mockImplementation(async () => {
-			// The open was actually issued over a live socket: the read sits
-			// in flight for the rest of the test.
-			editorialStore.set({
-				phase: 'opening',
-				requestId: 'r-1',
-				sessionId: null,
-				generation: 1,
-				view: null,
-				code: null,
-				section: null,
-				retryable: false,
-				error: null
-			});
-			return true;
-		});
-		mountMode({
-			indexState: readyState({ capabilities: EDITORIAL_PRESENT_CAPABILITIES }),
-			editorialController: {
-				subscribe: editorialStore.subscribe,
-				open: editorialOpen,
-				follow: vi.fn().mockResolvedValue(true),
-				cancel: vi.fn(),
-				reset: vi.fn()
-			} as unknown as import('$lib/library/EditorialItemController').EditorialItemController
-		});
-
-		await fireEvent.click(screen.getAllByTestId('unified-row')[0]);
-		await screen.findByTestId('unified-artist-name');
-		await waitFor(() => expect(editorialOpen).toHaveBeenCalledTimes(1));
-		// Between the issued open and the settled read, the fixed slots are
-		// reserved — the only window editorial DOM may exist pre-settlement.
-		await screen.findByTestId('unified-artist-biography-skeleton');
-		expect(screen.getByTestId('unified-artist-relationships-skeleton')).toBeInTheDocument();
-		expect(screen.getByTestId('unified-artist-links-skeleton')).toBeInTheDocument();
+		// A Roon browse row carries no cross-surface identity, so there is no
+		// artist for this page to walk up to — and since Slice 4 there is no
+		// second, catalog-shaped album page that could supply one either. The
+		// affordance stays visibly unavailable rather than opening onto a guess.
+		expect(screen.getByTestId('unified-album-artist-link')).toBeDisabled();
 	});
 
 	function trackChildFixture() {
-		const entry = { ...albumEntry('alb-1', 'Album', 'art-1'), catalogLocalId: 'alb-1' };
+		const entry = harnessAlbum('Album');
 		const album = fakeModeAlbumController();
-		const editorialStore = writable<
-			import('$lib/library/EditorialItemController').EditorialItemState
-		>({
-			phase: 'idle',
-			requestId: null,
-			sessionId: null,
-			generation: null,
-			view: null,
-			code: null,
-			section: null,
-			retryable: false,
-			error: null
-		});
-		const editorialOpen = vi.fn().mockResolvedValue(true);
-		const editorial = {
-			subscribe: editorialStore.subscribe,
-			open: editorialOpen,
-			follow: vi.fn().mockResolvedValue(true),
-			cancel: vi.fn(),
-			reset: vi.fn()
-		} as unknown as import('$lib/library/EditorialItemController').EditorialItemController;
 		const detailsState = {
 			phase: 'details',
 			activeTab: 'details',
-			albumLocalId: 'alb-1',
 			generation: 1,
 			requestId: 'r-1',
 			operationId: null,
@@ -2311,31 +1613,25 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			],
 			selectedVersionId: 'v1',
 			actionsAvailable: false,
+			albumActionsAvailable: false,
 			orderedTracks: [{ index: 0, title: 'T1' }],
 			code: null,
 			error: null,
 			transitionedAt: 2
 		} as unknown as LibraryAlbumState;
-		return { entry, album, editorialStore, editorialOpen, detailsState };
+		return { entry, album, detailsState };
 	}
 
 	it('persists the exact-track child as a page-chain entry (Slice 8)', async () => {
-		const { entry, album, editorialStore, editorialOpen, detailsState } = trackChildFixture();
-		mountMode({
-			indexState: readyState({ albums: [entry], albumBuckets: bucketsFor([entry]) }),
+		const { entry, album, detailsState } = trackChildFixture();
+		const harness = mountMode({
+			withContext: true,
+			liveLibrary: harnessLibrary({ albums: [entry] }),
 			albumController: album.controller,
 			albumActionController: fakeModeActionController(),
-			editorialController: {
-				subscribe: editorialStore.subscribe,
-				open: editorialOpen,
-				follow: vi.fn().mockResolvedValue(true),
-				cancel: vi.fn(),
-				reset: vi.fn()
-			} as unknown as import('$lib/library/EditorialItemController').EditorialItemController
 		});
 
-		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
-		await fireEvent.click(screen.getAllByTestId('unified-tile')[0]);
+		resumeCollectionAlbum(harness);
 		await waitFor(() => expect(album.open).toHaveBeenCalled());
 		album.store.set(detailsState);
 		await waitFor(() => screen.getByTestId('unified-track-info-0'));
@@ -2344,40 +1640,29 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		// The child transition pushed exactly one semantic entry carrying
 		// the reconstructible index — and never editorial content.
 		const navigation = __getNavigationLog();
-		const latest = navigation.at(-1)?.state as {
-			library?: { snapshot?: { itemTarget?: unknown; itemDetail?: unknown } };
-		};
-		expect(latest.library?.snapshot?.itemTarget).toEqual({
-			kind: 'album',
-			localId: 'alb-1'
+		const latest = navigation.at(-1);
+		// The page was opened from a genre drill's own locator, so its address
+		// names that genre: the route says where the reader actually is.
+		expect(decodeLibraryRoute(new URL(latest!.url))).toEqual({
+			kind: 'genre-album-track',
+			genre: 'Bright Machinery',
+			album: { title: 'Arrival', credit: 'Artist of Arrival', edition: '' },
+			track: 'T1'
 		});
-		expect(latest.library?.snapshot?.itemDetail).toEqual({
-			kind: 'track',
-			trackIndex: 0
-		});
-		const serialized = JSON.stringify(latest.library);
-		expect(serialized).not.toContain('biography');
-		expect(serialized).not.toContain('followTarget');
+		expect(latest?.state).toEqual({});
 	});
 
 	it('closes a live-pushed track child by traversing to the parent entry (ri8-1)', async () => {
-		const { entry, album, editorialStore, editorialOpen, detailsState } = trackChildFixture();
+		const { entry, album, detailsState } = trackChildFixture();
 		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
-		mountMode({
-			indexState: readyState({ albums: [entry], albumBuckets: bucketsFor([entry]) }),
+		const harness = mountMode({
+			withContext: true,
+			liveLibrary: harnessLibrary({ albums: [entry] }),
 			albumController: album.controller,
 			albumActionController: fakeModeActionController(),
-			editorialController: {
-				subscribe: editorialStore.subscribe,
-				open: editorialOpen,
-				follow: vi.fn().mockResolvedValue(true),
-				cancel: vi.fn(),
-				reset: vi.fn()
-			} as unknown as import('$lib/library/EditorialItemController').EditorialItemController
 		});
 
-		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
-		await fireEvent.click(screen.getAllByTestId('unified-tile')[0]);
+		resumeCollectionAlbum(harness);
 		await waitFor(() => expect(album.open).toHaveBeenCalled());
 		album.store.set(detailsState);
 		await waitFor(() => screen.getByTestId('unified-track-info-0'));
@@ -2397,50 +1682,25 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 	});
 
 	it('keeps traversal ownership across a retried track child (ri8-1 reopen)', async () => {
-		const { entry, album, editorialStore, editorialOpen, detailsState } = trackChildFixture();
+		const { entry, album, detailsState } = trackChildFixture();
 		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
-		mountMode({
-			indexState: readyState({
-				albums: [entry],
-				albumBuckets: bucketsFor([entry]),
-				// Editorial flows need the feature positively present (q1-2).
-				capabilities: EDITORIAL_PRESENT_CAPABILITIES
-			}),
+		const harness = mountMode({
+			withContext: true,
+			liveLibrary: harnessLibrary({ albums: [entry] }),
 			albumController: album.controller,
 			albumActionController: fakeModeActionController(),
-			editorialController: {
-				subscribe: editorialStore.subscribe,
-				open: editorialOpen,
-				follow: vi.fn().mockResolvedValue(true),
-				cancel: vi.fn(),
-				reset: vi.fn()
-			} as unknown as import('$lib/library/EditorialItemController').EditorialItemController
 		});
 
-		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
-		await fireEvent.click(screen.getAllByTestId('unified-tile')[0]);
+		resumeCollectionAlbum(harness);
 		await waitFor(() => expect(album.open).toHaveBeenCalled());
 		album.store.set(detailsState);
 		await waitFor(() => screen.getByTestId('unified-track-info-0'));
 		await fireEvent.click(screen.getByTestId('unified-track-info-0'));
 
-		// The child read fails retryably; the quiet retry re-opens the same
-		// child, and its push deduplicates against the child's own entry.
-		editorialStore.set({
-			phase: 'failed',
-			requestId: 'r-retry',
-			sessionId: 's-1',
-			generation: 1,
-			view: null,
-			code: 'READ_TIMEOUT',
-			section: null,
-			retryable: true,
-			error: 'The native read did not answer before its deadline.'
-		});
-		await fireEvent.click(await screen.findByTestId('unified-album-track-description-retry'));
-
-		// Ownership must survive the deduplicated re-push: the in-page Back
-		// still traverses instead of rewriting a duplicate entry.
+		// Re-opening the same child deduplicates against the child's own entry;
+		// ownership must survive that, so the in-page Back still traverses
+		// instead of rewriting a duplicate entry.
+		await fireEvent.click(screen.getByTestId('unified-track-info-0'));
 		const writesBefore = __getNavigationLog().length;
 		await fireEvent.click(screen.getByTestId('unified-album-track-info-back'));
 		await new Promise((resolve) => setTimeout(resolve, 0));
@@ -2452,80 +1712,13 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		browserBack.mockRestore();
 	});
 
-	it('renders exactly the workspace links this build provides', () => {
-		// Resolution-independent: whichever slot module the alias picked, the
-		// surface renders that list verbatim — one anchor per provided link in
-		// a walled checkout, none in a public one, never a placeholder.
-		mountMode({ indexState: readyState() });
-		const anchors = screen.queryAllByTestId('unified-workspace-link');
-		expect(anchors.map((anchor) => anchor.getAttribute('href'))).toEqual(
-			libraryScopeSlots.workspaceLinks.map((link) => link.href)
-		);
-		expect(anchors.map((anchor) => anchor.textContent?.trim())).toEqual(
-			libraryScopeSlots.workspaceLinks.map((link) => link.label)
-		);
-	});
-
-	it('records no semantic entries for a track child over a palette-opened album (ri8-1)', async () => {
-		const { entry, album, editorialStore, editorialOpen, detailsState } = trackChildFixture();
-		mountMode({
-			indexState: readyState({ albums: [entry], albumBuckets: bucketsFor([entry]) }),
-			albumController: album.controller,
-			albumActionController: fakeModeActionController(),
-			editorialController: {
-				subscribe: editorialStore.subscribe,
-				open: editorialOpen,
-				follow: vi.fn().mockResolvedValue(true),
-				cancel: vi.fn(),
-				reset: vi.fn()
-			} as unknown as import('$lib/library/EditorialItemController').EditorialItemController
-		});
-
-		// The album opens from the palette: a nested search view that owns
-		// no semantic history entry (ri1-2).
-		await fireEvent.click(screen.getByTestId('unified-find'));
-		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
-			target: { value: 'Album' }
-		});
-		const paletteRows = await screen.findAllByTestId('unified-palette-row');
-		const albumRow = paletteRows.find((row) => row.textContent?.includes('Album'));
-		expect(albumRow).toBeDefined();
-		const writesBefore = __getNavigationLog().length;
-		await fireEvent.click(albumRow!);
-		await waitFor(() => expect(album.open).toHaveBeenCalled());
-		album.store.set(detailsState);
-		await waitFor(() => screen.getByTestId('unified-track-info-0'));
-		await fireEvent.click(screen.getByTestId('unified-track-info-0'));
-		await fireEvent.click(screen.getByTestId('unified-album-track-info-back'));
-		await new Promise((resolve) => setTimeout(resolve, 0));
-
-		// Neither the child open nor its in-page Back may write history:
-		// the transient parent's base entry keeps describing the base surface.
-		const writes = __getNavigationLog()
-			.slice(writesBefore)
-			.filter((entry_) => entry_.operation === 'pushState' || entry_.operation === 'replaceState');
-		expect(writes).toHaveLength(0);
-	});
-
 	it('restores a persisted exact-track child on resume (Slice 8)', async () => {
-		const { entry, album, editorialStore, editorialOpen, detailsState } = trackChildFixture();
+		const { entry, album, detailsState } = trackChildFixture();
 		const harness = mountMode({
 			withContext: true,
-			indexState: readyState({
-				albums: [entry],
-				albumBuckets: bucketsFor([entry]),
-				// Editorial flows need the feature positively present (q1-2).
-				capabilities: EDITORIAL_PRESENT_CAPABILITIES
-			}),
+			liveLibrary: harnessLibrary({ albums: [entry] }),
 			albumController: album.controller,
 			albumActionController: fakeModeActionController(),
-			editorialController: {
-				subscribe: editorialStore.subscribe,
-				open: editorialOpen,
-				follow: vi.fn().mockResolvedValue(true),
-				cancel: vi.fn(),
-				reset: vi.fn()
-			} as unknown as import('$lib/library/EditorialItemController').EditorialItemController
 		});
 
 		harness.registered.lifecycle!.resume({
@@ -2533,44 +1726,60 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			pageState: buildUnifiedLibraryPageState({
 				scope: 'albums',
 				collectionDrill: null,
-				itemTarget: { kind: 'album', localId: 'alb-1' },
-				itemDetail: { kind: 'track', trackIndex: 0 },
+				itemTarget: { kind: 'collection', locator: albumLocator() },
+				itemDetail: { kind: 'track', title: 'T1' },
 				filterText: '',
 				surpriseSeed: null
 			})
 		} as CommittedLibraryModeActivation);
 		await waitFor(() => expect(album.open).toHaveBeenCalled());
-		album.store.set(detailsState);
+		album.store.set({
+			...detailsState,
+			orderedTracks: [
+				{ index: 0, title: 'New opening track' },
+				{ index: 1, title: 'T1' }
+			]
+		} as LibraryAlbumState);
 
-		// The page consumes the restored index once the track order arrives:
-		// the child surface renders and the editorial read targets the track.
+		// The page resolves the title after a reorder; the child surface
+		// names T1 at its new position.
 		await waitFor(() => screen.getByTestId('unified-album-track-info'));
-		await waitFor(() =>
-			expect(
-				editorialOpen.mock.calls.some(
-					(call) =>
-						(call[0] as { anchor?: { kind?: string; trackIndex?: number } }).anchor
-							?.kind === 'track' &&
-						(call[0] as { anchor?: { trackIndex?: number } }).anchor?.trackIndex === 0
-				)
-			).toBe(true)
-		);
+		expect(screen.getByTestId('unified-album-track-info').textContent).toContain('T1');
+		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+		await fireEvent.click(screen.getByTestId('unified-album-track-info-back'));
+		expect(browserBack).not.toHaveBeenCalled();
+		expect(decodeLibraryRoute(new URL(__getNavigationLog().at(-1)!.url))).toEqual({
+			kind: 'genre-album',
+			genre: 'Bright Machinery',
+			album: { title: 'Arrival', credit: 'Artist of Arrival', edition: '' }
+		});
+		expect(screen.queryByTestId('unified-album-track-info')).toBeNull();
+		browserBack.mockRestore();
+
+		// A popstate activation can restore the same album component without
+		// publishing a new album sheet. Its parent entry must still close the
+		// local exact-track child.
+		harness.registered.lifecycle!.resume({
+			cause: 'history-pop',
+			pageState: buildUnifiedLibraryPageState({
+				scope: 'albums',
+				collectionDrill: null,
+				itemTarget: { kind: 'collection', locator: albumLocator() },
+				itemDetail: null,
+				filterText: '',
+				surpriseSeed: null
+			})
+		} as CommittedLibraryModeActivation);
+		await waitFor(() => expect(screen.queryByTestId('unified-album-track-info')).toBeNull());
 	});
 
-	it('keeps the parent page when a restored track index is stale (Slice 8)', async () => {
-		const { entry, album, editorialStore, editorialOpen, detailsState } = trackChildFixture();
+	it('keeps the parent page when a restored track title is gone', async () => {
+		const { entry, album, detailsState } = trackChildFixture();
 		const harness = mountMode({
 			withContext: true,
-			indexState: readyState({ albums: [entry], albumBuckets: bucketsFor([entry]) }),
+			liveLibrary: harnessLibrary({ albums: [entry] }),
 			albumController: album.controller,
 			albumActionController: fakeModeActionController(),
-			editorialController: {
-				subscribe: editorialStore.subscribe,
-				open: editorialOpen,
-				follow: vi.fn().mockResolvedValue(true),
-				cancel: vi.fn(),
-				reset: vi.fn()
-			} as unknown as import('$lib/library/EditorialItemController').EditorialItemController
 		});
 
 		harness.registered.lifecycle!.resume({
@@ -2578,10 +1787,10 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			pageState: buildUnifiedLibraryPageState({
 				scope: 'albums',
 				collectionDrill: null,
-				itemTarget: { kind: 'album', localId: 'alb-1' },
+				itemTarget: { kind: 'collection', locator: albumLocator() },
 				// The album shrank since this entry was pushed: index 7 no
 				// longer resolves in the one-track order.
-				itemDetail: { kind: 'track', trackIndex: 7 },
+				itemDetail: { kind: 'track', title: 'Gone track' },
 				filterText: '',
 				surpriseSeed: null
 			})
@@ -2594,296 +1803,60 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		await waitFor(() => screen.getByTestId('unified-album-page'));
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(screen.queryByTestId('unified-album-track-info')).toBeNull();
-		expect(
-			editorialOpen.mock.calls.some(
-				(call) =>
-					(call[0] as { anchor?: { kind?: string } }).anchor?.kind === 'track'
-			)
-		).toBe(false);
 	});
 
-	function compositionRestoreFixture(
-		rows: { title: string; itemKey: string }[],
-		restoredComposition: { title: string | null } | null = { title: 'Glassworks: Opening' }
-	) {
-		const composersStore = fakeNamedCountsStore([
-			{ label: 'Philip Glass', albumCount: 12, itemKey: 'composer-philip-glass', imageKey: null }
-		]);
-		const drillStore = fakeDrillStore([
-			{ title: 'Glassworks', artist: 'Philip Glass', imageKey: null }
-		]);
-		const compositionStore = writable<
-			import('$lib/library/CompositionBrowseController').CompositionBrowseState
-		>({
-			phase: 'idle',
-			composerLabel: null,
-			compositions: [],
-			pages: [],
-			actionBusy: false,
-			notice: null,
-			error: null
-		});
-		const openForComposer = vi.fn().mockResolvedValue(undefined);
-		const openComposition = vi.fn().mockResolvedValue(undefined);
-		const backToCompositions = vi.fn().mockResolvedValue(undefined);
-		const controller = {
-			subscribe: compositionStore.subscribe,
-			openForComposer,
-			openComposition,
-			runAction: vi.fn().mockResolvedValue(undefined),
-			backToCompositions,
-			reset: vi.fn()
-		} as unknown as import('$lib/library/CompositionBrowseController').CompositionBrowseController;
+
+	it('reopens a failed album page on a fresh browse session (issue #11)', async () => {
+		const album = fakeModeAlbumController();
+		const session = fakeSessionClient();
 		const harness = mountMode({
 			withContext: true,
-			indexState: readyState(),
-			composersStore,
-			drillStore,
-			compositionController: controller
-		});
-		harness.registered.lifecycle!.resume({
-			cause: 'history-pop',
-			pageState: buildUnifiedLibraryPageState({
-				scope: 'albums',
-				collectionDrill: { kind: 'composer', label: 'Philip Glass' },
-				itemTarget: null,
-				composition: restoredComposition,
-				filterText: '',
-				surpriseSeed: null
-			})
-		} as CommittedLibraryModeActivation);
-		const settle = async () => {
-			await waitFor(() =>
-				expect(openForComposer).toHaveBeenCalledWith(expect.anything(), 'Philip Glass')
-			);
-			compositionStore.set({
-				phase: 'compositions',
-				composerLabel: 'Philip Glass',
-				compositions: rows.map((row) => ({ ...row, subtitle: '' })),
-				pages: [],
-				actionBusy: false,
-				notice: null,
-				error: null
-			});
-		};
-		return { openComposition, backToCompositions, compositionStore, settle };
-	}
-
-	function compositionPageState(
-		pages: { title: string }[],
-		phase: 'page' | 'compositions' = pages.length > 0 ? 'page' : 'compositions'
-	): import('$lib/library/CompositionBrowseController').CompositionBrowseState {
-		return {
-			phase,
-			composerLabel: 'Philip Glass',
-			compositions: [{ title: 'Glassworks: Opening', subtitle: '', itemKey: 'k-opening' }],
-			pages: pages.map((entry) => ({ title: entry.title, actions: [], recordings: [] })),
-			actionBusy: false,
-			notice: null,
-			error: null
-		};
-	}
-
-	it('records no semantic entries for the composition surface over a palette-opened drill (ri8-1)', async () => {
-		const composersStore = fakeNamedCountsStore([
-			{ label: 'Philip Glass', albumCount: 12, itemKey: 'composer-philip-glass', imageKey: null }
-		]);
-		const drillStore = fakeDrillStore([
-			{ title: 'Glassworks', artist: 'Philip Glass', imageKey: null }
-		]);
-		const compositionStore = writable<
-			import('$lib/library/CompositionBrowseController').CompositionBrowseState
-		>(compositionPageState([], 'compositions'));
-		const controller = {
-			subscribe: compositionStore.subscribe,
-			openForComposer: vi.fn().mockResolvedValue(undefined),
-			openComposition: vi.fn().mockResolvedValue(undefined),
-			runAction: vi.fn().mockResolvedValue(undefined),
-			backToCompositions: vi.fn().mockResolvedValue(undefined),
-			reset: vi.fn()
-		} as unknown as import('$lib/library/CompositionBrowseController').CompositionBrowseController;
-		mountMode({
-			indexState: readyState(),
-			composersStore,
-			drillStore,
-			compositionController: controller
+			sessionClient: session.client,
+			liveLibrary: harnessLibrary(),
+			albumController: album.controller,
+			albumActionController: fakeModeActionController()
 		});
 
-		// The composer drill opens from the palette: transient, no entry.
-		await fireEvent.click(screen.getByTestId('unified-find'));
-		await waitFor(() => expect(composersStore.load).toHaveBeenCalledTimes(1));
-		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
-			target: { value: 'philip glass' }
-		});
-		const composerRow = await screen.findByText('Composer: Philip Glass');
-		await fireEvent.mouseMove(composerRow.closest('button')!);
-		const writesBefore = __getNavigationLog().length;
-		await fireEvent.click(composerRow.closest('button')!);
-		await waitFor(() => screen.getByTestId('unified-drill-compositions-toggle'));
-
-		// Surface enter, composition open, and surface exit: no history writes.
-		await fireEvent.click(screen.getByTestId('unified-drill-compositions-toggle'));
-		await fireEvent.click(await screen.findByTestId('unified-composition-row-0'));
-		compositionStore.set(compositionPageState([{ title: 'Glassworks: Opening' }]));
-		await screen.findByTestId('unified-composition-page');
-		await fireEvent.click(screen.getByTestId('unified-drill-compositions-toggle'));
-		await new Promise((resolve) => setTimeout(resolve, 0));
-
-		const writes = __getNavigationLog()
-			.slice(writesBefore)
-			.filter((entry) => entry.operation === 'pushState' || entry.operation === 'replaceState');
-		expect(writes).toHaveLength(0);
-	});
-
-	it('closes a live-pushed composition by traversing to the surface entry (ri8-1)', async () => {
-		const { backToCompositions, compositionStore, settle } = compositionRestoreFixture([
-			{ title: 'Glassworks: Opening', itemKey: 'k-opening' }
-		]);
-		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
-		await settle();
-		compositionStore.set(compositionPageState([{ title: 'Glassworks: Opening' }]));
-		backToCompositions.mockImplementation(async () => {
-			compositionStore.set(compositionPageState([]));
+		resumeCollectionAlbum(harness);
+		await waitFor(() => expect(album.open).toHaveBeenCalledTimes(1));
+		expect(album.open.mock.calls[0][0]).toMatchObject({
+			target: { kind: 'collection', locator: albumLocator() },
+			generation: 1
 		});
 
-		// The RESTORED composition owns no live-pushed entry: its Back
-		// rewrites the entry rather than traversing.
-		await fireEvent.click(await screen.findByTestId('unified-composition-back'));
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(browserBack).not.toHaveBeenCalled();
+		// What the reporter sees after leaving the app open overnight: the
+		// server retired this tab's mode lease while the socket stayed up.
+		album.store.set({
+			phase: 'failed',
+			activeTab: 'details',
+			generation: 1,
+			requestId: 'request-1',
+			operationId: null,
+			resolvingDeadlineAt: null,
+			artist: null,
+			title: null,
+			versions: [],
+			degraded: false,
+			selectedVersionId: null,
+			actionsAvailable: false,
+			albumActionsAvailable: false,
+			orderedTracks: [],
+			code: 'INVALID_REQUEST',
+			error: 'The library session is no longer current',
+			transitionedAt: 2
+		} as unknown as LibraryAlbumState);
 
-		// A LIVE open over the entry-owning drill pushes one entry…
-		const pushWindow = __getNavigationLog().length;
-		await fireEvent.click(await screen.findByTestId('unified-composition-row-0'));
-		compositionStore.set(compositionPageState([{ title: 'Glassworks: Opening' }]));
-		const pushes = __getNavigationLog()
-			.slice(pushWindow)
-			.filter((entry) => entry.operation === 'pushState');
-		expect(pushes).toHaveLength(1);
+		await fireEvent.click(await screen.findByTestId('unified-album-retry'));
 
-		// …and its Back traverses to the surface entry without writing.
-		const writesBefore = __getNavigationLog().length;
-		await fireEvent.click(await screen.findByTestId('unified-composition-back'));
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(browserBack).toHaveBeenCalledTimes(1);
-		const writes = __getNavigationLog()
-			.slice(writesBefore)
-			.filter((entry) => entry.operation === 'pushState' || entry.operation === 'replaceState');
-		expect(writes).toHaveLength(0);
-		browserBack.mockRestore();
-	});
-
-	it('leaves a live-pushed composition surface by traversing both entries (ri8-1)', async () => {
-		const { compositionStore, settle } = compositionRestoreFixture(
-			[{ title: 'Glassworks: Opening', itemKey: 'k-opening' }],
-			null
-		);
-		const browserGo = vi.spyOn(window.history, 'go').mockImplementation(() => {});
-		// The restored drill owns its entry but the surface is not entered.
-		// The drill's history ownership settles when its restore resolves.
-		await waitFor(() => screen.getByTestId('unified-drill-compositions-toggle'));
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		await new Promise((resolve) => setTimeout(resolve, 0));
-
-		const pushWindow = __getNavigationLog().length;
-		await fireEvent.click(screen.getByTestId('unified-drill-compositions-toggle'));
-		await settle();
-		await fireEvent.click(await screen.findByTestId('unified-composition-row-0'));
-		compositionStore.set(compositionPageState([{ title: 'Glassworks: Opening' }]));
-		await screen.findByTestId('unified-composition-page');
-		const pushes = __getNavigationLog()
-			.slice(pushWindow)
-			.filter((entry) => entry.operation === 'pushState');
-		expect(pushes).toHaveLength(2);
-
-		// Toggle-off unwinds both live-pushed entries in one traversal.
-		const writesBefore = __getNavigationLog().length;
-		await fireEvent.click(screen.getByTestId('unified-drill-compositions-toggle'));
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(browserGo).toHaveBeenCalledWith(-2);
-		const writes = __getNavigationLog()
-			.slice(writesBefore)
-			.filter((entry) => entry.operation === 'pushState' || entry.operation === 'replaceState');
-		expect(writes).toHaveLength(0);
-		browserGo.mockRestore();
-	});
-
-	it('keeps the persisted composition when Back pops only a nested recording (ri8-2)', async () => {
-		const { backToCompositions, compositionStore, settle } = compositionRestoreFixture([
-			{ title: 'Glassworks: Opening', itemKey: 'k-opening' }
-		]);
-		await settle();
-		// The restored composition is open; a recording node was then opened
-		// in place (no semantic entry, restore title untouched).
-		compositionStore.set(
-			compositionPageState([{ title: 'Glassworks: Opening' }, { title: 'Glassworks — CBS' }])
-		);
-		// The real controller pops one level and stays on the parent page.
-		backToCompositions.mockImplementation(async () => {
-			compositionStore.set(compositionPageState([{ title: 'Glassworks: Opening' }]));
+		await waitFor(() => expect(album.open).toHaveBeenCalledTimes(2));
+		// The load-bearing assertion: without the invalidation the retry
+		// replays generation 1 — the exact call the server just refused — and
+		// only a page reload recovers.
+		expect(album.open.mock.calls[1][0]).toMatchObject({
+			target: { kind: 'collection', locator: albumLocator() },
+			generation: 2
 		});
-		const writesBefore = __getNavigationLog().length;
-		await fireEvent.click(await screen.findByTestId('unified-composition-back'));
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(backToCompositions).toHaveBeenCalledTimes(1);
-		expect((await screen.findByTestId('unified-composition-title')).textContent).toBe(
-			'Glassworks: Opening'
-		);
-		const writes = __getNavigationLog()
-			.slice(writesBefore)
-			.filter((entry) => entry.operation === 'pushState' || entry.operation === 'replaceState');
-		expect(writes).toHaveLength(0);
-	});
-
-	it('retires the persisted composition on a genuine return to the list (ri8-2)', async () => {
-		const { backToCompositions, compositionStore, settle } = compositionRestoreFixture([
-			{ title: 'Glassworks: Opening', itemKey: 'k-opening' }
-		]);
-		await settle();
-		compositionStore.set(compositionPageState([{ title: 'Glassworks: Opening' }]));
-		backToCompositions.mockImplementation(async () => {
-			compositionStore.set(compositionPageState([]));
-		});
-		const writesBefore = __getNavigationLog().length;
-		await fireEvent.click(await screen.findByTestId('unified-composition-back'));
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		await screen.findByTestId('unified-composition-list');
-		const writes = __getNavigationLog()
-			.slice(writesBefore)
-			.filter((entry) => entry.operation === 'pushState' || entry.operation === 'replaceState');
-		expect(writes.length).toBeGreaterThan(0);
-		const latest = writes.at(-1)?.state as {
-			library?: { snapshot?: { composition?: { title: string | null } | null } };
-		};
-		// The surface stays open at the list: persisted as an open surface
-		// with no composition title.
-		expect(latest.library?.snapshot?.composition).toEqual({ title: null });
-	});
-
-	it('restores a persisted composition by its exactly-one title match (Slice 8)', async () => {
-		const { openComposition, settle } = compositionRestoreFixture([
-			{ title: 'Glassworks: Opening', itemKey: 'k-opening' },
-			{ title: 'Another Work', itemKey: 'k-other' }
-		]);
-		await settle();
-		await waitFor(() =>
-			expect(openComposition).toHaveBeenCalledWith(
-				expect.anything(),
-				expect.objectContaining({ itemKey: 'k-opening' })
-			)
-		);
-		expect(openComposition).toHaveBeenCalledTimes(1);
-	});
-
-	it('keeps the composition list when a restored title is ambiguous (Slice 8)', async () => {
-		const { openComposition, settle } = compositionRestoreFixture([
-			{ title: 'Glassworks: Opening', itemKey: 'k-opening' },
-			{ title: 'Glassworks: Opening', itemKey: 'k-duplicate' }
-		]);
-		await settle();
-		await screen.findByTestId('unified-composition-list');
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(openComposition).not.toHaveBeenCalled();
+		expect(session.invalidate).toHaveBeenCalledTimes(1);
 	});
 
 	it('begins album and track actions from the exact selected page version', async () => {
@@ -2900,22 +1873,20 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 				outputs: []
 			}
 		]);
-		const entry = { ...albumEntry('alb-1', 'Album', 'art-1'), catalogLocalId: 'alb-1' };
 		const album = fakeModeAlbumController();
 		const actions = fakeModeActionController();
-		mountMode({
-			indexState: readyState({ albums: [entry], albumBuckets: bucketsFor([entry]) }),
+		const harness = mountMode({
+			withContext: true,
+			liveLibrary: harnessLibrary(),
 			albumController: album.controller,
 			albumActionController: actions
 		});
 
-		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
-		await fireEvent.click(screen.getByTestId('unified-tile'));
+		resumeCollectionAlbum(harness);
 		await waitFor(() => expect(album.open).toHaveBeenCalled());
 		album.store.set({
 			phase: 'details',
 			activeTab: 'details',
-			albumLocalId: 'alb-1',
 			generation: 1,
 			requestId: 'request-1',
 			operationId: 'page-1',
@@ -2932,11 +1903,15 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 					error: null
 				}
 			],
+			degraded: false,
 			selectedVersionId: 'version-2',
 			actionsAvailable: true,
+			albumActionsAvailable: true,
 			orderedTracks: [{ index: 0, title: 'Exact track' }],
+			live: null,
 			code: null,
 			error: null,
+			collectionFailure: null,
 			transitionedAt: 2
 		});
 
@@ -2962,245 +1937,416 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		});
 	});
 
-	it('hydrates an unresolved root album before opening its live sheet', async () => {
+	it('acquires action authority at click time instead of replaying the page-open generation', async () => {
+		const session = fakeSessionClient();
+		const { actions } = await mountCollectionActionPage(session);
+		const activeClaim = session.claim.mock.results[0].value as ClassicBrowseSessionClaim;
+
+		// The page opened under generation 1, then that exact Classic handle was
+		// retired while the page remained visible. The action must ask the claim
+		// now and use its replacement, not a generation captured by page open.
+		session.client.invalidate(activeClaim, { handleId: 'h-1', generation: 1 });
+		await fireEvent.click(screen.getByTestId('unified-album-play'));
+
+		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
+		expect(actions.begin).toHaveBeenCalledWith(
+			expect.objectContaining({ generation: 2, desiredSemantic: 'play-now' })
+		);
+	});
+
+	it('invalidates and reissues once when album-action begin refuses a retired session', async () => {
+		const { session, actions } = await mountCollectionActionPage();
+		const activeClaim = session.claim.mock.results[0].value as ClassicBrowseSessionClaim;
+
+		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
+		actions.publish({
+			phase: 'failed',
+			requestId: 'action-1',
+			code: 'SESSION_LOST',
+			error: 'The library session is no longer current',
+			executionAttempted: false
+		});
+
+		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(2));
+		expect(session.invalidate).toHaveBeenCalledTimes(1);
+		expect(session.invalidate).toHaveBeenCalledWith(activeClaim, {
+			handleId: 'h-1',
+			generation: 1
+		});
+		expect(actions.begin).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({ generation: 2, desiredSemantic: 'play-now' })
+		);
+	});
+
+	it('invalidates and reissues once when action resolution loses its session', async () => {
+		const { session, actions } = await mountCollectionActionPage();
+
+		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
+		actions.publish({
+			phase: 'choosing',
+			requestId: 'action-1',
+			operationId: 'operation-1',
+			actions: [{ actionId: 'choice-1', label: 'Play now', semantic: 'play-now' }]
+		});
+		await screen.findByTestId('unified-album-action-choices');
+		actions.publish({
+			phase: 'failed',
+			requestId: 'action-1',
+			code: 'SESSION_LOST',
+			error: 'The live reference retired during resolution',
+			executionAttempted: false,
+			actions: []
+		});
+
+		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(2));
+		expect(session.invalidate).toHaveBeenCalledTimes(1);
+		expect(actions.begin).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({ generation: 2 })
+		);
+	});
+
+	it('offers manual Retry after the second refusal and gives it a fresh one-reissue budget', async () => {
+		const { session, actions } = await mountCollectionActionPage();
+
+		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
+		actions.publish({
+			phase: 'failed',
+			requestId: 'action-1',
+			code: 'SESSION_LOST',
+			error: 'First refusal',
+			executionAttempted: false
+		});
+		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(2));
+		actions.publish({
+			phase: 'failed',
+			requestId: 'action-2',
+			code: 'SESSION_LOST',
+			error: 'Second refusal',
+			executionAttempted: false
+		});
+
+		const retry = await screen.findByTestId('unified-album-action-retry');
+		expect(retry).toHaveTextContent('Retry action');
+		// The second refused handle is forgotten without eagerly acquiring a
+		// third one. Acquisition remains tied to the explicit Retry gesture.
+		expect(session.invalidate).toHaveBeenNthCalledWith(2, expect.anything(), {
+			handleId: 'h-2',
+			generation: 2
+		});
+		expect(actions.begin).toHaveBeenCalledTimes(2);
+
+		await fireEvent.click(retry);
+		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(3));
+		expect(actions.begin).toHaveBeenNthCalledWith(
+			3,
+			expect.objectContaining({ generation: 3 })
+		);
+
+		// A manual retry is a new gesture: its first pre-execution refusal gets
+		// exactly one automatic reissue of its own.
+		actions.publish({
+			phase: 'failed',
+			requestId: 'action-3',
+			code: 'SESSION_LOST',
+			error: 'Retry refused once',
+			executionAttempted: false
+		});
+		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(4));
+		expect(actions.begin).toHaveBeenNthCalledWith(
+			4,
+			expect.objectContaining({ generation: 4 })
+		);
+		expect(session.invalidate).toHaveBeenCalledTimes(3);
+	});
+
+	it('does not begin an action after its page is superseded while claim.ready is pending', async () => {
+		const session = fakeSessionClient();
+		const actionReady = deferred<{ handleId: string; generation: number }>();
+		let readyReads = 0;
+		session.claim.mockImplementation(
+			() =>
+				({
+					owner: 'unified-mode',
+					claimId: 1,
+					get ready() {
+						readyReads += 1;
+						return readyReads === 1
+							? Promise.resolve({ handleId: 'h-1', generation: 1 })
+							: actionReady.promise;
+					}
+				}) as ClassicBrowseSessionClaim
+		);
+		const { actions } = await mountCollectionActionPage(session);
+
+		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		expect(actions.begin).not.toHaveBeenCalled();
+		await fireEvent.click(screen.getByTestId('unified-album-back'));
+		actionReady.resolve({ handleId: 'h-2', generation: 2 });
+		await new Promise((resolve) => setTimeout(resolve, 25));
+
+		expect(actions.begin).not.toHaveBeenCalled();
+	});
+
+	it('ignores a late failure from the retired request after its replacement begins', async () => {
+		const { session, actions } = await mountCollectionActionPage();
+
+		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
+		actions.publish({
+			phase: 'failed',
+			requestId: 'action-1',
+			code: 'SESSION_LOST',
+			error: 'Retired',
+			executionAttempted: false
+		});
+		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(2));
+
+		// A stale event cannot spend the replacement request's retry budget or
+		// invalidate the replacement handle.
+		actions.publish({
+			phase: 'failed',
+			requestId: 'action-1',
+			code: 'SESSION_LOST',
+			error: 'Late duplicate',
+			executionAttempted: false
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(actions.begin).toHaveBeenCalledTimes(2);
+		expect(session.invalidate).toHaveBeenCalledTimes(1);
+		expect(screen.queryByTestId('unified-album-action-retry')).toBeNull();
+	});
+
+	it('never reissues or offers Retry after execution may have started', async () => {
+		const { session, actions } = await mountCollectionActionPage();
+
+		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
+		actions.publish({
+			phase: 'failed',
+			requestId: 'action-1',
+			code: 'SESSION_LOST',
+			error: 'Execution was rejected after claim',
+			executionAttempted: true
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(actions.begin).toHaveBeenCalledTimes(1);
+		expect(session.invalidate).not.toHaveBeenCalled();
+		expect(screen.queryByTestId('unified-album-action-retry')).toBeNull();
+	});
+
+	it('never reissues or offers Retry for an outcome-unknown terminal state', async () => {
+		const { session, actions } = await mountCollectionActionPage();
+
+		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
+		actions.publish({
+			phase: 'outcome-unknown',
+			requestId: 'action-1',
+			// Even a malformed producer retaining the refusal code must not make
+			// an uncertain outcome eligible for replay.
+			code: 'SESSION_LOST',
+			error: 'The server may already have executed the action',
+			executionAttempted: false
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(actions.begin).toHaveBeenCalledTimes(1);
+		expect(session.invalidate).not.toHaveBeenCalled();
+		expect(screen.queryByTestId('unified-album-action-retry')).toBeNull();
+	});
+
+	it('plays an album on the selected zone without asking which one (issue #12)', async () => {
+		const zone = (zone_id: string, display_name: string) => ({
+			zone_id,
+			display_name,
+			state: 'paused' as const,
+			is_play_allowed: true,
+			is_pause_allowed: true,
+			is_previous_allowed: true,
+			is_next_allowed: true,
+			is_seek_allowed: true,
+			outputs: []
+		});
+		// Two zones, and the user's pick is NOT the first one: the old surface
+		// only skipped its prompt at exactly one zone, and its non-prompt path
+		// took zones[0].
+		setZonesSnapshot([zone('zone-1', 'Living Room'), zone('zone-2', 'Kitchen')]);
+		setSelectedZone('zone-2');
 		const album = fakeModeAlbumController();
-		const hydration = deferred<unknown>();
-		const hydrateArtistAlbums = vi.fn(() => hydration.promise);
-		const greenDay: LibraryArtistEntry = {
-			id: 'art-green-day',
-			name: 'Greta Dawn',
-			searchKey: 'green day',
-			albumCount: 1,
-			countComplete: true,
-			catalogLocalId: 'art-green-day'
-		};
-		const uno: LibraryAlbumEntry = {
-			id: 'alb-uno',
-			title: '¡Uno!',
-			artist: 'Greta Dawn',
-			searchKey: '¡uno! green day',
-			catalogLocalId: 'alb-uno',
-			resolutionStatus: 'unresolved'
-		};
-		mountMode({
-			indexState: readyState({
-				revision: 7,
-				status: syntheticStatus({ revision: 7 }),
-				artists: [greenDay],
-				albums: [uno],
-				artistBuckets: bucketsFor([greenDay]),
-				albumBuckets: bucketsFor([uno])
-			}),
+		const actions = fakeModeActionController();
+		const harness = mountMode({
+			withContext: true,
+			liveLibrary: harnessLibrary(),
 			albumController: album.controller,
-			albumActionController: fakeModeActionController(),
-			hydrateArtistAlbums
+			albumActionController: actions
 		});
 
-		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
-		await fireEvent.click(screen.getByText('¡Uno!').closest('button')!);
-
-		await waitFor(() =>
-			expect(hydrateArtistAlbums).toHaveBeenCalledWith(
-				expect.any(Function),
-				'art-green-day',
-				7
-			)
-		);
-		expect(album.open).not.toHaveBeenCalled();
-
-		hydration.resolve({
-			status: syntheticStatus({ revision: 8 }),
-			artist: {
-				localId: 'art-green-day',
-				coreId: 'core-a',
-				exactName: 'Greta Dawn',
-				normalizedName: 'green day',
-				firstSeenAt: '2026-07-24T12:00:00.000Z',
-				lastSeenAt: '2026-07-24T12:00:00.000Z',
-				resolutionStatus: 'resolved'
-			},
-			limit: 500,
-			total: 1,
-			truncated: false,
-			albums: [
+		resumeCollectionAlbum(harness);
+		await waitFor(() => expect(album.open).toHaveBeenCalled());
+		album.store.set({
+			phase: 'details',
+			activeTab: 'details',
+			generation: 1,
+			requestId: 'request-1',
+			operationId: 'page-1',
+			resolvingDeadlineAt: 2,
+			artist: 'Artist',
+			title: 'Album',
+			versions: [
 				{
-					localId: 'alb-uno',
-					coreId: 'core-a',
-					exactTitle: '¡Uno!',
-					exactArtist: 'Greta Dawn',
-					normalizedTitle: '¡uno!',
-					normalizedArtist: 'green day',
+					versionId: 'version-2',
 					editionText: '',
-					firstSeenAt: '2026-07-24T12:00:00.000Z',
-					lastSeenAt: '2026-07-24T12:00:00.000Z',
-					resolutionStatus: 'resolved',
-					artistLocalId: 'art-green-day'
+					phase: 'loaded',
+					trackCount: 1,
+					code: null,
+					error: null
 				}
-			]
+			],
+			degraded: false,
+			selectedVersionId: 'version-2',
+			actionsAvailable: true,
+			albumActionsAvailable: true,
+			orderedTracks: [{ index: 0, title: 'Exact track' }],
+			code: null,
+			error: null,
+			transitionedAt: 2
+		} as unknown as LibraryAlbumState);
+
+		await fireEvent.click(await screen.findByTestId('unified-album-play'));
+		expect(actions.begin).toHaveBeenNthCalledWith(1, {
+			pageId: 'page-1',
+			versionId: 'version-2',
+			zoneId: 'zone-2',
+			tabId: expect.any(String),
+			generation: 1,
+			desiredSemantic: 'play-now'
 		});
-		await waitFor(() =>
-			expect(album.open).toHaveBeenCalledWith(
-				expect.objectContaining({ albumLocalId: 'alb-uno' })
-			)
-		);
+		expect(screen.queryByTestId('unified-album-zone-picker')).toBeNull();
+		setSelectedZone('');
 	});
 
 	it('abandons a superseded album open (ri1-1)', async () => {
 		const album = fakeModeAlbumController();
-		const hydration = deferred<unknown>();
-		const hydrateArtistAlbums = vi.fn(() => hydration.promise);
-		const artist: LibraryArtistEntry = {
-			id: 'art-a',
-			name: 'Artist A',
-			searchKey: 'artist a',
-			albumCount: 1,
-			countComplete: true,
-			catalogLocalId: 'art-a'
-		};
-		const unresolved: LibraryAlbumEntry = {
-			id: 'alb-a',
-			title: 'Pending Album',
-			artist: 'Artist A',
-			searchKey: 'pending album artist a',
-			catalogLocalId: 'alb-a',
-			resolutionStatus: 'unresolved'
-		};
-		mountMode({
-			indexState: readyState({
-				revision: 7,
-				status: syntheticStatus({ revision: 7 }),
-				artists: [artist],
-				albums: [unresolved],
-				artistBuckets: bucketsFor([artist]),
-				albumBuckets: bucketsFor([unresolved])
-			}),
+		// The one await an album open still makes before it reads: the browse
+		// session claim. It used to be catalog hydration, which is deleted; the
+		// rule under test is the same one — a page closed while an await is
+		// pending must not reopen its read over whatever came next.
+		const session = fakeSessionClient();
+		const ready = deferred<{ handleId: string; generation: number }>();
+		session.claim.mockImplementation(() => ({
+			owner: 'unified-mode',
+			claimId: 1,
+			get ready() {
+				return ready.promise;
+			}
+		}));
+		const harness = mountMode({
+			withContext: true,
+			sessionClient: session.client,
+			liveLibrary: harnessLibrary(),
 			albumController: album.controller,
-			albumActionController: fakeModeActionController(),
-			hydrateArtistAlbums
+			albumActionController: fakeModeActionController()
 		});
 
-		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
-		await fireEvent.click(screen.getByText('Pending Album').closest('button')!);
-		await waitFor(() => expect(hydrateArtistAlbums).toHaveBeenCalled());
+		resumeCollectionAlbum(harness);
+		await waitFor(() => expect(screen.getByTestId('unified-album-back')).toBeTruthy());
 		expect(album.open).not.toHaveBeenCalled();
 
-		// The page is closed while its hydration is still pending; the stale
+		// The page is closed while its claim is still pending; the stale
 		// continuation must not reopen the read over whatever came next.
 		await fireEvent.click(screen.getByTestId('unified-album-back'));
-		hydration.resolve({
-			status: syntheticStatus({ revision: 8 }),
-			artist: {
-				localId: 'art-a',
-				coreId: 'core-a',
-				exactName: 'Artist A',
-				normalizedName: 'artist a',
-				firstSeenAt: '2026-07-24T12:00:00.000Z',
-				lastSeenAt: '2026-07-24T12:00:00.000Z',
-				resolutionStatus: 'resolved'
-			},
-			limit: 500,
-			total: 1,
-			truncated: false,
-			albums: []
-		});
-		// Give the stale continuation a real settle window: under the fault
-		// it reaches albumController.open only after the claim-ready await.
+		ready.resolve({ handleId: 'h-1', generation: 1 });
+		// Give the stale continuation a real settle window: under the fault it
+		// reaches albumController.open only after the claim-ready await.
 		await new Promise((resolve) => setTimeout(resolve, 25));
 		await new Promise((resolve) => setTimeout(resolve, 25));
 		expect(album.open).not.toHaveBeenCalled();
 	});
 
-	it('palette-owned pages never push history (ri1-2)', async () => {
+	it('a palette-opened live page takes its own address (ri1-2)', async () => {
+		// The rule this used to prove was that a palette-opened album wrote no
+		// history entry, because the palette owned it as a nested search view.
+		// That was true of a CATALOG album page, which had no address of its
+		// own. A live page does: Slice 3 gave it a URL, so opening one from the
+		// palette must push exactly one entry, or the address bar would keep
+		// naming the list while an album is on screen.
 		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
 		const album = fakeModeAlbumController();
-		const composersStore = fakeNamedCountsStore([
-			{ label: 'Philip Glass', albumCount: 1, itemKey: 'composer-pg', imageKey: null }
-		]);
-		const drillStore = fakeDrillStore([
-			{ title: 'Glassworks', artist: 'Philip Glass', imageKey: null }
-		]);
-		const glassworks: LibraryAlbumEntry = {
-			id: 'alb-glassworks',
-			title: 'Glassworks',
-			artist: 'Philip Glass',
-			searchKey: 'glassworks philip glass',
-			catalogLocalId: 'alb-glassworks',
-			resolutionStatus: 'resolved'
-		};
 		mountMode({
-			indexState: readyState({ albums: [glassworks] }),
-			composersStore,
-			drillStore,
+			liveLibrary: harnessLibrary({
+				artists: [
+					{
+						name: 'Philip Glass',
+						albums: [
+							{ title: 'Glassworks', credit: 'Philip Glass', tracks: ['Opening'] }
+						]
+					}
+				]
+			}),
 			albumController: album.controller,
 			albumActionController: fakeModeActionController()
 		});
 
 		await fireEvent.click(screen.getByTestId('unified-find'));
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
-			target: { value: 'philip glass' }
+			target: { value: 'glassworks' }
 		});
-		const composerRow = await screen.findByText('Composer: Philip Glass');
-		await fireEvent.mouseMove(composerRow.closest('button')!);
-		await fireEvent.click(composerRow.closest('button')!);
-		await waitFor(() => expect(drillStore.load).toHaveBeenCalled());
+		const paletteRows = await screen.findAllByTestId('unified-palette-row');
+		const albumRow = paletteRows.find((row) => row.textContent?.includes('Glassworks'));
+		expect(albumRow).toBeDefined();
+		await fireEvent.click(albumRow!);
+		await waitFor(() => expect(album.adoptLiveLevel).toHaveBeenCalled());
 
-		// An album opened INSIDE the palette-owned view inherits the
-		// nested-view rule: no history entry to leave behind (ri1-2).
-		await fireEvent.click((await screen.findByText('Glassworks')).closest('button')!);
-		await waitFor(() => expect(album.open).toHaveBeenCalled());
-		expect(
-			__getNavigationLog().filter((entry) => entry.operation === 'pushState')
-		).toHaveLength(0);
-
-		await fireEvent.click(screen.getByTestId('unified-album-back'));
-		expect(browserBack).not.toHaveBeenCalled();
-		expect(screen.getByTestId('unified-palette')).toBeInTheDocument();
-		expect(screen.getByTestId('unified-palette-input')).toHaveValue('philip glass');
+		const pushes = __getNavigationLog().filter((entry) => entry.operation === 'pushState');
+		expect(pushes).toHaveLength(1);
+		expect(decodeLibraryRoute(new URL(pushes[0].url))).toMatchObject({ kind: 'album' });
+		// And the palette is gone rather than waiting behind the page: Back
+		// belongs to the address now, not to a nested view.
+		expect(screen.queryByTestId('unified-palette')).toBeNull();
 		browserBack.mockRestore();
 	});
 
-	it('restores collection scroll across a recorded item Back (ri1-4)', async () => {
+
+	it('restores list scroll across a recorded item Back (ri1-4)', async () => {
+		// This used to park its scroll on a genre drill and open one of that
+		// drill's album tiles. Slice 7 stopped a drill's live rows from
+		// borrowing a stored album's identity, so those tiles no longer open
+		// and that route into an item page is gone. The rule being proved is
+		// the scroll parking itself, which belongs to no one scope: it is the
+		// Albums list here, opening an album that carries its own identity.
 		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
 		const album = fakeModeAlbumController();
-		const genresStore = fakeNamedCountsStore([
-			{ label: 'Jazz', albumCount: 1, itemKey: 'k:jazz', imageKey: null }
-		]);
-		const drillStore = fakeDrillStore([
-			{ title: 'Kind of Blue', artist: 'Miles Davis', imageKey: null }
-		]);
-		const kob: LibraryAlbumEntry = {
-			id: 'alb-kob',
-			title: 'Kind of Blue',
-			artist: 'Miles Davis',
-			searchKey: 'kind of blue miles davis',
-			catalogLocalId: 'alb-kob',
-			resolutionStatus: 'resolved'
-		};
 		const harness = mountMode({
 			withContext: true,
-			indexState: readyState({ albums: [kob] }),
-			genresStore,
-			drillStore,
+			liveLibrary: harnessLibrary({
+				artists: [],
+				albums: [{ title: 'Kind of Blue', credit: 'Miles Davis', tracks: ['So What'] }]
+			}),
 			albumController: album.controller,
 			albumActionController: fakeModeActionController()
 		});
 		harness.registered.lifecycle!.resume({
 			cause: 'initial',
 			pageState: buildUnifiedLibraryPageState({
-				scope: 'genres',
-				collectionDrill: { kind: 'genre', label: 'Jazz' },
+				scope: 'albums',
+				collectionDrill: null,
 				itemTarget: null,
 				filterText: '',
 				surpriseSeed: null
 			})
 		} as CommittedLibraryModeActivation);
-		await waitFor(() => expect(drillStore.load).toHaveBeenCalled());
 		await screen.findByText('Kind of Blue');
 
 		const pane = screen.getByTestId('unified-pane');
 		pane.scrollTop = 640;
-		await fireEvent.click(screen.getByText('Kind of Blue').closest('button')!);
-		await waitFor(() => expect(album.open).toHaveBeenCalled());
+		await fireEvent.click(screen.getByText('Kind of Blue').closest('a,button')!);
+		// The Albums list is Roon's own root (Slice 2), so the tile opens by the
+		// reference it carries; the scroll-parking rule is the same either way.
+		await waitFor(() => expect(album.adoptLiveLevel).toHaveBeenCalled());
 
 		await fireEvent.click(screen.getByTestId('unified-album-back'));
 		expect(browserBack).toHaveBeenCalledTimes(1);
@@ -3209,14 +2355,14 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		// reviewer's ri1-4 vacuity catch).
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		pane.scrollTop = 0;
-		// The host answers the pop by suspending and resuming with the
-		// parent collection entry; the parked scroll must survive it.
+		// The host answers the pop by suspending and resuming with the parent
+		// list entry; the parked scroll must survive it.
 		harness.registered.lifecycle!.suspend();
 		harness.registered.lifecycle!.resume({
 			cause: 'history-pop',
 			pageState: buildUnifiedLibraryPageState({
-				scope: 'genres',
-				collectionDrill: { kind: 'genre', label: 'Jazz' },
+				scope: 'albums',
+				collectionDrill: null,
 				itemTarget: null,
 				filterText: '',
 				surpriseSeed: null
@@ -3227,34 +2373,870 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		browserBack.mockRestore();
 	});
 
-	it('degrades a vanished genre label to the parent scope with a notice', async () => {
-		const genresStore = fakeNamedCountsStore([
-			{ label: 'Blues', albumCount: 11, itemKey: 'k:blues', imageKey: null }
-		]);
-		const drillStore = fakeDrillStore([]);
+});
+
+/**
+ * The live view of Roon on screen (`.agents/plans/library-live-view.md` Slice 2).
+ *
+ * These cases are about the SURFACE: which row the reader clicked, what opened,
+ * what the browser wrote down, and what happens when the snapshot those rows
+ * belong to is retired underneath an open page. The walk itself
+ * (`liveLibraryPath.ts`) and the page's own fence (`LiveLibraryPageController`)
+ * have their own tests; nothing here re-proves them.
+ */
+describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
+	const LIVE_LIBRARY: HarnessLiveLibrary = {
+		generation: 'gen-1',
+		artists: [
+			{
+				name: 'Alfheim Consort',
+				albums: [
+					{ title: 'Winter Vespers', credit: 'Alfheim Consort', tracks: ['Kyrie', 'Gloria'] }
+				]
+			},
+			{
+				name: 'Nornir Trio',
+				albums: [
+					{ title: 'Skuld', credit: 'Nornir Trio', tracks: ['First Thread', 'Second Thread'] },
+					// Two rows, one title, different credits: the address for one of
+					// them has to carry the credit or it names both.
+					{ title: 'Skuld', credit: 'Nornir Trio & Guests', tracks: ['Reprise'] }
+				]
+			}
+		]
+	};
+
+	beforeEach(() => {
+		__resetNavigation(
+			'http://localhost/library',
+			buildLibraryPageStateEnvelope(buildUnifiedRootPageState())
+		);
+		clearPendingLibraryPageStateWrite();
+		setZonesSnapshot([]);
+	});
+
+	function mountLive(over: Parameters<typeof mountMode>[0] = {}) {
+		return mountMode({
+			liveLibrary: LIVE_LIBRARY,
+			rootsState: liveRootsState(LIVE_LIBRARY),
+			...over
+		});
+	}
+
+	function routedLevel(
+		title: string,
+		rows: readonly {
+			readonly token: string;
+			readonly title: string;
+			readonly kind: LibraryNodeKind;
+			readonly subtitle?: string;
+		}[]
+	) {
+		return {
+			contract: LIBRARY_OPEN_CONTRACT,
+			kind: 'level' as const,
+			generation: 'gen-1',
+			title,
+			count: rows.length,
+			rows: rows.map((row) => ({
+				ref: { generation: 'gen-1', token: row.token },
+				title: row.title,
+				kind: row.kind,
+				...(row.subtitle === undefined ? {} : { subtitle: row.subtitle })
+			}))
+		};
+	}
+
+	function rowNamed(name: string): HTMLElement {
+		const row = screen
+			.getAllByTestId('unified-row')
+			.find((candidate) => candidate.querySelector('.an')?.textContent === name);
+		if (!row) throw new Error(`no Artists row rendered for ${name}`);
+		return row;
+	}
+
+	function latestRoute() {
+		const entry = __getNavigationLog().at(-1);
+		return entry === undefined ? null : decodeLibraryRoute(new URL(entry.url));
+	}
+
+	it('renders identical URL matches as a group and opens the selected live reference', async () => {
+		const duplicateLibrary: HarnessLiveLibrary = {
+			generation: 'gen-1',
+			artists: [
+				{ name: 'Same Artist', albumCount: 2, albums: [] },
+				{ name: 'Same Artist', albumCount: 8, albums: [] }
+			]
+		};
+		const base = liveRootsState(duplicateLibrary);
+		const artistRows = base.artistRows.map((row, index) => ({
+			...row,
+			ref: { generation: 'gen-1', token: `duplicate:${index}` }
+		}));
+		const artists = base.artists.map((artist, index) => ({
+			...artist,
+			id: `duplicate-${index}`,
+			liveRef: artistRows[index].ref
+		}));
+		const openLiveRef = vi.fn(async () => ({
+			contract: LIBRARY_OPEN_CONTRACT,
+			kind: 'level' as const,
+			generation: 'gen-1',
+			title: 'Same Artist',
+			count: 0,
+			rows: []
+		}));
 		const harness = mountMode({
 			withContext: true,
-			indexState: readyState(),
-			genresStore,
-			drillStore
+			liveLibrary: duplicateLibrary,
+			rootsState: { ...base, artistRows, artists },
+			openLiveRef
 		});
 
-		harness.registered.lifecycle?.resume({
-			pageState: buildUnifiedLibraryPageState({
-				scope: 'genres',
-				collectionDrill: { kind: 'genre', label: 'Gone' },
-				itemTarget: null,
-				filterText: '',
-				surpriseSeed: null
+		harness.registered.lifecycle!.resume({
+			cause: 'initial',
+			pageState: libraryPageStateFromRoute({ kind: 'artist', artist: 'Same Artist' })
+		} as CommittedLibraryModeActivation);
+
+		expect(await screen.findByTestId('unified-library-group-notice')).toHaveTextContent(
+			'Roon lists 2 identical entries — merge them in Roon'
+		);
+		const candidates = screen.getAllByTestId(/unified-library-group-candidate-/u);
+		expect(candidates).toHaveLength(2);
+		expect(candidates.every((candidate) => candidate.tagName === 'BUTTON')).toBe(true);
+		expect(candidates.every((candidate) => !candidate.hasAttribute('href'))).toBe(true);
+
+		await fireEvent.click(candidates[1]);
+		await waitFor(() =>
+			expect(openLiveRef).toHaveBeenCalledWith(
+				expect.anything(),
+				{ generation: 'gen-1', token: 'duplicate:1' }
+			)
+		);
+		expect(await screen.findByTestId('unified-artist-name')).toHaveTextContent('Same Artist');
+	});
+
+	it('restores a genre URL, opens its Albums section, and links albums through the genre', async () => {
+		const socket = fakeConnectionSocket();
+		const openLiveRoot = vi.fn(async (_fetchFn: typeof fetch, root: 'genres' | 'composers') =>
+			root === 'genres'
+				? routedLevel('Genres', [{ token: 'genre:jazz', title: 'Jazz', kind: 'genre' }])
+				: routedLevel('Composers', [])
+		);
+		const openLiveRef = vi.fn(async (_fetchFn: typeof fetch, ref: { token: string }) => {
+			switch (ref.token) {
+				case 'genre:jazz':
+					return routedLevel('Jazz', [
+						{ token: 'section:jazz:albums', title: 'Albums', kind: 'section' }
+					]);
+				case 'section:jazz:albums':
+					return routedLevel('Albums', [
+						{
+							token: 'album:jazz:kind-of-blue',
+							title: 'Kind of Blue',
+							subtitle: 'Miles Davis',
+							kind: 'album'
+						}
+					]);
+				default:
+					return routedLevel('Kind of Blue', [
+						{ token: 'track:jazz:so-what', title: 'So What', kind: 'track' }
+					]);
+			}
+		});
+		const harness = mountLive({
+			withContext: true,
+			openLiveRoot,
+			openLiveRef,
+			getSocketClient: () => socket
+		});
+
+		harness.registered.lifecycle!.resume({
+			cause: 'initial',
+			pageState: libraryPageStateFromRoute({ kind: 'genre', genre: 'Jazz' })
+		} as CommittedLibraryModeActivation);
+
+		// The addressed live hierarchy owns this activation. Do not start the
+		// hidden classic Genres list alongside it: that duplicate Core browse can
+		// contend with the live restore and has no result this page can render.
+		expect(harness.genresStore.load).not.toHaveBeenCalled();
+		socket.connected = true;
+		socket.emit('connect');
+		await waitFor(() => expect(harness.session.recover).toHaveBeenCalledTimes(1));
+		expect(harness.genresStore.load).not.toHaveBeenCalled();
+
+		const section = await screen.findByTestId('unified-live-section-0');
+		expect(section.tagName).toBe('A');
+		expect(section).toHaveAttribute(
+			'href',
+			'/library/genres/path/genre;Jazz;;/section;Albums;;'
+		);
+		await fireEvent.click(section);
+		expect(__getNavigationLog().at(-1)).toMatchObject({
+			operation: 'pushState',
+			url: 'http://localhost/library/genres/path/genre;Jazz;;/section;Albums;;'
+		});
+		const album = await screen.findByTestId('unified-live-album');
+		expect(album).toHaveAttribute(
+			'href',
+			'/library/genres/Jazz/Kind%20of%20Blue;Miles%20Davis;'
+		);
+		await fireEvent.click(album);
+		expect(await screen.findByTestId('unified-album-title')).toHaveTextContent('Kind of Blue');
+	});
+
+	it('restores composer and composition URLs against the live hierarchy', async () => {
+		const openLiveRoot = vi.fn(async () =>
+			routedLevel('Composers', [
+				{ token: 'composer:glass', title: 'Philip Glass', kind: 'composer' }
+			])
+		);
+		const openLiveRef = vi.fn(async (_fetchFn: typeof fetch, ref: { token: string }) =>
+			ref.token === 'composer:glass'
+				? routedLevel('Philip Glass', [
+						{ token: 'composition:opening', title: 'Glassworks: Opening', kind: 'composition' }
+					])
+				: routedLevel('Glassworks: Opening', [
+						{ token: 'track:opening', title: 'Opening', kind: 'track' }
+					])
+		);
+		const harness = mountLive({ withContext: true, openLiveRoot, openLiveRef });
+
+		harness.registered.lifecycle!.resume({
+			cause: 'initial',
+			pageState: libraryPageStateFromRoute({
+				kind: 'composition',
+				composer: 'Philip Glass',
+				composition: 'Glassworks: Opening'
 			})
 		} as CommittedLibraryModeActivation);
 
-		const notice = await screen.findByTestId('unified-drill-notice');
-		expect(notice.textContent).toContain('Gone');
-		expect(screen.queryByTestId('unified-drill-label')).toBeNull();
-		expect(drillStore.load).not.toHaveBeenCalled();
+		expect(await screen.findByTestId('unified-live-collection-title')).toHaveTextContent(
+			'Glassworks: Opening'
+		);
+		expect(await screen.findByText('Opening')).toBeInTheDocument();
+		expect(openLiveRoot).toHaveBeenCalledWith(expect.anything(), 'composers');
+		expect(openLiveRef.mock.calls.map((call) => call[1].token)).toEqual([
+			'composer:glass',
+			'composition:opening'
+		]);
+	});
+
+	it('presents every live collection row family, album grid, facts, and read-only action choice', async () => {
+		setZonesSnapshot([
+			{
+				zone_id: 'zone-1',
+				display_name: 'Living Room',
+				state: 'paused',
+				is_play_allowed: true,
+				is_pause_allowed: true,
+				is_previous_allowed: true,
+				is_next_allowed: true,
+				is_seek_allowed: true,
+				outputs: []
+			}
+		]);
+		setSelectedZone('zone-1');
+		const actionState = writable<{
+			phase: string;
+			actions: { actionId: string; label: string; semantic: 'play-now' }[];
+			error: null;
+		}>({ phase: 'idle', actions: [], error: null });
+		const begin = vi.fn(() => {
+			actionState.set({
+				phase: 'choosing',
+				actions: [{ actionId: 'choice-1', label: 'Play now', semantic: 'play-now' }],
+				error: null
+			});
+			return { started: true, requestId: 'request-1' };
+		});
+		const cancel = vi.fn(() => {
+			actionState.set({ phase: 'canceled', actions: [], error: null });
+			return true;
+		});
+		const actions = {
+			subscribe: actionState.subscribe,
+			begin,
+			cancel,
+			reset: vi.fn()
+		} as unknown as AlbumActionController;
+		const openLiveRoot = vi.fn(async () =>
+			routedLevel('Composers', [
+				{ token: 'composer:glass', title: 'Philip Glass', kind: 'composer' }
+			])
+		);
+		const openLiveRef = vi.fn(async () =>
+			routedLevel('Philip Glass', [
+				{ token: 'action:composer', title: 'Play Composer', kind: 'action' },
+				{ token: 'album:glassworks', title: 'Glassworks', subtitle: 'Philip Glass', kind: 'album' },
+				{ token: 'artist:ensemble', title: 'Philip Glass Ensemble', kind: 'artist' },
+				{ token: 'composition:opening', title: 'Glassworks: Opening', kind: 'composition' },
+				{ token: 'recording:opening', title: 'Opening — CBS', kind: 'track' },
+				{ token: 'entry:works', title: 'Works', kind: 'entry' },
+				{ token: 'section:albums', title: 'Albums', kind: 'section' },
+				{ token: 'fact:control', title: '\u0000', kind: 'entry' }
+			])
+		);
+		const harness = mountLive({
+			withContext: true,
+			openLiveRoot,
+			openLiveRef,
+			albumActionController: actions
+		});
+
+		harness.registered.lifecycle!.resume({
+			cause: 'initial',
+			pageState: libraryPageStateFromRoute({ kind: 'composer', composer: 'Philip Glass' })
+		} as CommittedLibraryModeActivation);
+
+		expect(await screen.findByTestId('unified-live-album')).toHaveAttribute('href');
+		expect(screen.getByTestId('unified-live-artist-0')).toHaveAttribute('href');
+		expect(screen.getByTestId('unified-live-composition-1')).toHaveAttribute('href');
+		expect(screen.getByTestId('unified-live-recording-2')).toHaveAttribute('href');
+		expect(screen.getByTestId('unified-live-list-3')).toHaveAttribute('href');
+		expect(screen.getByTestId('unified-live-section-4')).toHaveAttribute('href');
+		const fact = screen.getByTestId('unified-live-fact-5');
+		expect(fact.tagName).toBe('DIV');
+		expect(fact).not.toHaveAttribute('role');
+		expect(screen.getByTestId('unified-live-collection-sort')).toBeInTheDocument();
+
+		const actionButton = screen.getByTestId('unified-live-actions');
+		await waitFor(() => expect(actionButton).toBeEnabled());
+		await fireEvent.click(actionButton);
+		expect(begin).toHaveBeenCalledWith(
+			expect.objectContaining({
+				ref: { generation: 'gen-1', token: 'composer:glass' },
+				zoneId: 'zone-1'
+			})
+		);
+		const choices = await screen.findByTestId('unified-live-action-choices');
+		await fireEvent.click(within(choices).getByRole('button', { name: 'Cancel' }));
+		expect(cancel).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps the classic genre album count, sort preference, shuffle, and letter rail on the live page', async () => {
+		const albumRows = Array.from({ length: 40 }, (_unused, index) => ({
+			token: `album:${index}`,
+			title: `${String.fromCharCode(65 + (index % 4))} Album ${index}`,
+			subtitle: 'Philip Glass',
+			kind: 'album' as const
+		}));
+		const openLiveRoot = vi.fn(async () =>
+			routedLevel('Composers', [
+				{ token: 'composer:glass', title: 'Philip Glass', kind: 'composer' }
+			])
+		);
+		const openLiveRef = vi.fn(async () => routedLevel('Philip Glass', albumRows));
+		const harness = mountLive({ withContext: true, openLiveRoot, openLiveRef });
+
+		harness.registered.lifecycle!.resume({
+			cause: 'initial',
+			pageState: libraryPageStateFromRoute({ kind: 'composer', composer: 'Philip Glass' })
+		} as CommittedLibraryModeActivation);
+
+		expect(await screen.findByTestId('unified-live-collection-summary')).toHaveTextContent(
+			'40 ALBUMS'
+		);
+		const enabledLetters = [...screen.getByTestId('unified-rail').querySelectorAll('button')]
+			.filter((button) => !button.hasAttribute('disabled'))
+			.map((button) => button.textContent?.trim());
+		expect(enabledLetters).toEqual(['A', 'B', 'C', 'D']);
+
+		await fireEvent.click(screen.getByTestId('unified-live-collection-sort'));
+		await fireEvent.click(
+			screen.getByTestId('unified-live-collection-sort-option-shuffle')
+		);
+		expect(get(harness.prefsStore).sorts.genre).toBe('shuffle');
+		expect(get(harness.prefsStore).sorts.albums).toBe('az');
+		expect(screen.queryByTestId('unified-rail')).toBeNull();
+	});
+
+	it('replaces a restored section entry with its semantic parent on Back', async () => {
+		__resetNavigation(
+			'http://localhost/library/genres/path/genre;Jazz;;/section;Albums;;'
+		);
+		clearPendingLibraryPageStateWrite();
+		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+		const openLiveRoot = vi.fn(async () =>
+			routedLevel('Genres', [{ token: 'genre:jazz', title: 'Jazz', kind: 'genre' }])
+		);
+		const openLiveRef = vi.fn(async (_fetchFn: typeof fetch, ref: { token: string }) =>
+			ref.token === 'genre:jazz'
+				? routedLevel('Jazz', [
+						{ token: 'section:jazz:albums', title: 'Albums', kind: 'section' }
+					])
+				: routedLevel('Albums', [
+						{
+							token: 'album:jazz:kind-of-blue',
+							title: 'Kind of Blue',
+							subtitle: 'Miles Davis',
+							kind: 'album'
+						}
+					])
+		);
+		const harness = mountLive({ withContext: true, openLiveRoot, openLiveRef });
+		harness.registered.lifecycle!.resume({
+			cause: 'initial',
+			pageState: libraryPageStateFromRoute({
+				kind: 'live-path',
+				path: {
+					origin: 'genres',
+					steps: [
+						{ kind: 'genre', title: 'Jazz' },
+						{ kind: 'section', title: 'Albums' }
+					]
+				}
+			})
+		} as CommittedLibraryModeActivation);
+
+		expect(await screen.findByTestId('unified-live-collection-title')).toHaveTextContent(
+			'Albums'
+		);
+		await fireEvent.click(
+			within(screen.getByTestId('unified-live-collection-page')).getByRole('button', {
+				name: /Genres/u
+			})
+		);
+
+		expect(browserBack).not.toHaveBeenCalled();
+		expect(__getNavigationLog().at(-1)).toMatchObject({
+			operation: 'replaceState',
+			url: 'http://localhost/library/genres/Jazz'
+		});
+		expect(__getHistorySnapshot().entries).toHaveLength(1);
+		expect(await screen.findByTestId('unified-live-collection-title')).toHaveTextContent('Jazz');
+		browserBack.mockRestore();
+	});
+
+	it('restores an exact track URL onto the live album child', async () => {
+		const album = fakeModeAlbumController();
+		const harness = mountLive({
+			withContext: true,
+			albumController: album.controller,
+			albumActionController: fakeModeActionController()
+		});
+
+		harness.registered.lifecycle!.resume({
+			cause: 'initial',
+			pageState: libraryPageStateFromRoute({
+				kind: 'album-track',
+				album: { title: 'Winter Vespers', credit: 'Alfheim Consort', edition: '' },
+				track: 'Gloria'
+			})
+		} as CommittedLibraryModeActivation);
+
+		await waitFor(() => expect(album.adoptLiveLevel).toHaveBeenCalledTimes(1));
+		expect(get(album.store).orderedTracks.map((track) => track.title)).toEqual(['Kyrie', 'Gloria']);
+		expect(get(album.store).live).not.toBeNull();
+		expect(await screen.findByTestId('unified-album-track-info')).toHaveTextContent('Gloria');
+	});
+
+	it('gives live track info a durable address and leaves modified clicks native', async () => {
+		const album = fakeModeAlbumController();
+		mountLive({
+			albumController: album.controller,
+			albumActionController: fakeModeActionController()
+		});
+
+		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		await fireEvent.click(rowNamed('Alfheim Consort'));
+		await fireEvent.click(await screen.findByTestId('unified-tile'));
+		await waitFor(() => expect(album.adoptLiveLevel).toHaveBeenCalledTimes(1));
+
+		const trackLink = await screen.findByTestId('unified-track-info-1');
+		expect(trackLink.tagName).toBe('A');
+		expect(decodeLibraryRoute(new URL(trackLink.getAttribute('href')!, window.location.href))).toEqual({
+			kind: 'artist-album-track',
+			artist: 'Alfheim Consort',
+			album: {
+				title: 'Winter Vespers',
+				credit: 'Alfheim Consort',
+				edition: ''
+			},
+			track: 'Gloria'
+		});
+
+		trackLink.addEventListener('click', (event) => event.preventDefault(), { once: true });
+		await fireEvent.click(trackLink, { ctrlKey: true });
+		expect(screen.queryByTestId('unified-album-track-info')).toBeNull();
+
+		await fireEvent.click(trackLink);
+		expect(await screen.findByTestId('unified-album-track-info')).toHaveTextContent('Gloria');
+	});
+
+	it('opens the artist the reader clicked, by that row\'s own reference', async () => {
+		const harness = mountLive();
+
+		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		const row = rowNamed('Nornir Trio');
+		expect(row.tagName).toBe('A');
+		expect(row).toHaveAttribute('href', '/library/artists/Nornir%20Trio');
+		row.addEventListener('click', (event) => event.preventDefault(), { once: true });
+		await fireEvent.click(row, { ctrlKey: true });
+		expect(harness.openLiveRef).not.toHaveBeenCalled();
+		await fireEvent.click(row);
+
+		// The reference the row carried is what opened it — not a name looked up
+		// somewhere else, and not the first row that matched.
+		await waitFor(() =>
+			expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('Nornir Trio')
+		);
+		expect(harness.openLiveRef).toHaveBeenCalledTimes(1);
+		expect(harness.openLiveRef.mock.calls[0][1]).toEqual({
+			generation: 'gen-1',
+			token: 'artist:Nornir Trio'
+		});
+		// Roon's own level is the discography: its two album rows, no verb row.
+		const tiles = screen.getAllByTestId('unified-tile');
+		expect(tiles.map((tile) => tile.querySelector('.tt')?.textContent)).toEqual([
+			'Skuld',
+			'Skuld'
+		]);
+		expect(tiles.map((tile) => tile.querySelector('.ta')?.textContent)).toEqual([
+			'Nornir Trio',
+			'Nornir Trio & Guests'
+		]);
+	});
+
+	it('addresses an album on an artist page through that artist, credit and all', async () => {
+		const album = fakeModeAlbumController();
+		mountLive({ albumController: album.controller, albumActionController: fakeModeActionController() });
+
+		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		await fireEvent.click(rowNamed('Nornir Trio'));
+		await waitFor(() => expect(screen.getAllByTestId('unified-tile')).toHaveLength(2));
+		expect(screen.getAllByTestId('unified-tile')[1]).toHaveAttribute(
+			'href',
+			'/library/artists/Nornir%20Trio/Skuld;Nornir%20Trio%20%26%20Guests;'
+		);
+
+		// The SECOND of two rows that read alike apart from their credit.
+		await fireEvent.click(screen.getAllByTestId('unified-tile')[1]);
+		await waitFor(() => expect(album.adoptLiveLevel).toHaveBeenCalledTimes(1));
+		expect(
+			(album.adoptLiveLevel.mock.calls[0][0] as { rows: readonly { title: string }[] }).rows.map(
+				(row) => row.title
+			)
+		).toEqual(['Play Album', 'Reprise']);
+
+		// Written down: the path THROUGH the artist, with the credit that tells
+		// the two rows apart. Never the reference, which dies with its snapshot,
+		// and never the Albums root, which is a different list.
+		expect(latestRoute()).toEqual({
+			kind: 'artist-album',
+			artist: 'Nornir Trio',
+			album: { title: 'Skuld', credit: 'Nornir Trio & Guests', edition: '' }
+		});
+	});
+
+	it('re-resolves the open page onto the same row when the snapshot moves', async () => {
+		const harness = mountLive();
+
+		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		await fireEvent.click(rowNamed('Nornir Trio'));
+		await waitFor(() =>
+			expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('Nornir Trio')
+		);
+
+		// A refresh, a reconnect or a server-side session loss: every reference
+		// the browser holds is retired at once.
+		const moved: HarnessLiveLibrary = { ...LIVE_LIBRARY, generation: 'gen-2' };
+		harness.openLiveRef.mockImplementation(async (_fetchFn, ref) =>
+			liveOpenResponder(moved)(ref)
+		);
+		harness.rootsStore.set(liveRootsState(moved));
+
+		// The page re-asks Roon for the row its ADDRESS names, under the
+		// generation that replaced the one it opened in.
+		await waitFor(() =>
+			expect(harness.openLiveRef.mock.calls.at(-1)?.[1]).toEqual({
+				generation: 'gen-2',
+				token: 'artist:Nornir Trio'
+			})
+		);
+		await waitFor(() =>
+			expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('Nornir Trio')
+		);
+		expect(screen.queryByTestId('unified-drill-missing')).toBeNull();
+		expect(screen.getAllByTestId('unified-tile')).toHaveLength(2);
+	});
+
+	function rootsResponse(library: HarnessLiveLibrary): Response {
+		const state = liveRootsState(library);
+		return new Response(JSON.stringify({
+			contract: LIBRARY_ROOTS_CONTRACT, kind: 'snapshot',
+			generation: state.generation, coreId: state.coreId, readAt: state.readAt,
+			artists: { count: state.artistCount, rows: state.artistRows },
+			albums: { count: state.albumCount, rows: state.albumRows }
+		}), { headers: { 'content-type': 'application/json' } });
+	}
+
+	it.each(['refresh', 'count-mismatch', 'session-lost'] as const)(
+		'recovers the same addressed page through the real roots store after external %s',
+		async (reason) => {
+			resetLibraryRoots();
+			const moved = { ...LIVE_LIBRARY, generation: 'gen-2' };
+			const fetchFn = vi.fn<typeof fetch>()
+				.mockResolvedValueOnce(rootsResponse(LIVE_LIBRARY))
+				.mockResolvedValueOnce(rootsResponse(moved));
+			const harness = mountLive({
+				rootsSource: libraryRootsStore,
+				loadRoots: vi.fn((_fetch, options) => loadLibraryRoots(fetchFn, options))
+			});
+			await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+			await fireEvent.click(rowNamed('Nornir Trio'));
+			await screen.findByTestId('unified-artist-name');
+			const address = __getNavigationLog().at(-1);
+			harness.openLiveRef.mockImplementation(async (_fetch, ref) => liveOpenResponder(moved)(ref));
+			expect(retireLibraryGeneration({
+				contract: LIBRARY_SESSION_RETIRED_CONTRACT, coreId: 'core-a',
+				retired: 'gen-1', reason
+			})).toBe(true);
+			await waitFor(() => expect(harness.openLiveRef.mock.calls.at(-1)?.[1]).toEqual({
+				generation: 'gen-2', token: 'artist:Nornir Trio'
+			}));
+			expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('Nornir Trio');
+			expect(__getNavigationLog().at(-1)).toEqual(address);
+			expect(fetchFn).toHaveBeenCalledTimes(2);
+			expect(fetchFn.mock.calls[1][0]).toBe('/api/library/roots');
+		}
+	);
+
+	it.each(['suspend', 'supersede'] as const)(
+		'does not start recovery after an owned refresh wait crosses %s',
+		async (change) => {
+			resetLibraryRoots();
+			const pending = deferred<Response>();
+			const fetchFn = vi.fn<typeof fetch>()
+				.mockResolvedValueOnce(rootsResponse(LIVE_LIBRARY))
+				.mockImplementationOnce(() => pending.promise);
+			const harness = mountLive({
+				withContext: true, rootsSource: libraryRootsStore,
+				loadRoots: vi.fn((_fetch, options) => loadLibraryRoots(fetchFn, options))
+			});
+			harness.registered.lifecycle!.resume({
+				cause: 'initial', pageState: buildUnifiedRootPageState()
+			} as CommittedLibraryModeActivation);
+			await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+			const owned = refreshLibraryRootsNow(fetchFn, { coreId: 'core-a' });
+			retireLibraryGeneration({
+				contract: LIBRARY_SESSION_RETIRED_CONTRACT, coreId: 'core-a',
+				retired: 'gen-1', reason: 'refresh'
+			});
+			await waitFor(() => expect(harness.loadRoots).toHaveBeenCalledTimes(2));
+			const options = harness.loadRoots.mock.calls[1][1];
+			expect(options.retirement.isCurrent()).toBe(true);
+			if (change === 'suspend') harness.registered.lifecycle!.suspend();
+			else harness.session.client.isClaimCurrent = () => false;
+			expect(options.retirement.isCurrent()).toBe(false);
+			pending.resolve(rootsResponse(LIVE_LIBRARY));
+			await owned;
+			await harness.loadRoots.mock.results[1].value;
+			expect(fetchFn).toHaveBeenCalledTimes(2);
+		}
+	);
+
+	it.each(['connect', 'reconnect', 'core-lost', 'shutdown', 'read-failed'] as const)(
+		'leaves %s on its lifecycle or error path',
+		async (reason) => {
+			const harness = mountLive();
+			await waitFor(() => expect(harness.loadRoots).toHaveBeenCalledTimes(1));
+			harness.rootsStore.update((state) => ({
+				...state, retirementRevision: state.retirementRevision + 1,
+				retirementReason: reason
+			}));
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(harness.loadRoots).toHaveBeenCalledTimes(1);
+		}
+	);
+
+	it('says a row is gone rather than showing a page, and stays said', async () => {
+		const harness = mountLive();
+
+		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		await fireEvent.click(rowNamed('Nornir Trio'));
+		await waitFor(() =>
+			expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('Nornir Trio')
+		);
+
+		// The artist is gone from the library in the snapshot that replaces this
+		// one — the case the whole re-resolution exists for.
+		const without: HarnessLiveLibrary = {
+			generation: 'gen-2',
+			artists: LIVE_LIBRARY.artists.filter((artist) => artist.name !== 'Nornir Trio')
+		};
+		harness.openLiveRef.mockImplementation(async (_fetchFn, ref) =>
+			liveOpenResponder(without)(ref)
+		);
+		harness.rootsStore.set(liveRootsState(without));
+
+		await waitFor(() =>
+			expect(screen.getByTestId('unified-drill-missing')).toHaveTextContent(
+				'Roon no longer lists “Nornir Trio”.'
+			)
+		);
+		// And it stops there: a snapshot that cannot answer is not asked again,
+		// which is the difference between recovering and hammering the Core.
+		const asked = harness.openLiveRef.mock.calls.length;
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(harness.openLiveRef.mock.calls.length).toBe(asked);
+		expect(screen.queryByTestId('unified-artist-name')?.textContent ?? '').not.toBe(
+			'Alfheim Consort'
+		);
+	});
+
+	it('asks the server for one fresh snapshot when a page is refused as stale', async () => {
+		const harness = mountLive();
+
+		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		await fireEvent.click(rowNamed('Nornir Trio'));
+		await waitFor(() =>
+			expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('Nornir Trio')
+		);
+
+		// The server retired the publication without the browser hearing: every
+		// held reference is refused, and the rows in memory are refused too.
+		harness.loadRoots.mockImplementation(async () => {
+			// A re-read that finds the server still on this generation touches
+			// the store all the same — it went through its loading phase. So
+			// "ask once per snapshot" has to mean the snapshot, not the store
+			// object, or the answer feeds itself.
+			harness.rootsStore.update((state) => ({ ...state }));
+		});
+		harness.openLiveRef.mockResolvedValue({ contract: LIBRARY_OPEN_CONTRACT, kind: 'stale' });
+		const loadsBefore = harness.loadRoots.mock.calls.length;
+		await fireEvent.click(rowNamed('Alfheim Consort'));
+
+		// Recovery is a fresh snapshot, asked for exactly once: re-walking the
+		// address against rows that are themselves retired can only be refused
+		// again, so a second ask under the same snapshot would be a loop.
+		await waitFor(() =>
+			expect(harness.loadRoots.mock.calls.length).toBe(loadsBefore + 1)
+		);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(harness.loadRoots.mock.calls.length).toBe(loadsBefore + 1);
+		expect(screen.getByTestId('unified-drill-missing')).toHaveTextContent(
+			'The library has been re-read since this page opened.'
+		);
+	});
+
+	it("rails the live list by Roon's own rows, never the catalog's", async () => {
+		// The catalog index here describes 50 artists across 26 letters; Roon's
+		// root has 44 across four. The rail addresses positions in the list on
+		// screen, so a rail built from the other source would scroll to the
+		// wrong row — or to none.
+		const library: HarnessLiveLibrary = {
+			generation: 'gen-1',
+			artists: Array.from({ length: 44 }, (_, index) => ({
+				name: `${['Alfa', 'Bravo', 'Charlie', 'Delta'][index % 4]} performer ${index
+					.toString()
+					.padStart(2, '0')}`,
+				albums: []
+			})),
+			albums: []
+		};
+		mountMode({
+			liveLibrary: library,
+			rootsState: liveRootsState(library)
+		});
+
+		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(44));
+		expect(screen.getByTestId('unified-summary')).toHaveTextContent('44 TOTAL');
+		const letters = [...screen.getByTestId('unified-rail').querySelectorAll('button')]
+			.filter((button) => !button.hasAttribute('disabled'))
+			.map((button) => button.textContent?.trim());
+		expect(letters).toEqual(['A', 'B', 'C', 'D']);
+	});
+
+	it('re-reads the root when the reader opens a live scope', async () => {
+		const harness = mountLive();
+		await waitFor(() => expect(harness.loadRoots).toHaveBeenCalledTimes(1));
+
+		// The plan's scope-activation trigger: coming back to a list re-asks the
+		// server, which is the cheap confirm when nothing moved and the only way
+		// a record added since the reader last looked appears.
+		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
+		await waitFor(() => expect(harness.loadRoots).toHaveBeenCalledTimes(2));
+		await fireEvent.click(screen.getByTestId('unified-scope-artists'));
+		await waitFor(() => expect(harness.loadRoots).toHaveBeenCalledTimes(3));
+		// And a scope that does not read Roon's roots does not re-read them.
+		await fireEvent.click(screen.getByTestId('unified-scope-genres'));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(harness.loadRoots).toHaveBeenCalledTimes(3);
+	});
+
+	it('acts on the reference the reader clicked, with no selector beside it', async () => {
+		const album = fakeModeAlbumController();
+		const actions = fakeModeActionController();
+		setZonesSnapshot([
+			{
+				zone_id: 'zone-2',
+				display_name: 'Kitchen',
+				state: 'paused' as const,
+				is_play_allowed: true,
+				is_pause_allowed: true,
+				is_previous_allowed: true,
+				is_next_allowed: true,
+				is_seek_allowed: true,
+				outputs: []
+			}
+		]);
+		setSelectedZone('zone-2');
+		mountLive({ albumController: album.controller, albumActionController: actions });
+
+		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		await fireEvent.click(rowNamed('Alfheim Consort'));
+		await waitFor(() => expect(screen.getAllByTestId('unified-tile')).toHaveLength(1));
+		await fireEvent.click(screen.getAllByTestId('unified-tile')[0]);
+		await waitFor(() => expect(album.adoptLiveLevel).toHaveBeenCalled());
+
+		// The level as the page holds it: one whole-album verb row and its two
+		// track rows, each carrying its own reference. The single-verb-row rule
+		// itself is `LibraryAlbumController`'s, and is proved in its own tests.
+		const albumRef = { generation: 'gen-1', token: 'album:Alfheim Consort:Winter Vespers:Alfheim Consort' };
+		album.store.update((state) => ({
+			...state,
+			phase: 'details',
+			title: 'Winter Vespers',
+			artist: 'Alfheim Consort',
+			actionsAvailable: true,
+			albumActionsAvailable: true,
+			orderedTracks: [
+				{ index: 0, title: 'Kyrie' },
+				{ index: 1, title: 'Gloria' }
+			],
+			live: {
+				albumRef,
+				playRef: { generation: 'gen-1', token: `play:${albumRef.token}:0` },
+				trackRefs: [
+					{ generation: 'gen-1', token: `track:${albumRef.token}:0` },
+					{ generation: 'gen-1', token: `track:${albumRef.token}:1` }
+				]
+			}
+		}) as unknown as LibraryAlbumState);
+
+		await fireEvent.click(await screen.findByTestId('unified-album-play'));
+		expect(actions.begin).toHaveBeenNthCalledWith(1, {
+			ref: { generation: 'gen-1', token: `play:${albumRef.token}:0` },
+			zoneId: 'zone-2',
+			tabId: expect.any(String),
+			generation: 1,
+			desiredSemantic: 'play-now'
+		});
+
+		await fireEvent.click(screen.getByTestId('unified-track-action-1'));
+		// The SECOND track's own reference, and no track selector beside it: the
+		// reference names the row, so a selector could only disagree with it.
+		expect(actions.begin).toHaveBeenNthCalledWith(2, {
+			ref: { generation: 'gen-1', token: `track:${albumRef.token}:1` },
+			zoneId: 'zone-2',
+			tabId: expect.any(String),
+			generation: 1,
+			desiredSemantic: 'play-now'
+		});
 	});
 });
+
 
 describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 	beforeEach(() => {
@@ -3265,7 +3247,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 	});
 
 	it('typing anywhere in the mounted view opens the palette seeded', async () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		await fireEvent.keyDown(window, { key: 'b' });
 
@@ -3274,7 +3256,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 	});
 
 	it('never captures while a form control has focus', async () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		// The sort control is a button now (prototype `.sortc`); the capture
 		// guard is about text-editing controls, so exercise a real input.
@@ -3293,8 +3275,25 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		input.remove();
 	});
 
+	it('still captures typing after the volume slider has been used (issue #16)', async () => {
+		mountMode({ liveLibrary: harnessLibrary() });
+
+		// The volume control is an `<input type="range">` and keeps focus
+		// after a drag, the way native sliders do. No printable key types
+		// into it, so the capture guard must not treat it as a text field.
+		const slider = document.createElement('input');
+		slider.type = 'range';
+		document.body.appendChild(slider);
+		slider.focus();
+		await fireEvent.keyDown(slider, { key: 'b' });
+
+		expect(screen.getByTestId('unified-palette')).toBeInTheDocument();
+		expect((screen.getByTestId('unified-palette-input') as HTMLInputElement).value).toBe('b');
+		slider.remove();
+	});
+
 	it('Cmd/Ctrl-K toggles the palette as an explicit chord', async () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		await fireEvent.keyDown(window, { key: 'k', metaKey: true });
 		expect(screen.getByTestId('unified-palette')).toBeInTheDocument();
@@ -3304,7 +3303,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 	});
 
 	it('opens from the top-bar Find affordance', async () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		await fireEvent.click(screen.getByTestId('unified-find'));
 
@@ -3312,7 +3311,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 	});
 
 	it('claims a semantic Library search intent and opens the Unified palette seeded', async () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		publishLibraryIntent({
 			kind: 'track',
@@ -3332,7 +3331,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 	// matches the loaded library index should open that item's page
 	// directly instead of falling back to a palette search.
 	it('claims an artist intent uniquely matching the index and opens the artist page', async () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		publishLibraryIntent({
 			kind: 'artist',
@@ -3352,7 +3351,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 	});
 
 	it('falls back to the palette when an artist intent name has no index match', async () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		publishLibraryIntent({
 			kind: 'artist',
@@ -3368,164 +3367,8 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		expect(get(pendingLibraryIntentStore)).toBeNull();
 	});
 
-	// gh10-1: the album branch must resolve only through catalogLocalId,
-	// mirroring the album-tile drill rule (UnifiedScopeViews.svelte). An
-	// album intent that matches a browse-fallback index entry (synthetic
-	// `browse:album:N` id, no catalogLocalId) must fall back to the palette
-	// exactly like a non-matching name, not open a broken album page.
-	it('falls back to the palette for an album intent matching a browse-fallback entry with no catalog identity', async () => {
-		const albums: LibraryAlbumEntry[] = [
-			{
-				id: 'browse:album:0',
-				title: 'Fallback Album',
-				artist: 'Fallback Artist',
-				searchKey: 'fallback album — fallback artist'
-			}
-		];
-		mountMode({
-			indexState: readyState({ albums, albumBuckets: bucketsFor(albums) })
-		});
 
-		publishLibraryIntent({
-			kind: 'album',
-			destination: 'search',
-			query: 'Fallback Album',
-			display: { title: 'Fallback Album', artist: 'Fallback Artist' }
-		});
-
-		await waitFor(() =>
-			expect(screen.getByTestId('unified-palette-input')).toHaveValue('Fallback Album')
-		);
-		expect(screen.queryByTestId('unified-album-page')).toBeNull();
-		expect(get(pendingLibraryIntentStore)).toBeNull();
-	});
-
-	it('claims an album intent uniquely matching the catalog index and opens the album page', async () => {
-		const entry = albumEntry('alb-1', 'Catalog Album', 'art-1');
-		const albums: LibraryAlbumEntry[] = [{ ...entry, catalogLocalId: entry.id }];
-		const album = fakeModeAlbumController();
-		mountMode({
-			indexState: readyState({ albums, albumBuckets: bucketsFor(albums) }),
-			albumController: album.controller,
-			albumActionController: fakeModeActionController()
-		});
-
-		publishLibraryIntent({
-			kind: 'album',
-			destination: 'search',
-			query: 'Catalog Album',
-			display: { title: 'Catalog Album', artist: entry.artist }
-		});
-
-		await waitFor(() => expect(album.open).toHaveBeenCalled());
-		expect(screen.getByTestId('unified-album-page')).toBeInTheDocument();
-		expect(screen.queryByTestId('unified-palette')).toBeNull();
-		expect(get(pendingLibraryIntentStore)).toBeNull();
-	});
-
-	it('serves the composition surface from the composer drill (Slice 6)', async () => {
-		setZonesSnapshot([
-			{
-				zone_id: 'zone-1',
-				display_name: 'Living Room',
-				state: 'paused',
-				is_play_allowed: true,
-				is_pause_allowed: true,
-				is_previous_allowed: true,
-				is_next_allowed: true,
-				is_seek_allowed: true,
-				outputs: []
-			}
-		]);
-		const composersStore = fakeNamedCountsStore([
-			{ label: 'Philip Glass', albumCount: 12, itemKey: 'composer-philip-glass', imageKey: null }
-		]);
-		const drillStore = fakeDrillStore([
-			{ title: 'Glassworks', artist: 'Philip Glass', imageKey: null }
-		]);
-		const compositionStore = writable<
-			import('$lib/library/CompositionBrowseController').CompositionBrowseState
-		>({
-			phase: 'idle',
-			composerLabel: null,
-			compositions: [],
-			pages: [],
-			actionBusy: false,
-			notice: null,
-			error: null
-		});
-		const openForComposer = vi.fn().mockResolvedValue(undefined);
-		const openComposition = vi.fn().mockResolvedValue(undefined);
-		const runAction = vi.fn().mockResolvedValue(undefined);
-		const composition = {
-			subscribe: compositionStore.subscribe,
-			openForComposer,
-			openComposition,
-			runAction,
-			backToCompositions: vi.fn().mockResolvedValue(undefined),
-			reset: vi.fn()
-		} as unknown as import('$lib/library/CompositionBrowseController').CompositionBrowseController;
-		mountMode({
-			indexState: readyState(),
-			composersStore,
-			drillStore,
-			compositionController: composition
-		});
-
-		await fireEvent.click(screen.getByTestId('unified-find'));
-		await waitFor(() => expect(composersStore.load).toHaveBeenCalledTimes(1));
-		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
-			target: { value: 'philip glass' }
-		});
-		const composerRow = await screen.findByText('Composer: Philip Glass');
-		await fireEvent.mouseMove(composerRow.closest('button')!);
-		await fireEvent.click(composerRow.closest('button')!);
-		await waitFor(() => screen.getByTestId('unified-drill-compositions-toggle'));
-
-		await fireEvent.click(screen.getByTestId('unified-drill-compositions-toggle'));
-		expect(openForComposer).toHaveBeenCalledWith(expect.anything(), 'Philip Glass');
-		compositionStore.set({
-			phase: 'compositions',
-			composerLabel: 'Philip Glass',
-			compositions: [{ title: 'Glassworks: Opening', subtitle: '', itemKey: 'k-opening' }],
-			pages: [],
-			actionBusy: false,
-			notice: null,
-			error: null
-		});
-		await fireEvent.click(await screen.findByTestId('unified-composition-row-0'));
-		expect(openComposition).toHaveBeenCalledWith(
-			expect.anything(),
-			expect.objectContaining({ itemKey: 'k-opening' })
-		);
-		compositionStore.set({
-			phase: 'page',
-			composerLabel: 'Philip Glass',
-			compositions: [{ title: 'Glassworks: Opening', subtitle: '', itemKey: 'k-opening' }],
-			pages: [
-				{
-					title: 'Glassworks: Opening',
-					actions: [{ title: 'Play Work', itemKey: 'k-playwork' }],
-					recordings: [{ title: 'Glassworks — CBS', subtitle: 'Philip Glass', itemKey: 'k-rec' }]
-				}
-			],
-			actionBusy: false,
-			notice: null,
-			error: null
-		});
-		expect(
-			(await screen.findByTestId('unified-composition-title')).textContent
-		).toBe('Glassworks: Opening');
-		// One zone executes Play Work directly with that zone.
-		await fireEvent.click(screen.getByTestId('unified-composition-action-0'));
-		expect(runAction).toHaveBeenCalledWith(
-			expect.anything(),
-			{ title: 'Play Work', itemKey: 'k-playwork' },
-			'zone-1'
-		);
-	});
-
-	it('opens a composer page and Back restores the same query and selected row', async () => {
+	it('opens a live composer page and Back restores the same palette query and row', async () => {
 		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
 		const composersStore = fakeNamedCountsStore([
 			{
@@ -3535,13 +3378,17 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 				imageKey: null
 			}
 		]);
-		const drillStore = fakeDrillStore([
-			{ title: 'Glassworks', artist: 'Philip Glass', imageKey: null }
-		]);
+		const openLiveRoot = vi.fn(async () =>
+			standaloneLiveLevel('Composers', [
+				{ token: 'composer:glass', title: 'Philip Glass', kind: 'composer' }
+			])
+		);
+		const openLiveRef = vi.fn(async () => standaloneLiveLevel('Philip Glass', []));
 		mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			composersStore,
-			drillStore
+			openLiveRoot,
+			openLiveRef
 		});
 
 		await fireEvent.click(screen.getByTestId('unified-find'));
@@ -3550,28 +3397,28 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 			target: { value: 'philip glass' }
 		});
 		const composerRow = await screen.findByText('Composer: Philip Glass');
-		await fireEvent.mouseMove(composerRow.closest('button')!);
-		await fireEvent.click(composerRow.closest('button')!);
+		await fireEvent.mouseMove(composerRow.closest('a,button')!);
+		await fireEvent.click(composerRow.closest('a,button')!);
 
-		await waitFor(() =>
-			expect(drillStore.load).toHaveBeenCalledWith(
-				expect.anything(),
-				'composers',
-				'Philip Glass'
-			)
+		expect(await screen.findByTestId('unified-live-collection-page')).toHaveAttribute(
+			'data-level-kind',
+			'composer'
 		);
+		expect(openLiveRoot).toHaveBeenCalledWith(expect.anything(), 'composers');
 		expect(screen.queryByTestId('unified-palette')).toBeNull();
-		expect(screen.getByTestId('unified-drill-label')).toHaveTextContent('Philip Glass');
 
-		await fireEvent.click(screen.getByTestId('unified-drill-back'));
-
+		await fireEvent.click(
+			within(screen.getByTestId('unified-live-collection-page')).getByRole('button', {
+				name: /^←/u
+			})
+		);
 		expect(browserBack).not.toHaveBeenCalled();
 		expect(
 			__getNavigationLog().filter((entry) => entry.operation === 'pushState')
 		).toHaveLength(0);
 		expect(screen.getByTestId('unified-palette')).toBeInTheDocument();
 		expect(screen.getByTestId('unified-palette-input')).toHaveValue('philip glass');
-		expect(screen.getByText('Composer: Philip Glass').closest('button')).toHaveClass('sel');
+		expect(screen.getByText('Composer: Philip Glass')).toBeInTheDocument();
 		browserBack.mockRestore();
 	});
 
@@ -3595,7 +3442,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 			error: null
 		});
 		mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			paletteSearchStore
 		});
 
@@ -3603,7 +3450,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'dear theodosia' }
 		});
-		const songRow = screen.getByText('Dear Theodosia').closest('button')!;
+		const songRow = screen.getByText('Dear Theodosia').closest('a,button')!;
 		await fireEvent.click(songRow);
 
 		expect(screen.queryByTestId('unified-palette')).toBeNull();
@@ -3613,7 +3460,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 
 		expect(screen.getByTestId('unified-palette')).toBeInTheDocument();
 		expect(screen.getByTestId('unified-palette-input')).toHaveValue('dear theodosia');
-		expect(screen.getByText('Dear Theodosia').closest('button')).toHaveClass('sel');
+		expect(screen.getByText('Dear Theodosia').closest('a,button')).toHaveClass('sel');
 	});
 
 	it('starts one background relationship lookup without delaying a song action', async () => {
@@ -3656,7 +3503,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		const relationship = vi.fn(() => pendingRelationship.promise);
 		const action = vi.fn().mockResolvedValue({ authorityRetired: false });
 		mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			paletteSearchStore,
 			songRelationshipClient: { relationship },
 			songActionController: new UnifiedSongActionController({ action })
@@ -3666,7 +3513,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'dear theodosia' }
 		});
-		await fireEvent.click(screen.getByText('Dear Theodosia').closest('button')!);
+		await fireEvent.click(screen.getByText('Dear Theodosia').closest('a,button')!);
 
 		expect(relationship).toHaveBeenCalledTimes(1);
 		expect(screen.getByTestId('unified-song-relationship-status')).toHaveTextContent(
@@ -3723,7 +3570,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		const relationship = vi.fn().mockRejectedValue(new Error('Album links are unavailable'));
 		const action = vi.fn().mockResolvedValue({ authorityRetired: false });
 		mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			paletteSearchStore,
 			songRelationshipClient: { relationship },
 			songActionController: new UnifiedSongActionController({ action })
@@ -3733,7 +3580,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'dear theodosia' }
 		});
-		await fireEvent.click(screen.getByText('Dear Theodosia').closest('button')!);
+		await fireEvent.click(screen.getByText('Dear Theodosia').closest('a,button')!);
 
 		await waitFor(() =>
 			expect(screen.getByTestId('unified-song-relationship-status')).toHaveTextContent(
@@ -3766,7 +3613,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		});
 		const relationship = vi.fn().mockRejectedValue(new Error('unavailable'));
 		mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			paletteSearchStore,
 			songRelationshipClient: { relationship }
 		});
@@ -3775,7 +3622,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'dear theodosia' }
 		});
-		await fireEvent.click(screen.getByText('Dear Theodosia').closest('button')!);
+		await fireEvent.click(screen.getByText('Dear Theodosia').closest('a,button')!);
 
 		// The track page owns the surface: the library body is mounted but
 		// hidden, and Back to the results restores it.
@@ -3783,87 +3630,6 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		expect(screen.getByTestId('unified-pane').closest('.body')).toHaveAttribute('hidden');
 		await fireEvent.click(screen.getByTestId('unified-song-back'));
 		expect(screen.getByTestId('unified-pane').closest('.body')).not.toHaveAttribute('hidden');
-	});
-
-	it('opens the related album group from the song panel', async () => {
-		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
-		const paletteSearchStore = writable<PaletteSearchState>({
-			phase: 'ready',
-			query: 'river',
-			groups: [
-				{
-					title: 'Tracks',
-					rows: [
-						{
-							resultId: 'song-river',
-							title: 'River',
-							subtitle: 'Joni Mitchell',
-							imageKey: null
-						}
-					]
-				}
-			],
-			error: null
-		});
-		const relationship = vi.fn().mockResolvedValue({
-			songTitle: 'River',
-			albums: [
-				{
-					albumLocalId: 'album-blue',
-					artistLocalId: 'artist-joni',
-					title: 'Blue',
-					artist: 'Joni Mitchell',
-					editionText: 'Remaster'
-				}
-			],
-			composerLabels: []
-		});
-		const albumHarness = fakeModeAlbumController();
-		mountMode({
-			indexState: readyState({
-				albums: [
-					{
-						...albumEntry('album-blue', 'Blue', 'artist-joni'),
-						artist: 'Joni Mitchell',
-						catalogLocalId: 'album-blue'
-					}
-				]
-			}),
-			paletteSearchStore,
-			songRelationshipClient: { relationship },
-			albumController: albumHarness.controller,
-			albumActionController: fakeModeActionController()
-		});
-
-		await fireEvent.click(screen.getByTestId('unified-find'));
-		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
-			target: { value: 'river' }
-		});
-		await fireEvent.click(screen.getByText('River').closest('button')!);
-		await waitFor(() =>
-			expect(screen.getByTestId('unified-song-album-link')).toBeEnabled()
-		);
-		await fireEvent.click(screen.getByTestId('unified-song-album-link'));
-
-		expect(albumHarness.open).toHaveBeenCalledWith(
-			expect.objectContaining({
-				albumLocalId: 'album-blue'
-			})
-		);
-		expect(albumHarness.open.mock.calls[0][0]).not.toHaveProperty('candidate');
-		expect(screen.queryByTestId('unified-track-page')).toBeNull();
-		expect(screen.getByTestId('unified-album-page')).toBeInTheDocument();
-
-		await fireEvent.click(screen.getByTestId('unified-album-back'));
-
-		expect(browserBack).not.toHaveBeenCalled();
-		expect(
-			__getNavigationLog().filter((entry) => entry.operation === 'pushState')
-		).toHaveLength(0);
-		expect(screen.getByTestId('unified-palette')).toBeInTheDocument();
-		expect(screen.getByTestId('unified-palette-input')).toHaveValue('river');
-		expect(screen.getByText('River').closest('button')).toHaveClass('sel');
-		browserBack.mockRestore();
 	});
 
 	it('does not apply a late relationship from an older song to the new panel', async () => {
@@ -3913,7 +3679,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 				composerLabels: []
 			});
 		mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			paletteSearchStore,
 			clearPaletteSearchData: vi.fn(async () => {}),
 			songRelationshipClient: { relationship }
@@ -3923,16 +3689,19 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'songs' }
 		});
-		await fireEvent.click(screen.getByText('First Song').closest('button')!);
+		await fireEvent.click(screen.getByText('First Song').closest('a,button')!);
 		await fireEvent.click(screen.getByRole('button', { name: 'Close search' }));
 
 		await fireEvent.click(screen.getByTestId('unified-find'));
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'songs' }
 		});
-		await fireEvent.click(screen.getByText('Second Song').closest('button')!);
+		await fireEvent.click(screen.getByText('Second Song').closest('a,button')!);
+		// The panel's own heading is what says which song it is now; the album
+		// link is no longer offered here, because there is no catalog album
+		// page for it to open.
 		await waitFor(() =>
-			expect(screen.getByTestId('unified-song-album-link')).toBeEnabled()
+			expect(screen.getByTestId('unified-song-title')).toHaveTextContent('Second Song')
 		);
 
 		firstRelationship.resolve({
@@ -3944,7 +3713,6 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await Promise.resolve();
 
 		expect(screen.getByTestId('unified-song-title')).toHaveTextContent('Second Song');
-		expect(screen.getByTestId('unified-song-album-link')).toBeEnabled();
 		expect(screen.getByTestId('unified-song-relationship-status')).toHaveTextContent(
 			'One matching album'
 		);
@@ -3985,7 +3753,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		const action = vi.fn().mockResolvedValue({ authorityRetired: false });
 		const songActionController = new UnifiedSongActionController({ action });
 		mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			paletteSearchStore,
 			songActionController
 		});
@@ -3994,7 +3762,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'dear theodosia' }
 		});
-		await fireEvent.click(screen.getByText('Dear Theodosia').closest('button')!);
+		await fireEvent.click(screen.getByText('Dear Theodosia').closest('a,button')!);
 		await fireEvent.click(screen.getByTestId('unified-song-add-next'));
 
 		await waitFor(() =>
@@ -4052,7 +3820,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 			.mockResolvedValue({ authorityRetired: false });
 		const songActionController = new UnifiedSongActionController({ action });
 		mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			paletteSearchStore,
 			clearPaletteSearchData: vi.fn(async () => {}),
 			songActionController
@@ -4062,7 +3830,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'songs' }
 		});
-		await fireEvent.click(screen.getByText('First Song').closest('button')!);
+		await fireEvent.click(screen.getByText('First Song').closest('a,button')!);
 		await fireEvent.click(screen.getByTestId('unified-song-play-now'));
 		await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
 		await fireEvent.click(screen.getByRole('button', { name: 'Close search' }));
@@ -4071,7 +3839,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'songs' }
 		});
-		await fireEvent.click(screen.getByText('Second Song').closest('button')!);
+		await fireEvent.click(screen.getByText('Second Song').closest('a,button')!);
 		expect(screen.getByTestId('unified-song-action-busy')).toBeInTheDocument();
 
 		firstAction.resolve({ authorityRetired: true });
@@ -4094,7 +3862,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 	it('clears server-owned song authority when search is explicitly closed', async () => {
 		const clearPaletteSearchData = vi.fn(async () => {});
 		const harness = mountMode({
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			clearPaletteSearchData
 		});
 
@@ -4111,7 +3879,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		const album = fakeModeAlbumController();
 		const harness = mountMode({
 			withContext: true,
-			indexState: readyState(),
+			liveLibrary: harnessLibrary(),
 			albumController: album.controller,
 			albumActionController: fakeModeActionController()
 		});
@@ -4120,7 +3888,15 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 			pageState: buildUnifiedLibraryPageState({
 				scope: 'artists',
 				collectionDrill: null,
-				itemTarget: { kind: 'album', localId: 'alb-1' },
+				itemTarget: {
+					kind: 'collection',
+					locator: {
+						sourceContract: COLLECTION_DRILL_SOURCE_CONTRACT,
+						hierarchy: 'genres' as const,
+						collectionExactName: 'Bright Machinery',
+						rendering: { exactTitle: 'Arrival', exactCredit: 'Artist of Arrival' }
+					}
+				},
 				filterText: '',
 				surpriseSeed: null
 			})
@@ -4139,7 +3915,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 	});
 
 	it('capture never leaks after suspend', async () => {
-		const harness = mountMode({ withContext: true, indexState: readyState() });
+		const harness = mountMode({ withContext: true, liveLibrary: harnessLibrary() });
 		harness.registered.lifecycle!.resume({
 			pageState: null
 		} as unknown as CommittedLibraryModeActivation);
@@ -4169,50 +3945,20 @@ describe('UnifiedLibraryMode — smart-filter pages (plan §3.2 slice 7)', () =>
 		clearPendingLibraryPageStateWrite();
 	});
 
-	function countedIndex(): LibraryIndexState {
-		const artists: LibraryArtistEntry[] = [
-			{
-				id: 'art-big',
-				name: 'Big Cat',
-				searchKey: 'big cat',
-				albumCount: 40,
-				countComplete: true,
-				catalogLocalId: 'art-big'
-			},
-			{
-				id: 'art-mid',
-				name: 'Mid Cat',
-				searchKey: 'mid cat',
-				albumCount: 35,
-				countComplete: true,
-				catalogLocalId: 'art-mid'
-			},
-			{
-				id: 'art-two',
-				name: 'Two Cat',
-				searchKey: 'two cat',
-				albumCount: 2,
-				countComplete: true,
-				catalogLocalId: 'art-two'
-			},
-			{
-				id: 'art-quoted-one',
-				name: '“Weird One”',
-				searchKey: '“weird one”',
-				albumCount: 1,
-				countComplete: true,
-				catalogLocalId: 'art-quoted-one'
-			},
-			{
-				id: 'art-numbered-one',
-				name: '10cc One',
-				searchKey: '10cc one',
-				albumCount: 1,
-				countComplete: true,
-				catalogLocalId: 'art-numbered-one'
-			}
-		];
-		return readyState({ artists, artistBuckets: [] });
+	/**
+	 * The counted library, as Roon's own Artists root renders it: five rows,
+	 * each carrying the count Roon printed in its own subtitle.
+	 */
+	function countedLibrary(): HarnessLiveLibrary {
+		return harnessLibrary({
+			artists: [
+				{ name: 'Big Cat', albumCount: 40, albums: [] },
+				{ name: 'Mid Cat', albumCount: 35, albums: [] },
+				{ name: 'Two Cat', albumCount: 2, albums: [] },
+				{ name: '\u201CWeird One\u201D', albumCount: 1, albums: [] },
+				{ name: '10cc One', albumCount: 1, albums: [] }
+			]
+		});
 	}
 
 	function restoredFilterActivation(filterText: string): CommittedLibraryModeActivation {
@@ -4228,7 +3974,7 @@ describe('UnifiedLibraryMode — smart-filter pages (plan §3.2 slice 7)', () =>
 	}
 
 	it('applies a palette count filter as a history-backed filter page', async () => {
-		mountMode({ indexState: countedIndex() });
+		mountMode({ liveLibrary: countedLibrary() });
 
 		await fireEvent.click(screen.getByTestId('unified-find'));
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
@@ -4253,6 +3999,8 @@ describe('UnifiedLibraryMode — smart-filter pages (plan §3.2 slice 7)', () =>
 		expect(screen.getByTestId('unified-filter-results')).toHaveClass('alist');
 		// Count-descending, then key: Big Cat (40) before Mid Cat (35).
 		const rows = screen.getAllByTestId('unified-filter-artist');
+		expect(rows[0].tagName).toBe('A');
+		expect(rows[0]).toHaveAttribute('href', '/library/artists/Big%20Cat');
 		expect(rows[0]).toHaveClass('arow');
 		expect(rows[0].querySelector('.an')).toHaveTextContent('Big Cat');
 		expect(rows[0].querySelector('.ac')).toHaveTextContent('40');
@@ -4261,15 +4009,17 @@ describe('UnifiedLibraryMode — smart-filter pages (plan §3.2 slice 7)', () =>
 			expect.stringContaining('Big Cat'),
 			expect.stringContaining('Mid Cat')
 		]);
+		rows[0].addEventListener('click', (event) => event.preventDefault(), { once: true });
+		await fireEvent.click(rows[0], { ctrlKey: true });
+		expect(screen.getByTestId('unified-filter-results')).toBeInTheDocument();
 
 		const pushes = __getNavigationLog().filter((entry) => entry.operation === 'pushState');
 		expect(pushes).toHaveLength(1);
-		expect(pushes[0].state).toMatchObject({
-			library: {
-				libraryView: 'unified',
-				snapshot: expect.objectContaining({ scope: 'artists', filterText: '>30 albums' })
-			}
+		expect(decodeLibraryRoute(new URL(pushes[0].url))).toEqual({
+			kind: 'artist-filter',
+			filter: '>30 albums'
 		});
+		expect(pushes[0].state).toEqual({});
 
 		// Filter rows drill to the artist.
 		await fireEvent.click(rows[0]);
@@ -4278,7 +4028,7 @@ describe('UnifiedLibraryMode — smart-filter pages (plan §3.2 slice 7)', () =>
 
 	it('the Back affordance clears the filter and traverses its history entry', async () => {
 		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
-		mountMode({ indexState: countedIndex() });
+		mountMode({ liveLibrary: countedLibrary() });
 
 		await fireEvent.click(screen.getByTestId('unified-find'));
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
@@ -4301,7 +4051,7 @@ describe('UnifiedLibraryMode — smart-filter pages (plan §3.2 slice 7)', () =>
 	});
 
 	it('restores a filter page from committed page state without self-pushing', async () => {
-		const harness = mountMode({ withContext: true, indexState: countedIndex() });
+		const harness = mountMode({ withContext: true, liveLibrary: countedLibrary() });
 
 		harness.registered.lifecycle!.resume(restoredFilterActivation('5+ albums'));
 
@@ -4317,7 +4067,7 @@ describe('UnifiedLibraryMode — smart-filter pages (plan §3.2 slice 7)', () =>
 	});
 
 	it('uses the reference library order for tied count-filter rows', async () => {
-		const harness = mountMode({ withContext: true, indexState: countedIndex() });
+		const harness = mountMode({ withContext: true, liveLibrary: countedLibrary() });
 
 		harness.registered.lifecycle!.resume(restoredFilterActivation('one album'));
 
@@ -4331,24 +4081,71 @@ describe('UnifiedLibraryMode — smart-filter pages (plan §3.2 slice 7)', () =>
 		).toEqual(['“Weird One”', '10cc One']);
 	});
 
-	it('gates a restored filter page on incomplete Roon artist-count coverage', async () => {
+	it('counts a filter over Roon\u2019s own Artists root, not the stored index', async () => {
+		// The two sources disagree on purpose. The index holds the counts this
+		// page used to read; the live roots hold a DIFFERENT library, which is
+		// the one on screen. A filter that still read the index would answer
+		// about rows the reader cannot see.
 		const harness = mountMode({
 			withContext: true,
-			indexState: { ...countedIndex(), capabilities: INCOMPLETE_ARTIST_COUNTS_CAPABILITIES }
+			rootsState: liveRootsState({
+				generation: 'gen-live',
+				artists: [
+					{ name: 'Live Forty', albumCount: 40, albums: [] },
+					{ name: 'Live Two', albumCount: 2, albums: [] }
+				],
+				albums: []
+			})
 		});
 
 		harness.registered.lifecycle!.resume(restoredFilterActivation('>30 albums'));
 
 		await waitFor(() =>
-			expect(screen.getByTestId('unified-filter-gated').textContent).toContain(
-				'Counts are incomplete'
-			)
+			expect(screen.getByTestId('unified-filter-summary')).toHaveTextContent('1 ARTISTS')
 		);
-		expect(screen.queryByTestId('unified-filter-results')).toBeNull();
+		expect(
+			screen
+				.getAllByTestId('unified-filter-artist')
+				.map((row) => row.querySelector('.an')?.textContent)
+		).toEqual(['Live Forty']);
+		// And nothing from the stored index leaks in beside it.
+		expect(screen.queryByText('Big Cat')).toBeNull();
+	});
+
+	it('does not test an artist Roon gave no album count, and says how many', async () => {
+		// `undefined` is not zero. A row Roon printed no count for cannot match
+		// a numeric predicate, and inventing a zero for it would put a number on
+		// screen the library never said.
+		const harness = mountMode({
+			withContext: true,
+			rootsState: liveRootsState({
+				generation: 'gen-live',
+				artists: [
+					{ name: 'Counted One', albumCount: 1, albums: [] },
+					{ name: 'Counted Also One', albumCount: 1, albums: [] },
+					{ name: 'No Count At All', albumCount: null, albums: [] }
+				],
+				albums: []
+			})
+		});
+
+		harness.registered.lifecycle!.resume(restoredFilterActivation('one album'));
+
+		await waitFor(() =>
+			expect(screen.getByTestId('unified-filter-summary')).toHaveTextContent('2 ARTISTS')
+		);
+		expect(
+			screen
+				.getAllByTestId('unified-filter-artist')
+				.map((row) => row.querySelector('.an')?.textContent)
+		).toEqual(['Counted Also One', 'Counted One']);
+		expect(screen.getByTestId('unified-filter-uncounted').textContent).toContain(
+			'1 of 3'
+		);
 	});
 
 	it('degrades unparseable restored filter text honestly', async () => {
-		const harness = mountMode({ withContext: true, indexState: countedIndex() });
+		const harness = mountMode({ withContext: true, liveLibrary: countedLibrary() });
 
 		harness.registered.lifecycle!.resume(restoredFilterActivation('bowie'));
 
@@ -4359,256 +4156,9 @@ describe('UnifiedLibraryMode — smart-filter pages (plan §3.2 slice 7)', () =>
 	});
 });
 
-describe('UnifiedLibraryMode — Playlists scope (Slice 7)', () => {
-	const SMART_ID = 'aa'.repeat(20);
-	const MANUAL_ID = 'bb'.repeat(20);
-
-	const PLAYLIST_ENTRIES: PlaylistSummaryView[] = [
-		{
-			playlistId: SMART_ID,
-			name: 'Last Year',
-			kind: 'smart',
-			trackCount: 481,
-			openable: true
-		},
-		{
-			playlistId: MANUAL_ID,
-			name: 'Tidal Picks',
-			kind: 'manual',
-			trackCount: null,
-			openable: false,
-			unopenableReason: 'streaming-service playlists are not supported'
-		}
-	];
-
-	const CONTENTS: Record<string, Omit<PlaylistContentsResponse, 'status'>> = {
-		[SMART_ID]: {
-			playlistId: SMART_ID,
-			name: 'Last Year',
-			kind: 'smart',
-			totalCount: 481,
-			truncated: true,
-			items: [
-				{
-					position: 0,
-					title: 'Defying Gravity',
-					artist: 'Orlando Ballet Chorus',
-					albumTitle: 'Wicked',
-					lengthSeconds: 305,
-					authority: {
-						state: 'resolver-capable',
-						selectionId: 'playlist-selection-1'
-					}
-				},
-				{
-					position: 1,
-					title: 'Off Catalog',
-					artist: 'Someone',
-					albumTitle: '',
-					lengthSeconds: null,
-					authority: {
-						state: 'unavailable',
-						reason: {
-							code: 'source-unavailable',
-							message: 'this track is not available in the current source'
-						}
-					}
-				}
-			]
-		}
-	};
-
-	beforeEach(() => {
-		setZonesSnapshot([]);
-	});
-
-	it('hides the Playlists chip when the base native capability is unavailable (no play-gate coupling)', async () => {
-		mountMode({
-			indexState: readyState({
-				capabilities: {
-					...CATALOG_CAPABILITIES,
-					// Play features up, playlist gate down: the chip rides the BASE
-					// native capability, never the play/date gates.
-					playFeatures: true,
-					playlistFeatures: false,
-					playlistFeaturesDisabledReason:
-						'the native playlist list has not been pulled yet; it arrives with the next catalog refresh'
-				}
-			})
-		});
-
-		expect(screen.queryByTestId('unified-scope-playlists')).toBeNull();
-		expect(screen.queryByText('Playlists')).toBeNull();
-		// Most played (play gate) is still present — the gates are independent.
-		expect(screen.getByTestId('unified-scope-most-played')).toBeInTheDocument();
-	});
-
-	it('degrades a restored Playlists page to the carried reason when the feature is gone', async () => {
-		const harness = mountMode({
-			withContext: true,
-			indexState: readyState({
-				capabilities: {
-					...CATALOG_CAPABILITIES,
-					playlistFeatures: false,
-					playlistFeaturesDisabledReason: 'no native catalog snapshot is available'
-				}
-			}),
-			playlistsStore: fakePlaylistsStore(PLAYLIST_ENTRIES)
-		});
-		harness.registered.lifecycle!.resume({
-			cause: 'initial',
-			pageState: buildUnifiedLibraryPageState({
-				scope: 'playlists',
-				collectionDrill: null,
-				itemTarget: null,
-				filterText: '',
-				surpriseSeed: null
-			})
-		} as CommittedLibraryModeActivation);
-
-		await waitFor(() =>
-			expect(screen.getByTestId('unified-playlists-gated')).toHaveTextContent(
-				'no native catalog snapshot is available'
-			)
-		);
-		// No guessed data even though a list is loaded; the chip is absent.
-		expect(screen.queryByTestId('unified-playlist-openable')).toBeNull();
-		expect(screen.queryByTestId('unified-scope-playlists')).toBeNull();
-	});
-
-	it('flips every native-derived read feature off together under a protocol-incompatible capability (Slice 8)', async () => {
-		// The capability state machine's PROTOCOL_INCOMPATIBLE reason, carried
-		// on the index exactly as the Slice-8 backend simulation serves it.
-		const pinReason =
-			"the Core's protocol is not compatible with this build; the server log has the detail";
-		mountMode({
-			indexState: readyState({
-				albums: [albumEntry('alb-1', 'Alpha', 'art-0')],
-				capabilities: {
-					...CATALOG_CAPABILITIES,
-					dateFeatures: false,
-					dateFeaturesDisabledReason: pinReason,
-					playFeatures: false,
-					playFeaturesDisabledReason: pinReason,
-					playlistFeatures: false,
-					playlistFeaturesDisabledReason: pinReason
-				}
-			})
-		});
-
-		// All three scope chips are absent together — the exact pre-feature
-		// chip row (absent, never rendered disabled).
-		expect(screen.queryByTestId('unified-scope-recently-added')).toBeNull();
-		expect(screen.queryByTestId('unified-scope-most-played')).toBeNull();
-		expect(screen.queryByTestId('unified-scope-playlists')).toBeNull();
-
-		// The album sort menu degrades to the disabled Release-year entry
-		// carrying the capability's own reason (the pre-native presentation).
-		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
-		const releaseYear = screen.getByTestId(
-			'unified-sort-option-release-year'
-		) as HTMLOptionElement;
-		expect(releaseYear.disabled).toBe(true);
-		expect(releaseYear.title).toBe(pinReason);
-		expect(screen.queryByTestId('unified-sort-option-year-asc')).toBeNull();
-		expect(screen.queryByTestId('unified-sort-option-year-desc')).toBeNull();
-	});
-
-});
-
-describe('UnifiedLibraryMode — a build without the extended scope views', () => {
-	/**
-	 * The surface with both extended scope slots empty, which is what the
-	 * `@libraryFeatures` alias resolves to when the implementation directory is
-	 * not in the checkout. These cases must keep passing after that directory is
-	 * deleted, so they inject the empty slots rather than relying on how this
-	 * checkout happens to resolve — and they mount stores that DO carry data, so
-	 * a view sneaking back in would show up as rendered rows.
-	 */
-	const noScopeViews = { mostPlayedView: null, playlistsView: null };
-
-	beforeEach(() => {
-		__resetNavigation();
-		clearPendingLibraryPageStateWrite();
-		setZonesSnapshot([]);
-	});
-
-	it('renders an honest hint for a restored Most played page, never a broken view', async () => {
-		const harness = mountMode({
-			withContext: true,
-			// Capability available on purpose: the empty slot must be the only
-			// reason the hint appears, or the case would pass without the slot
-			// check and prove nothing.
-			indexState: readyState({
-				capabilities: { ...CATALOG_CAPABILITIES, dateFeatures: true, playFeatures: true }
-			}),
-			scopeSlots: noScopeViews,
-			mostPlayedStore: fakeMostPlayedStore()
-		});
-		harness.registered.lifecycle!.resume({
-			cause: 'initial',
-			pageState: buildUnifiedLibraryPageState({
-				scope: 'most-played',
-				collectionDrill: null,
-				itemTarget: null,
-				filterText: '',
-				surpriseSeed: null
-			})
-		} as CommittedLibraryModeActivation);
-
-		await waitFor(() =>
-			expect(screen.getByTestId('unified-most-played-gated')).toHaveTextContent(
-				'Most played is unavailable.'
-			)
-		);
-		// The hint is the whole surface: no panel, no tabs, nothing disabled.
-		expect(screen.queryByTestId('unified-most-played-panel')).toBeNull();
-		expect(screen.queryByTestId('unified-most-played-loading')).toBeNull();
-	});
-
-	it('renders an honest hint for a restored Playlists page, never a broken view', async () => {
-		const harness = mountMode({
-			withContext: true,
-			// Playlist features available, so the hint cannot come from the gate.
-			indexState: readyState({
-				capabilities: { ...CATALOG_CAPABILITIES, playlistFeatures: true }
-			}),
-			scopeSlots: noScopeViews,
-			playlistsStore: fakePlaylistsStore([
-				{
-					playlistId: 'pl-1',
-					title: 'Evening',
-					kind: 'manual',
-					openable: { state: 'openable' }
-				} as unknown as PlaylistSummaryView
-			])
-		});
-		harness.registered.lifecycle!.resume({
-			cause: 'initial',
-			pageState: buildUnifiedLibraryPageState({
-				scope: 'playlists',
-				collectionDrill: null,
-				itemTarget: null,
-				filterText: '',
-				surpriseSeed: null
-			})
-		} as CommittedLibraryModeActivation);
-
-		await waitFor(() =>
-			expect(screen.getByTestId('unified-playlists-gated')).toHaveTextContent(
-				'Playlists are unavailable.'
-			)
-		);
-		// A loaded list is in the store and still nothing from it reaches the DOM.
-		expect(screen.queryByTestId('unified-playlist-openable')).toBeNull();
-		expect(screen.queryByTestId('unified-playlists-list')).toBeNull();
-		expect(screen.queryByText('Evening')).toBeNull();
-	});
-});
-
 describe('UnifiedLibraryMode — brand wordmark', () => {
 	it('shows the runic mark by default and flips to the Latin spelling on click', async () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		const brand = screen.getByTestId('unified-brand');
 		// The accessible name is the Latin spelling in both states, so the runes
@@ -4627,14 +4177,14 @@ describe('UnifiedLibraryMode — brand wordmark', () => {
 	});
 
 	it('never renders the Roon trademark as the product wordmark', () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 		expect(screen.getByTestId('unified-brand').textContent ?? '').not.toContain('ROON');
 	});
 });
 
 describe('UnifiedLibraryMode — About panel', () => {
 	it('is closed until opened, then reports interface and Core version provenance', async () => {
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		expect(screen.queryByTestId('unified-about-panel')).toBeNull();
 		const open = screen.getByTestId('unified-about-open');
@@ -4666,7 +4216,7 @@ describe('UnifiedLibraryMode — About panel', () => {
 	it('reports the Settings System connection labels and good state', async () => {
 		setSocketStatus('connecting');
 		setCoreStatus({ status: 'discovering' });
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		await fireEvent.click(screen.getByTestId('unified-about-open'));
 		const connection = screen.getByTestId('unified-about-connection');
@@ -4687,6 +4237,100 @@ describe('UnifiedLibraryMode — About panel', () => {
 	});
 });
 
+describe('UnifiedLibraryMode — Sort and About dismiss on outside click / Escape (issue #15)', () => {
+	// Before this fix the only way to close Sort was its own toggle button,
+	// and it stayed open underneath other popups; these guard the outside-
+	// pointerdown and Escape dismissal added to close it.
+	it('closes Sort on an outside pointerdown, but a pointerdown inside its own menu leaves it open', async () => {
+		mountMode({ liveLibrary: harnessLibrary() });
+
+		const toggle = screen.getByTestId('unified-sort');
+		await fireEvent.click(toggle);
+		expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+		await fireEvent.pointerDown(screen.getByTestId('unified-sort-option-za'));
+		expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+		await fireEvent.pointerDown(document.body);
+		expect(toggle).toHaveAttribute('aria-expanded', 'false');
+	});
+
+	it('closes Sort on Escape', async () => {
+		mountMode({ liveLibrary: harnessLibrary() });
+
+		const toggle = screen.getByTestId('unified-sort');
+		await fireEvent.click(toggle);
+		expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+		await fireEvent.keyDown(window, { key: 'Escape' });
+		expect(toggle).toHaveAttribute('aria-expanded', 'false');
+	});
+
+	// Regression: the collection-drill ("genre") Sort control stays mounted,
+	// merely hidden, underneath an open artist page (§4.2 collection-host —
+	// `itemTarget?.kind === 'artist'` wins the drillSortMenu/drillSortValue
+	// derivation regardless of collectionDrill, so both render sites of the
+	// shared `drillSortControl` snippet show the SAME artist sort menu).
+	// Both bound the SAME `sortWrap` reference. Landing on the artist page
+	// and a genre drill in one navigation creates both Sort controls'
+	// elements in the same update; the LATER one in template order (the
+	// hidden collection-drill control, which renders after the visible
+	// header control) ran its bind:this last and overwrote the reference —
+	// a pointerdown inside the VISIBLE artist-page menu was then
+	// misclassified as outside the menu and closed it before the click
+	// could apply.
+
+	// The palette opens over the header and covers it; nothing unset these
+	// booleans when it did, so an open menu rendered underneath the palette.
+	it('closes an open Sort menu when the palette opens over it', async () => {
+		mountMode({ liveLibrary: harnessLibrary() });
+
+		const toggle = screen.getByTestId('unified-sort');
+		await fireEvent.click(toggle);
+		expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+		await fireEvent.keyDown(window, { key: 'b' });
+
+		expect(screen.getByTestId('unified-palette')).toBeInTheDocument();
+		expect(screen.getByTestId('unified-sort')).toHaveAttribute('aria-expanded', 'false');
+	});
+
+	it('closes an open About panel when the palette opens over it', async () => {
+		mountMode({ liveLibrary: harnessLibrary() });
+
+		await fireEvent.click(screen.getByTestId('unified-about-open'));
+		expect(screen.getByTestId('unified-about-panel')).toBeTruthy();
+
+		await fireEvent.keyDown(window, { key: 'b' });
+
+		expect(screen.getByTestId('unified-palette')).toBeInTheDocument();
+		expect(screen.queryByTestId('unified-about-panel')).toBeNull();
+	});
+
+	it('closes About on an outside pointerdown, but a pointerdown inside its own panel leaves it open', async () => {
+		mountMode({ liveLibrary: harnessLibrary() });
+
+		await fireEvent.click(screen.getByTestId('unified-about-open'));
+		expect(screen.getByTestId('unified-about-panel')).toBeTruthy();
+
+		await fireEvent.pointerDown(screen.getByTestId('unified-about-app-version'));
+		expect(screen.queryByTestId('unified-about-panel')).toBeTruthy();
+
+		await fireEvent.pointerDown(document.body);
+		expect(screen.queryByTestId('unified-about-panel')).toBeNull();
+	});
+
+	it('closes About on Escape', async () => {
+		mountMode({ liveLibrary: harnessLibrary() });
+
+		await fireEvent.click(screen.getByTestId('unified-about-open'));
+		expect(screen.getByTestId('unified-about-panel')).toBeTruthy();
+
+		await fireEvent.keyDown(window, { key: 'Escape' });
+		expect(screen.queryByTestId('unified-about-panel')).toBeNull();
+	});
+});
+
 describe('UnifiedLibraryMode — Controller settings trigger', () => {
 	// Settings must stay reachable from unified (public issue #1's second
 	// finding). The floating gear that used to carry that guarantee was
@@ -4694,7 +4338,7 @@ describe('UnifiedLibraryMode — Controller settings trigger', () => {
 	// path, so this test is the reachability guard.
 	it('docks the settings trigger in the bar, before About, and opens the shared dialog store', async () => {
 		settingsMenuOpen.set(false);
-		mountMode({ indexState: readyState() });
+		mountMode({ liveLibrary: harnessLibrary() });
 
 		const trigger = screen.getByTestId('unified-settings-open');
 		expect(trigger).toHaveAttribute('aria-label', 'Open Controller settings');

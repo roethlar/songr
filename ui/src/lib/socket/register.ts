@@ -25,6 +25,10 @@ import type {
 	RecentlyPlayedClearedPayload,
 	ZoneQueue
 } from '@shared/types';
+import { normalizeClassicSessionRetiredEvent } from '@shared/classicBrowseContracts';
+import { normalizeLibrarySessionRetiredEvent } from '@shared/libraryRootsContracts';
+import { classicBrowseSessionClient } from '../stores/classicBrowseSessionStore';
+import { retireLibraryGeneration } from '../stores/libraryRootsStore';
 
 interface CoreStatusEvent {
 	coreStatus: CoreStatusResponse['status'];
@@ -120,6 +124,16 @@ export function registerSocketHandlers(): CleanupFn {
 	const handleRecentlyPlayedCleared = (payload: RecentlyPlayedClearedPayload) => {
 		applyRecentlyPlayedCleared(payload);
 	};
+	const handleClassicSessionRetired = (payload: unknown) => {
+		const event = normalizeClassicSessionRetiredEvent(payload);
+		if (event === null) return;
+		classicBrowseSessionClient.retireServerSession(event.session);
+	};
+	const handleLibrarySessionRetired = (payload: unknown) => {
+		const event = normalizeLibrarySessionRetiredEvent(payload);
+		if (event === null) return;
+		retireLibraryGeneration(event);
+	};
 
 	const handleTransportError = (payload: CommandErrorEvent) => {
 		pushCommandFeedback({
@@ -208,6 +222,8 @@ export function registerSocketHandlers(): CleanupFn {
 		['queue-updated', handleQueueUpdated],
 		['recently-played-inserted', handleRecentlyPlayedInserted],
 		['recently-played-cleared', handleRecentlyPlayedCleared],
+		['classic-session:retired', handleClassicSessionRetired],
+		['library-session:retired', handleLibrarySessionRetired],
 		['transport:error', handleTransportError],
 		['queue:error', handleQueueError]
 	];

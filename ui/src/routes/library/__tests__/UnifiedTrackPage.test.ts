@@ -15,7 +15,7 @@ const song = {
 };
 
 function mountPanel(options: {
-	zones?: readonly { zoneId: string; name: string }[];
+	zoneId?: string | null;
 	onAction?: (semantic: 'play-now' | 'add-next' | 'queue', zoneId: string) => void;
 	onFavorite?: () => void;
 	relationship?: UnifiedSongRelationship;
@@ -29,7 +29,7 @@ function mountPanel(options: {
 	const result = render(UnifiedTrackPage, {
 		props: {
 			song,
-			zones: options.zones ?? [{ zoneId: 'zone-1', name: 'Living Room' }],
+			zoneId: options.zoneId === undefined ? 'zone-1' : options.zoneId,
 			onBack,
 			onClose,
 			relationshipPhase: options.relationship ? 'ready' : 'idle',
@@ -67,8 +67,12 @@ describe('UnifiedTrackPage', () => {
 		expect(screen.getByTestId('unified-song-add-next')).toHaveTextContent('Add Next');
 		expect(screen.getByTestId('unified-song-queue')).toHaveTextContent('Queue');
 		expect(screen.getByTestId('unified-song-favorite')).toHaveTextContent('Favorite');
-		expect(screen.getByTestId('unified-song-album-link')).toHaveTextContent('Go to Album');
-		expect(screen.getByTestId('unified-song-artist-link')).toHaveTextContent('Go to Artist');
+		// The album and artist destinations are offered only when the host can
+		// open one. This mount passes no `onOpenAlbum`/`onOpenArtist`, which is
+		// what the Library does now that there is no catalog page behind them,
+		// so neither affordance is rendered at all rather than rendered dead.
+		expect(screen.queryByTestId('unified-song-album-link')).toBeNull();
+		expect(screen.queryByTestId('unified-song-artist-link')).toBeNull();
 
 		await fireEvent.click(screen.getByTestId('unified-song-back'));
 		expect(harness.onBack).toHaveBeenCalledTimes(1);
@@ -83,7 +87,7 @@ describe('UnifiedTrackPage', () => {
 		expect(onFavorite).toHaveBeenCalledTimes(1);
 	});
 
-	it('executes a named action directly when there is one zone', async () => {
+	it('executes a named action directly on the selected zone', async () => {
 		const onAction = vi.fn();
 		mountPanel({ onAction });
 
@@ -93,21 +97,23 @@ describe('UnifiedTrackPage', () => {
 		expect(screen.queryByTestId('unified-song-zone-picker')).toBeNull();
 	});
 
-	it('keeps the chosen semantic while asking for a zone', async () => {
+	it('never asks which zone, whatever the zone count is (issue #12)', async () => {
 		const onAction = vi.fn();
-		mountPanel({
-			onAction,
-			zones: [
-				{ zoneId: 'zone-1', name: 'Living Room' },
-				{ zoneId: 'zone-2', name: 'Office' }
-			]
-		});
+		mountPanel({ onAction, zoneId: 'zone-2' });
 
 		await fireEvent.click(screen.getByTestId('unified-song-queue'));
-		expect(screen.getByTestId('unified-song-zone-picker')).toHaveTextContent('Queue on');
-		await fireEvent.click(screen.getByRole('button', { name: 'Office' }));
 
 		expect(onAction).toHaveBeenCalledWith('queue', 'zone-2');
+		expect(screen.queryByTestId('unified-song-zone-picker')).toBeNull();
+	});
+
+	it('disables its actions while no zone is selectable', async () => {
+		const onAction = vi.fn();
+		mountPanel({ onAction, zoneId: null });
+
+		expect(screen.getByTestId('unified-song-queue')).toBeDisabled();
+		await fireEvent.click(screen.getByTestId('unified-song-queue'));
+		expect(onAction).not.toHaveBeenCalled();
 	});
 
 	it('opens one album and its artist directly and renders explicit composer links', async () => {
@@ -178,7 +184,7 @@ describe('UnifiedTrackPage', () => {
 
 		await harness.rerender({
 			song,
-			zones: [{ zoneId: 'zone-1', name: 'Living Room' }],
+			zoneId: 'zone-1',
 			relationshipPhase: 'ready',
 			relationship: { songTitle: 'River', albums: [], composerLabels: [] },
 			onBack: harness.onBack,

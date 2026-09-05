@@ -1,12 +1,29 @@
 import { describe, expect, it } from 'vitest';
 
+import { DEGRADE_WINDOW_MS } from '@shared/libraryAlbumContracts';
+import { COLLECTION_DRILL_SOURCE_CONTRACT } from '@shared/collectionDrillContracts';
 import {
+	DEGRADE_DELIVERY_SLACK_MS,
 	LibraryAlbumController,
+	RESOLVING_TIMEOUT_MS,
 	type LibraryAlbumSocket,
 	type LibraryAlbumState
 } from '../LibraryAlbumController';
 
-const ALBUM_ID = '20000000-0000-4000-8000-000000000001';
+/** The client's open safety net, armed strictly beyond the server's cap. */
+const OPEN_TIMEOUT_MS = 30_000 + DEGRADE_WINDOW_MS + DEGRADE_DELIVERY_SLACK_MS;
+
+/**
+ * Since Slice 4 an album page is opened by the drill locator that found the
+ * row, and by nothing else: the `album`-by-local-id target died with the
+ * catalog that minted those ids.
+ */
+const COLLECTION_LOCATOR = {
+	sourceContract: COLLECTION_DRILL_SOURCE_CONTRACT,
+	hierarchy: 'genres' as const,
+	collectionExactName: 'Bright Machinery',
+	rendering: { exactTitle: 'Debut', exactCredit: 'Björk' }
+};
 const REQUEST_A = '30000000-0000-4000-8000-000000000001';
 const REQUEST_B = '30000000-0000-4000-8000-000000000002';
 const OPERATION_A = '40000000-0000-4000-8000-000000000001';
@@ -148,7 +165,7 @@ function makeHarness(requestIds: readonly string[] = [REQUEST_A, REQUEST_B]) {
 
 function openInput() {
 	return {
-		albumLocalId: ALBUM_ID,
+		target: { kind: 'collection' as const, locator: COLLECTION_LOCATOR },
 		tabId: 'tab-1',
 		generation: 4
 	};
@@ -235,13 +252,14 @@ describe('LibraryAlbumController', () => {
 		const emission = socket.emission('library-album:open');
 		expect(emission.value).toMatchObject({
 			requestId: REQUEST_A,
-			albumLocalId: ALBUM_ID,
+			target: { kind: 'collection', locator: COLLECTION_LOCATOR },
 			tabId: 'tab-1',
 			generation: 4
 		});
+		// The page no longer carries an album identity of its own: the locator
+		// travels in the request, and the state names the request that opened it.
 		expect(controller.snapshot()).toMatchObject({
 			phase: 'opening',
-			albumLocalId: ALBUM_ID,
 			generation: 4,
 			requestId: REQUEST_A,
 			operationId: null
@@ -479,7 +497,7 @@ describe('LibraryAlbumController', () => {
 		const first = makeHarness();
 		first.controller.open(openInput());
 		first.socket.emission('library-album:open').ack(successAck(REQUEST_A, OPERATION_A));
-		first.firePending(30_000);
+		first.firePending(OPEN_TIMEOUT_MS);
 		expect(first.controller.snapshot()).toMatchObject({
 			phase: 'failed',
 			code: 'RESOLUTION_TIMEOUT'
@@ -556,11 +574,85 @@ describe('LibraryAlbumController', () => {
 		});
 	});
 
+	it('arms the open safety net strictly beyond the server degrade cap', () => {
+		const { socket, controller, timers } = makeHarness();
+		controller.open(openInput());
+		socket.emission('library-album:open').ack(successAck(REQUEST_A, OPERATION_A));
+
+		const armed = timers.filter((timer) => !timer.cleared && !timer.fired);
+		expect(armed).toHaveLength(1);
+		expect(armed[0].ms).toBe(RESOLVING_TIMEOUT_MS + DEGRADE_WINDOW_MS + DEGRADE_DELIVERY_SLACK_MS);
+		// The server's worst-case terminal event lands by its own deadline plus
+		// one degrade window; the client must still be listening after that.
+		expect(armed[0].ms).toBeGreaterThan(RESOLVING_TIMEOUT_MS + DEGRADE_WINDOW_MS);
+	});
+
+	it('accepts a degraded versions event arriving inside the delivery slack window', () => {
+		const { socket, controller } = makeHarness();
+		controller.open(openInput());
+		socket.emission('library-album:open').ack(successAck(REQUEST_A, OPERATION_A));
+
+		// Nothing has fired the safety net yet, so the listeners are attached.
+		expect(socket.handlerCount('library-album:versions')).toBe(1);
+		socket.serverEmit('library-album:versions', versionsEvent({ degraded: true }));
+
+		const page = controller.snapshot();
+		expect(page).toMatchObject({ phase: 'versions', degraded: true });
+		expect(page.versions.map((version) => version.versionId)).toEqual([VERSION_A, VERSION_B]);
+
+		// The next page open clears it: degraded never leaks across pages.
+		controller.open(openInput());
+		expect(controller.snapshot()).toMatchObject({ phase: 'opening', degraded: false });
+	});
+
+	it('surfaces a terminal failure inside the same window as RESOLUTION_TIMEOUT', () => {
+		const { socket, controller } = makeHarness();
+		controller.open(openInput());
+		socket.emission('library-album:open').ack(successAck(REQUEST_A, OPERATION_A));
+		socket.serverEmit(
+			'library-album:failed',
+			failedEvent({ code: 'RESOLUTION_TIMEOUT', error: 'Album page opening timed out' })
+		);
+
+		expect(controller.snapshot()).toMatchObject({
+			phase: 'failed',
+			code: 'RESOLUTION_TIMEOUT',
+			degraded: false
+		});
+	});
+
+	it('cancels the acknowledged operation when its open safety net fires', () => {
+		const { socket, controller, firePending } = makeHarness();
+		controller.open(openInput());
+		socket.emission('library-album:open').ack(successAck(REQUEST_A, OPERATION_A));
+
+		firePending(OPEN_TIMEOUT_MS);
+
+		expect(socket.rawEmits).toContainEqual({
+			event: 'library-album:cancel',
+			payload: { operationId: OPERATION_A }
+		});
+		expect(controller.snapshot()).toMatchObject({
+			phase: 'failed',
+			code: 'RESOLUTION_TIMEOUT'
+		});
+		expect(socket.handlerCount('library-album:versions')).toBe(0);
+	});
+
 	it('guards open and resets a terminal state to idle', () => {
 		const REQUEST_C = '30000000-0000-4000-8000-000000000003';
 		const { socket, controller } = makeHarness([REQUEST_A, REQUEST_B, REQUEST_C]);
 
-		expect(controller.open({ ...openInput(), albumLocalId: '' })).toEqual({
+		expect(
+			controller.open({
+				...openInput(),
+				// A locator naming no collection can never re-find its row.
+				target: {
+					kind: 'collection' as const,
+					locator: { ...COLLECTION_LOCATOR, collectionExactName: '' }
+				}
+			})
+		).toEqual({
 			started: false,
 			reason: 'invalid'
 		});
@@ -576,5 +668,118 @@ describe('LibraryAlbumController', () => {
 		expect(controller.snapshot()).toMatchObject({ phase: 'canceled', code: 'CANCELED' });
 		controller.reset();
 		expect(controller.snapshot()).toMatchObject({ phase: 'idle', requestId: null });
+	});
+});
+
+describe('LibraryAlbumController — the live arm (library-live-view Slice 2)', () => {
+	const GEN = 'gen-1';
+	const ref = (token: string) => ({ generation: GEN, token });
+
+	function open(rows: readonly { title: string; kind: string; token: string }[]) {
+		const controller = new LibraryAlbumController({ getSocket: () => null });
+		controller.beginLive();
+		controller.adoptLiveLevel({
+			albumRef: ref('album'),
+			title: 'Voices Carry',
+			artist: '’Til Tuesday',
+			rows: rows.map((row) => ({ ref: ref(row.token), title: row.title, kind: row.kind }))
+		});
+		return controller;
+	}
+
+	it('publishes an opened level as the album page the catalog arm publishes', () => {
+		const controller = open([
+			{ title: 'Play Album', kind: 'action', token: 'verb' },
+			{ title: 'Love in a Vacuum', kind: 'track', token: 't0' },
+			{ title: 'Voices Carry', kind: 'track', token: 't1' }
+		]);
+		expect(controller.snapshot()).toMatchObject({
+			phase: 'details',
+			activeTab: 'details',
+			title: 'Voices Carry',
+			artist: '’Til Tuesday',
+			// Roon's own order IS the play order, and the position in it is the
+			// only index there is.
+			orderedTracks: [
+				{ index: 0, title: 'Love in a Vacuum' },
+				{ index: 1, title: 'Voices Carry' }
+			],
+			actionsAvailable: true,
+			albumActionsAvailable: true
+		});
+		// No version list: the reference names one album, and Roon's other
+		// editions of it are other rows with their own references.
+		expect(controller.snapshot().versions).toEqual([]);
+		expect(controller.snapshot().selectedVersionId).toBeNull();
+	});
+
+	it('binds each track to its own reference, in the order Roon returned them', () => {
+		const controller = open([
+			{ title: 'Play Album', kind: 'action', token: 'verb' },
+			{ title: 'One', kind: 'track', token: 't0' },
+			{ title: 'Two', kind: 'track', token: 't1' }
+		]);
+		const live = controller.snapshot().live;
+		expect(live).toEqual({
+			albumRef: ref('album'),
+			playRef: ref('verb'),
+			trackRefs: [ref('t0'), ref('t1')]
+		});
+	});
+
+	it('keeps the verb row out of the track list, which is what the reader is looking at', () => {
+		const controller = open([
+			{ title: 'Play Album', kind: 'action', token: 'verb' },
+			{ title: 'Only track', kind: 'track', token: 't0' }
+		]);
+		expect(controller.snapshot().orderedTracks).toHaveLength(1);
+		expect(controller.snapshot().orderedTracks[0].title).toBe('Only track');
+	});
+
+	it('disables the whole-album verbs, and only those, when there is no single verb row', () => {
+		// Two verb rows make "Play album" a choice nobody can make. The honest
+		// answer is a disabled header button — never an arbitrary one, and never
+		// a disabled track list, because every track still carries its own row.
+		const two = open([
+			{ title: 'Play Album', kind: 'action', token: 'verb-a' },
+			{ title: 'Shuffle', kind: 'action', token: 'verb-b' },
+			{ title: 'One', kind: 'track', token: 't0' }
+		]);
+		expect(two.snapshot()).toMatchObject({
+			actionsAvailable: true,
+			albumActionsAvailable: false
+		});
+		expect(two.snapshot().live?.playRef).toBeNull();
+		expect(two.snapshot().live?.trackRefs).toEqual([ref('t0')]);
+
+		const none = open([{ title: 'One', kind: 'track', token: 't0' }]);
+		expect(none.snapshot()).toMatchObject({
+			actionsAvailable: true,
+			albumActionsAvailable: false
+		});
+	});
+
+	it('offers no action at all on a level with no track rows', () => {
+		const controller = open([{ title: 'Play Album', kind: 'action', token: 'verb' }]);
+		expect(controller.snapshot()).toMatchObject({
+			actionsAvailable: false,
+			albumActionsAvailable: true,
+			orderedTracks: []
+		});
+	});
+
+	it('says the live read failed in the reader’s words, carrying no live binding', () => {
+		const controller = new LibraryAlbumController({ getSocket: () => null });
+		controller.beginLive();
+		expect(controller.snapshot().phase).toBe('opening');
+		controller.failLive('LIVE_OPEN_FAILED', 'Roon no longer lists that album.');
+		expect(controller.snapshot()).toMatchObject({
+			phase: 'failed',
+			code: 'LIVE_OPEN_FAILED',
+			error: 'Roon no longer lists that album.',
+			live: null,
+			actionsAvailable: false,
+			albumActionsAvailable: false
+		});
 	});
 });

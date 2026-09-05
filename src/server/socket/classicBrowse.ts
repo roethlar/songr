@@ -2,6 +2,7 @@ import type { Socket } from "socket.io";
 import type { Logger } from "pino";
 
 import {
+  CLASSIC_SESSION_RETIRED_CONTRACT,
   normalizeClassicBrowseCommandRequest,
   normalizeClassicSessionAcquireRequest,
   normalizeClassicSessionReleaseRequest,
@@ -74,6 +75,22 @@ export function registerClassicBrowseSocket(
   dependencies: ClassicBrowseSocketDependencies
 ): void {
   const { coordinator, browseService, getCoreId, logger } = dependencies;
+
+  let retirementSubscriptionActive = true;
+  const unsubscribeRetirement = coordinator.onModeRetired((event) => {
+    if (event.socketId !== socket.id) return;
+    socket.emit("classic-session:retired", {
+      contract: CLASSIC_SESSION_RETIRED_CONTRACT,
+      tabId: event.tabId,
+      session: sessionRef(event.session),
+      reason: event.reason,
+    });
+  });
+  socket.on("disconnect", () => {
+    if (!retirementSubscriptionActive) return;
+    retirementSubscriptionActive = false;
+    unsubscribeRetirement();
+  });
 
   socket.on("classic-session:acquire", (value: unknown, ack?: Ack) => {
     const request = normalizeClassicSessionAcquireRequest(value);

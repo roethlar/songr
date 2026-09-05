@@ -21,11 +21,7 @@
  * environment for a decision except the tree marker described below.
  *
  * The one decision this script makes: which application id to build under.
- * Plan §10 asks for "appId per tree (public/private suffix)". The tree is
- * identified by the presence of the agent governance directory, which is never
- * published (publication plan §5), so the export tree cannot carry it and a
- * public build cannot accidentally claim the private id. That is a property of
- * the tree, not a flag someone has to remember to pass.
+ * Every checkout builds the same public Songr identity.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -51,8 +47,6 @@ const REPO_ROOT = path.resolve(DESKTOP_DIR, '..');
 const STAGING_ROOT = path.join(DESKTOP_DIR, 'release', 'payload');
 const ARTIFACT_DIR = path.join(DESKTOP_DIR, 'release', 'artifacts');
 
-/** Governance never ships, so its absence is what a public tree looks like. */
-const PRIVATE_TREE_MARKER = '.agents';
 
 /** Copied verbatim from the repository root into the staged payload. */
 const ENGINE_MANIFESTS = ['package.json', 'package-lock.json'];
@@ -88,13 +82,10 @@ try {
   process.exit(1);
 }
 const {
-  appIdForTree,
   builderIdentityArgs,
   ENGINE_LAYOUT,
   ENGINE_RESOURCE_DIR,
   engineUiBuildPath,
-  productNameForTree,
-  runtimeNameForTree,
 } = packaging;
 
 /** The payload itself, under the name it will carry inside the app's resources. */
@@ -377,20 +368,7 @@ function verifyStaging() {
 // ---------------------------------------------------------------------------
 
 function packageApp(options) {
-  const privateTree = fs.existsSync(path.join(REPO_ROOT, PRIVATE_TREE_MARKER));
-  // Identity splits per tree on BOTH levels (dt7-1 + the v1.1.4 collision):
-  // the bundle level (appId/productName) keeps the installed apps distinct,
-  // and the runtime level (extraMetadata name/productName, packed into the
-  // app's own package.json) is what Electron derives userData — and the
-  // single-instance lock — from. The pulled v1.1.4 build had only the first
-  // half and shared userData with the private build. `builderIdentityArgs`
-  // carries both halves; do not reassemble them inline.
-  log(
-    `${privateTree ? 'private' : 'public'} tree: building ` +
-      `${productNameForTree(privateTree)} as ${appIdForTree(privateTree)} ` +
-      `(runtime name ${runtimeNameForTree(privateTree)})`,
-  );
-
+  log('building Songr app.songr.desktop (runtime name songr)');
   // The package's own JS entry, run under process.execPath — never the
   // node_modules/.bin shim, whose Windows form is a `.cmd` execFileSync
   // refuses to spawn (dt7-2, revised; same reasoning as NPM_ARGV).
@@ -402,7 +380,7 @@ function packageApp(options) {
   const args = [
     '--config',
     'electron-builder.yml',
-    ...builderIdentityArgs(privateTree),
+    ...builderIdentityArgs(),
     '--publish',
     'never',
     ...options.platforms,
@@ -473,5 +451,3 @@ function main() {
 }
 
 main();
-
-

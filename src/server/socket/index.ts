@@ -16,18 +16,14 @@ import { BrowseService } from "../../core/roon/BrowseService";
 import { AlbumActionService } from "../../core/roon/AlbumActionService";
 import { LibraryAlbumService } from "../../core/roon/LibraryAlbumService";
 import { BrowseSessionCoordinator } from "../../core/roon/BrowseSessionCoordinator";
-import { PublicSongResolverService } from "../../core/roon/PublicSongResolverService";
 import { RoonClient } from "../../core/roon/RoonClient";
-import type { EditorialItemSessionService } from "../../core/roon/EditorialItemSessionService";
-import type { SongRelationshipFeaturePort } from "../libraryFeatures";
 import { errorMessage } from "../util";
 import { registerAlbumActionSocket } from "./albumActions";
 import { registerLibraryAlbumSocket } from "./libraryAlbum";
-import { registerEditorialItemSocket } from "./editorialItem";
+import { registerLibraryRetirementSocket } from "./libraryRetirement";
 import { registerClassicBrowseSocket } from "./classicBrowse";
-import type { WorkspaceFeatureLayer } from "../workspaceFeatures";
 import { registerUnifiedSearchSocket } from "./unifiedSearch";
-import { registerPublicSongResolverSocket } from "./publicSongResolver";
+import type { LiveLibrarySession } from "../../core/library/LiveLibrarySession";
 
 const VALID_LOOP_VALUES: readonly LoopModeRequest[] = ["disabled", "loop", "loop_one", "next"];
 
@@ -41,11 +37,8 @@ interface SocketDependencies {
   browseService: BrowseService;
   albumActionService: AlbumActionService;
   libraryAlbumService: LibraryAlbumService;
-  editorialItemService: EditorialItemSessionService;
+  liveLibrary: LiveLibrarySession;
   browseSessionCoordinator: BrowseSessionCoordinator;
-  publicSongResolverService: PublicSongResolverService;
-  songRelationships: SongRelationshipFeaturePort;
-  workspaceFeatures: WorkspaceFeatureLayer;
   logger: Logger;
 }
 
@@ -89,11 +82,8 @@ export const attachSocketServer = (
     browseService,
     albumActionService,
     libraryAlbumService,
-    editorialItemService,
+    liveLibrary,
     browseSessionCoordinator,
-    publicSongResolverService,
-    songRelationships,
-    workspaceFeatures,
     logger,
   } = deps;
 
@@ -153,9 +143,6 @@ export const attachSocketServer = (
 
   io.on("connection", (socket) => {
     logger.info({ clientId: socket.id }, "WebSocket client connected");
-    // The optional workspace layer attaches whatever handlers this build
-    // carries; an absent build attaches nothing.
-    workspaceFeatures.attachSocket(socket);
     registerAlbumActionSocket(socket, {
       actionService: albumActionService,
       coordinator: browseSessionCoordinator,
@@ -172,12 +159,6 @@ export const attachSocketServer = (
       coordinator: browseSessionCoordinator,
       browseService,
       zones: transportService,
-      songRelationships,
-      getCoreId: () => roonClient.getCoreInfo()?.id ?? null,
-      logger,
-    });
-    registerPublicSongResolverSocket(socket, {
-      resolver: publicSongResolverService,
       getCoreId: () => roonClient.getCoreInfo()?.id ?? null,
       logger,
     });
@@ -186,12 +167,7 @@ export const attachSocketServer = (
       getCoreId: () => roonClient.getCoreInfo()?.id ?? null,
       logger,
     });
-    registerEditorialItemSocket(socket, {
-      editorialItemService,
-      getCoreId: () => roonClient.getCoreInfo()?.id ?? null,
-      logger,
-    });
-
+    registerLibraryRetirementSocket(socket, { liveLibrary });
     // Hydrate the new client with current state. Without this, a transient
     // socket disconnect would leave the UI showing stale or empty state until
     // the next Roon push.
@@ -635,7 +611,6 @@ export const attachSocketServer = (
 
     socket.on("disconnect", (reason) => {
       logger.info({ clientId: socket.id, reason }, "WebSocket client disconnected");
-      workspaceFeatures.retireSocket(socket.id);
     });
   });
 

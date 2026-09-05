@@ -6,6 +6,7 @@ import type {
   LibraryAlbumSelectReservation,
 } from "../../../core/roon/LibraryAlbumService";
 import { registerLibraryAlbumSocket } from "../libraryAlbum";
+import { COLLECTION_DRILL_SOURCE_CONTRACT } from "../../../shared/collectionDrillContracts";
 
 class FakeSocket {
   public readonly id = "socket-1";
@@ -31,7 +32,18 @@ class FakeSocket {
 const openRequest = {
   requestId: "request-1",
   tabId: "tab-1",
-  albumLocalId: "018f0f64-3f31-7a9b-8c2d-8f572cb18a12",
+  target: {
+    kind: "collection" as const,
+    locator: {
+      sourceContract: COLLECTION_DRILL_SOURCE_CONTRACT,
+      hierarchy: "genres" as const,
+      collectionExactName: "Bright Machinery",
+      rendering: {
+        exactTitle: "Harbour Lantern",
+        exactCredit: "The Paper Fleet",
+      },
+    },
+  },
   generation: 7,
 };
 

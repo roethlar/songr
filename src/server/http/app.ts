@@ -10,18 +10,9 @@ import { createOnboardingRouter } from "./routes/onboarding";
 import { createZonesRouter } from "./routes/zones";
 import { createTransportRouter } from "./routes/transport";
 import { createImageRouter } from "./routes/image";
-import { createArtistPortraitRouter } from "./routes/artist-portrait";
 import { createRecentlyPlayedRouter } from "./routes/recently-played";
 import { createFavoritesRouter } from "./routes/favorites";
-import {
-  createCatalogRouter,
-  type CatalogHttpFocusPlaylists,
-  type CatalogHttpMostPlayedDrills,
-  type CatalogHttpNative,
-  type CatalogHttpPlaylistContents,
-  type CatalogHttpPlaylistMutations,
-  type CatalogHttpService,
-} from "./routes/catalog";
+import { createLibraryRouter, type LibraryRootsPort } from "./routes/library";
 import { createErrorHandler } from "./middleware/errorHandler";
 import { RoonClient } from "../../core/roon/RoonClient";
 import { TransportService } from "../../core/roon/TransportService";
@@ -29,18 +20,6 @@ import { ImageService } from "../../core/roon/ImageService";
 import { RecentlyPlayedService } from "../../core/recently-played/RecentlyPlayedService";
 import { FavoritesService } from "../../core/favorites/FavoritesService";
 import { ErrorResponse } from "../../shared/types";
-import type { ArtistPortraitFeaturePort } from "../libraryFeatures";
-
-export interface HttpCatalogContext {
-  readonly catalogService: CatalogHttpService;
-  readonly getDiagnosticCoreId: () => string | null;
-  readonly nativeCatalog?: CatalogHttpNative;
-  readonly mostPlayedDrills?: CatalogHttpMostPlayedDrills;
-  readonly playlistContents?: CatalogHttpPlaylistContents;
-  readonly playlistMutations?: CatalogHttpPlaylistMutations;
-  readonly focusPlaylists?: CatalogHttpFocusPlaylists;
-  readonly artistPortraits?: ArtistPortraitFeaturePort;
-}
 
 export const createHttpApp = (
   roonClient: RoonClient,
@@ -49,7 +28,8 @@ export const createHttpApp = (
   recentlyPlayedService: RecentlyPlayedService,
   favoritesService: FavoritesService,
   logger: Logger,
-  catalogContext?: HttpCatalogContext
+  /** The live library's read surface (`.agents/plans/library-live-view.md`). */
+  libraryRoots?: LibraryRootsPort
 ): Application => {
   const app = express();
 
@@ -121,44 +101,15 @@ export const createHttpApp = (
   });
   app.use("/api/image", imageLimiter);
 
-  app.use(
-    createHealthRouter(
-      recentlyPlayedService,
-      favoritesService,
-      catalogContext?.catalogService,
-      catalogContext?.getDiagnosticCoreId
-    )
-  );
+  app.use(createHealthRouter(recentlyPlayedService, favoritesService));
+  app.use("/api/library", createLibraryRouter(libraryRoots));
   app.use("/api/core", createCoreRouter(roonClient));
   app.use("/api/onboarding", createOnboardingRouter(roonClient));
   app.use("/api/zones", createZonesRouter(transportService));
   app.use("/api/transport", createTransportRouter(transportService));
   app.use("/api/image", createImageRouter(imageService));
-  // Mounted in every build, with or without the portrait port: a build that
-  // cannot read portraits still has to say so honestly rather than fall
-  // through to the SPA's HTML.
-  app.use(
-    "/api/artist-portrait",
-    createArtistPortraitRouter(catalogContext?.artistPortraits)
-  );
   app.use("/api/recently-played", createRecentlyPlayedRouter(recentlyPlayedService));
   app.use("/api/favorites", createFavoritesRouter(favoritesService));
-  if (catalogContext) {
-    app.use(
-      "/api/catalog",
-      createCatalogRouter(
-        roonClient,
-        catalogContext.catalogService,
-        logger,
-        catalogContext.nativeCatalog,
-        catalogContext.playlistContents,
-        catalogContext.playlistMutations,
-        catalogContext.mostPlayedDrills,
-        catalogContext.focusPlaylists
-      )
-    );
-  }
-
   // Any unmatched /api/* request is an API miss — return JSON 404 instead of
   // falling through to the SPA HTML, which would confuse the API client's
   // response.json() parser.

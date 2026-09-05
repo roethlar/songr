@@ -1,26 +1,35 @@
 import { fileURLToPath, URL } from 'node:url';
 
 import { svelte } from '@sveltejs/vite-plugin-svelte';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 
-import { resolveLibraryScopeSlotsModule } from '../src/lib/libraryFeatures/resolveScopeSlots.js';
 
 const uiRoot = fileURLToPath(new URL('..', import.meta.url));
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 
-// The server root is this directory, not `fixtures/`, so that pages under both
-// the public `fixtures/` tree and the walled `native/` root are addressable:
-// `/fixtures/media-session.html` and `/native/fixtures/most-played.html`.
-//
-// Page resolution is disk existence, the same principle `resolveScopeSlots.js`
-// applies to the `@libraryFeatures` alias, and it needs no code here to enforce
-// it: a checkout without `native/` simply has no such file to serve, and nothing
-// asks for one, because Playwright discovers its specs from disk too. There is
-// deliberately no page manifest and no rollup input list — either would be a
-// second source of truth that could name a page the checkout does not carry.
+const libraryRouteFixture: Plugin = {
+	name: 'library-route-fixture',
+	configureServer(server) {
+		server.middlewares.use((request, _response, next) => {
+			if (request.url) {
+				const pathname = new URL(request.url, 'http://fixture.invalid').pathname;
+				if (pathname === '/library' || pathname.startsWith('/library/')) {
+					request.url = '/fixtures/library-scroll.html';
+				}
+			}
+			next();
+		});
+	}
+};
+
+// The server root is this directory, not `fixtures/`, so fixture pages are
+// addressable as `/fixtures/<name>.html`. There is deliberately no page
+// manifest and no rollup input list — either would be a second source of truth
+// that could name a page the checkout does not carry; Playwright discovers its
+// specs from disk.
 export default defineConfig({
 	root: fileURLToPath(new URL('.', import.meta.url)),
-	plugins: [svelte()],
+	plugins: [libraryRouteFixture, svelte()],
 	resolve: {
 		alias: {
 			'$app/environment': fileURLToPath(
@@ -39,12 +48,7 @@ export default defineConfig({
 				new URL('../src/test/app-stubs/stores.ts', import.meta.url)
 			),
 			$lib: fileURLToPath(new URL('../src/lib', import.meta.url)),
-			'@shared': fileURLToPath(new URL('../../src/shared', import.meta.url)),
-			// Same resolver as svelte.config.js and vitest.config.ts. Fixture
-			// pages import the views directly today, but the alias must mean the
-			// same thing here or a fixture that reaches the surface through it
-			// would silently get a different resolution.
-			'@libraryFeatures': resolveLibraryScopeSlotsModule()
+			'@shared': fileURLToPath(new URL('../../src/shared', import.meta.url))
 		}
 	},
 	server: {

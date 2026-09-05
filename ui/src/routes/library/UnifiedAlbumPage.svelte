@@ -6,97 +6,92 @@
 	import { monogram } from '$lib/monogram';
 	import { hideOnError } from '$lib/actions/imageFallback';
 	import { trackTitleCarriesOrdinal } from '$lib/trackTitle';
+	import { shouldHandleLibraryAnchorClick } from '$lib/libraryPageNavigation';
 	import type {
 		LibraryAlbumController,
 		LibraryAlbumVersionState
 	} from '$lib/library/LibraryAlbumController';
-	import type { LibraryAlbumEntry } from '$lib/stores/libraryIndexStore';
+	import type { LibraryAlbumEntry } from '$lib/libraryEntries';
 	import type { AlbumActionController } from '$lib/library/AlbumActionController';
-	import type { EditorialItemState } from '$lib/library/EditorialItemController';
-	import EditorialCreditsSection from './EditorialCreditsSection.svelte';
-	import EditorialRelationshipSection from './EditorialRelationshipSection.svelte';
-	import EditorialTextSection from './EditorialTextSection.svelte';
-	import UnifiedItemPageFrame from './UnifiedItemPageFrame.svelte';
-
-	interface ZoneOption {
-		readonly zoneId: string;
-		readonly name: string;
-	}
+		import UnifiedItemPageFrame from './UnifiedItemPageFrame.svelte';
 
 	type PageTrackTarget = { readonly index: number; readonly title: string };
-
-	interface PendingActionTarget {
-		readonly track: PageTrackTarget | null;
-		readonly desiredSemantic: AlbumActionSemantic;
-	}
 
 	interface Props {
 		controller: LibraryAlbumController;
 		actionController: AlbumActionController;
-		zones: readonly ZoneOption[];
+		/**
+		 * The zone every action on this page targets: the one the user has
+		 * selected. `null` disables them. The page never asks which zone
+		 * (public issue #12).
+		 */
+		zoneId: string | null;
 		album?: LibraryAlbumEntry | null;
+		/**
+		 * Stage-aware prose for a collection-opened page whose locator could
+		 * not be resolved (Slice 8d). It replaces the page's generic failure
+		 * line, which cannot tell a missing collection from a missing album
+		 * inside one.
+		 */
+		collectionFailureMessage?: string | null;
 		focusSongTitle?: string | null;
+		/** Changes whenever the host activates or restores a Library history entry. */
+		activationGeneration?: number;
 		backLabel: string;
 		onBack: () => void;
 		onRetry: () => void;
+		actionRetryAvailable?: boolean;
+		onRetryAction?: () => void;
 		onBeginAction: (
 			track: PageTrackTarget | null,
 			zoneId: string,
 			desiredSemantic: AlbumActionSemantic
 		) => void;
 		onOpenArtist?: () => void;
-		/** Optional editorial enrichment (plan Slice 3); null renders nothing. */
-		editorial?: EditorialItemState | null;
-		onEditorialRetry?: () => void;
-		/** Credit-performer navigation (plan Slice 4); opaque targets only. */
-		onEditorialFollow?: (target: string) => void;
-		/** Returns from a followed performer to the album's own view. */
-		onEditorialBack?: () => void;
-		/** True while the live editorial destination is a followed child. */
-		editorialFollowActive?: boolean;
 		/**
-		 * Opens exact-track credits for a ZERO-BASED position in this
+		 * Opens the exact-track child for a ZERO-BASED position in this
 		 * version's ordered tracks (plan Slice 5). Offered only on
 		 * single-version pages — the exact album/version/index binding.
 		 */
 		onOpenTrackInfo?: (trackPosition: number) => void;
+		/** Leaves that child and returns to the album's own view. */
+		onCloseTrackInfo?: () => void;
+		hrefForTrack?: (trackTitle: string) => string | null;
 		/**
-		 * A restored exact-track child index (Slice 8): consumed once when
-		 * the single-version track order arrives; a stale index keeps the
-		 * parent page (session-bound restoration rule).
+		 * A restored exact-track title: consumed once when the single-version
+		 * track order arrives; zero or several matches are never guessed.
 		 */
-		initialTrackInfoIndex?: number | null;
+		initialTrackInfoTitle?: string | null;
 	}
 
 	const {
 		controller,
 		actionController,
-		zones,
+		zoneId,
 		album = null,
+		collectionFailureMessage = null,
 		focusSongTitle = null,
+		activationGeneration = 0,
 		backLabel,
 		onBack,
 		onRetry,
+		actionRetryAvailable = false,
+		onRetryAction = () => {},
 		onBeginAction,
 		onOpenArtist,
-		editorial = null,
-		onEditorialRetry = () => {},
-		onEditorialFollow = () => {},
-		onEditorialBack = () => {},
-		editorialFollowActive = false,
 		onOpenTrackInfo = undefined,
-		initialTrackInfoIndex = null
+		onCloseTrackInfo = () => {},
+		hrefForTrack = undefined,
+		initialTrackInfoTitle = null
 	}: Props = $props();
 
 	const PAGE_SIZE = 100;
 
 	let page = $state(0);
 	let trackList: HTMLOListElement | null = $state(null);
-	let actionTarget = $state<PendingActionTarget | undefined>(undefined);
 	/**
 	 * The live public track target (ri5-2): the child view renders from
-	 * the page's own exact data immediately; editorial credits only
-	 * layer on top when they arrive.
+	 * the page's own exact data.
 	 */
 	let trackInfo = $state<{ position: number; title: string } | null>(null);
 
@@ -143,9 +138,9 @@
 	$effect(() => {
 		void sheet.selectedVersionId;
 		void sheet.orderedTracks;
+		void activationGeneration;
 		const focusPosition = focusedTrackPosition;
 		page = focusPosition >= 0 ? Math.floor(focusPosition / PAGE_SIZE) : 0;
-		actionTarget = undefined;
 		trackInfo = null;
 		if (focusPosition >= 0) {
 			void tick().then(() => {
@@ -206,19 +201,12 @@
 		track: PageTrackTarget | null,
 		desiredSemantic: AlbumActionSemantic
 	): void {
-		if (!sheet.actionsAvailable || actionBusy || zones.length === 0) return;
-		if (zones.length === 1) {
-			onBeginAction(track, zones[0].zoneId, desiredSemantic);
-			actionTarget = undefined;
-			return;
-		}
-		actionTarget = { track, desiredSemantic };
-	}
-
-	function chooseZone(zoneId: string): void {
-		if (!sheet.actionsAvailable || actionTarget === undefined) return;
-		onBeginAction(actionTarget.track, zoneId, actionTarget.desiredSemantic);
-		actionTarget = undefined;
+		// The guard matches the button that reaches it: a whole-album verb asks
+		// the album-level answer, a track row asks the track-level one. They are
+		// the same answer on a catalog page and may differ on a live one.
+		const available = track === null ? sheet.albumActionsAvailable : sheet.actionsAvailable;
+		if (!available || actionBusy || zoneId === null) return;
+		onBeginAction(track, zoneId, desiredSemantic);
 	}
 
 	function openTrackInfo(position: number, title: string): void {
@@ -226,34 +214,38 @@
 		onOpenTrackInfo?.(position);
 	}
 
+	function followTrackInfo(event: MouseEvent, href: string | null, position: number, title: string): void {
+		if (href !== null) {
+			if (!shouldHandleLibraryAnchorClick(event)) return;
+			event.preventDefault();
+		}
+		openTrackInfo(position, title);
+	}
+
 	function closeTrackInfo(): void {
 		trackInfo = null;
-		onEditorialBack();
+		onCloseTrackInfo();
 	}
 
-	// Restores a persisted exact-track child (Slice 8). The index is
-	// honored only when it resolves inside the loaded single-version track
-	// order — anything stale keeps the parent page (the session-bound
-	// restoration rule).
+	// Restores a persisted exact-track child by its rendering, never by list
+	// position. A catalog page must identify one version; a live page already
+	// is one exact rendering. Zero or several exact rows keep the parent until
+	// the route's missing/group outcome can say what happened.
 	$effect(() => {
-		if (initialTrackInfoIndex === null || trackInfo !== null) return;
-		if (sheet.versions.length !== 1 || onOpenTrackInfo === undefined) return;
-		const track = sheet.orderedTracks[initialTrackInfoIndex];
-		if (track === undefined) return;
-		openTrackInfo(initialTrackInfoIndex, track.title);
+		if (initialTrackInfoTitle === null || trackInfo !== null) return;
+		if ((sheet.live == null && sheet.versions.length !== 1) || onOpenTrackInfo === undefined) return;
+		const matches = sheet.orderedTracks.filter((track) => track.title === initialTrackInfoTitle);
+		if (matches.length !== 1) return;
+		const position = sheet.orderedTracks.indexOf(matches[0]);
+		const title = matches[0].title;
+		// The version/track reset effect and this restoration are invalidated by
+		// the same level publication. Restore after that reset has settled.
+		void tick().then(() => {
+			if (initialTrackInfoTitle !== title || trackInfo !== null) return;
+			if (sheet.orderedTracks[position]?.title !== title) return;
+			openTrackInfo(position, title);
+		});
 	});
-
-	function zonePrompt(target: PendingActionTarget): string {
-		const verb =
-			target.desiredSemantic === 'queue'
-				? 'Queue'
-				: target.desiredSemantic === 'add-next'
-					? 'Add next'
-					: 'Play';
-		return target.track === null
-			? `${verb} album on`
-			: `${verb} “${target.track.title}” on`;
-	}
 </script>
 
 <UnifiedItemPageFrame
@@ -293,7 +285,7 @@
 				<button
 					type="button"
 					data-testid="unified-album-play"
-					disabled={!sheet.actionsAvailable || sheet.phase !== 'details' || actionBusy || zones.length === 0}
+					disabled={!sheet.albumActionsAvailable || sheet.phase !== 'details' || actionBusy || zoneId === null}
 					onclick={() => pickTarget(null, 'play-now')}
 				>
 					Play album
@@ -301,7 +293,7 @@
 				<button
 					type="button"
 					data-testid="unified-album-queue"
-					disabled={!sheet.actionsAvailable || sheet.phase !== 'details' || actionBusy || zones.length === 0}
+					disabled={!sheet.albumActionsAvailable || sheet.phase !== 'details' || actionBusy || zoneId === null}
 					onclick={() => pickTarget(null, 'queue')}
 				>
 					Queue album
@@ -319,6 +311,15 @@
 
 		<div class="pright">
 			<div class="pa" data-testid="unified-album-artist">{displayArtist}</div>
+
+			{#if sheet.degraded}
+				<!-- Non-blocking: the page below is real catalog data and behaves
+				     exactly as the extended-bound page does. The notice only says
+				     where it came from. -->
+				<p class="degraded-notice" data-testid="unified-album-degraded">
+					Live browse isn't answering — showing your library's catalog data.
+				</p>
+			{/if}
 
 			{#if sheet.versions.length > 1}
 				<!-- The tab strip earns its place only when there is a choice
@@ -348,16 +349,6 @@
 				</nav>
 			{/if}
 
-			{#if actionTarget !== undefined && zones.length > 1}
-				<div class="zone-picker" data-testid="unified-album-zone-picker">
-					<span class="zone-label">{zonePrompt(actionTarget)}</span>
-					{#each zones as zone (zone.zoneId)}
-						<button type="button" onclick={() => chooseZone(zone.zoneId)}>{zone.name}</button>
-					{/each}
-					<button type="button" class="ghost" onclick={() => (actionTarget = undefined)}>Cancel</button>
-				</div>
-			{/if}
-
 			{#if action.phase === 'choosing'}
 				<div class="action-choices" data-testid="unified-album-action-choices">
 					{#each action.actions as choice (choice.actionId)}
@@ -368,7 +359,19 @@
 			{:else if action.phase === 'resolving' || action.phase === 'executing'}
 				<p class="status" data-testid="unified-album-action-busy">Working…</p>
 			{:else if action.phase === 'failed' || action.phase === 'outcome-unknown'}
-				<p class="status error" data-testid="unified-album-action-error">{action.error ?? 'The action failed.'}</p>
+				<p class="status error" data-testid="unified-album-action-error">
+					{action.error ?? 'The action failed.'}
+				</p>
+				{#if action.phase === 'failed' && actionRetryAvailable}
+					<button
+						type="button"
+						class="retry"
+						onclick={onRetryAction}
+						data-testid="unified-album-action-retry"
+					>
+						Retry action
+					</button>
+				{/if}
 			{/if}
 
 			{#if sheet.phase === 'opening'}
@@ -378,7 +381,9 @@
 				<div class="stub">Finding the versions Roon currently exposes.</div>
 			{:else if sheet.phase === 'failed' || sheet.phase === 'canceled'}
 				<div class="tl">
-					<p class="status error" data-testid="unified-album-error">{sheet.error ?? 'The album page could not be opened.'}</p>
+					<p class="status error" data-testid="unified-album-error">{collectionFailureMessage ??
+							sheet.error ??
+							'The album page could not be opened.'}</p>
 					<button type="button" class="retry" onclick={onRetry} data-testid="unified-album-retry">Try again</button>
 				</div>
 				<div class="stub">Reopen the page to restore live version authority.</div>
@@ -422,13 +427,15 @@
 				<div class="stub">Artwork is shown only to help recognize a row.</div>
 			{:else if sheet.phase === 'loading-detail'}
 				<div class="tl">
-					<p class="status" data-testid="unified-album-detail-loading">Loading {selectedVersion ? versionLabel(selectedVersion, sheet.versions.indexOf(selectedVersion)) : 'version'}…</p>
+					<p class="status" data-testid="unified-album-detail-loading">Loading {selectedVersion && (sheet.versions.length > 1 || selectedVersion.editionText) ? versionLabel(selectedVersion, sheet.versions.indexOf(selectedVersion)) : 'album'}…</p>
 				</div>
 				<div class="stub">Loading this version's exact track list.</div>
 			{:else if sheet.phase === 'details'}
 				{#if selectedVersion}
 					<div class="version-heading" data-testid="unified-album-selected-version">
-						<strong>{versionLabel(selectedVersion, sheet.versions.indexOf(selectedVersion))}</strong>
+						{#if sheet.versions.length > 1 || selectedVersion.editionText}
+							<strong>{versionLabel(selectedVersion, sheet.versions.indexOf(selectedVersion))}</strong>
+						{/if}
 					<span>{versionFacts(selectedVersion).join(' · ')}</span>
 					</div>
 				{/if}
@@ -442,26 +449,31 @@
 						>
 							{#if !suppressRowIndex}<span class="tn mono">{page * PAGE_SIZE + offset + 1}</span>{/if}
 							<span class="tnm">{track.title}</span>
-							{#if onOpenTrackInfo && sheet.versions.length === 1}
-								<button
-									type="button"
+							{#if onOpenTrackInfo && (sheet.live != null || sheet.versions.length === 1)}
+								{@const href = hrefForTrack?.(track.title) ?? null}
+								<svelte:element
+									this={href === null ? 'button' : 'a'}
+									role={href === null ? 'button' : 'link'}
+									type={href === null ? 'button' : undefined}
+									{href}
 									class="tinfo"
 									data-testid="unified-track-info-{track.index}"
-									onclick={() => openTrackInfo(page * PAGE_SIZE + offset, track.title)}
-								>Info</button>
+									onclick={(event: MouseEvent) =>
+										followTrackInfo(event, href, page * PAGE_SIZE + offset, track.title)}
+								>Info</svelte:element>
 							{/if}
 							<button
 								type="button"
 								class="tgo"
 								data-testid="unified-track-action-{track.index}"
-								disabled={!sheet.actionsAvailable || actionBusy || zones.length === 0}
+								disabled={!sheet.actionsAvailable || actionBusy || zoneId === null}
 								onclick={() => pickTarget({ index: track.index, title: track.title }, 'play-now')}
 							>Play</button>
 							<button
 								type="button"
 								class="tq"
 								data-testid="unified-track-queue-{track.index}"
-								disabled={!sheet.actionsAvailable || actionBusy || zones.length === 0}
+								disabled={!sheet.actionsAvailable || actionBusy || zoneId === null}
 								onclick={() => pickTarget({ index: track.index, title: track.title }, 'queue')}
 							>Queue</button>
 						</li>
@@ -475,137 +487,24 @@
 						<button type="button" disabled={page >= pageCount - 1} onclick={() => (page = Math.min(pageCount - 1, page + 1))}>Next</button>
 					</nav>
 				{/if}
-				{#if sheet.versions.length === 1}
-					<!-- The editorial read is bound to the crosswalked catalog anchor
-					     identity; only a single-version page can attribute that prose
-					     honestly to what the user is looking at (ri3-1). Multi-version
-					     pages render no editorial surface until version-exact
-					     editorial identity exists. -->
-					{#if editorialFollowActive && editorial?.view?.kind === 'album'}
-						<!-- A followed similar album (Slice 7): the child's own
-						     native identity heading, review, and display-only
-						     credits. Parent and child share kind 'album', so the
-						     live follow state — not the view kind — is the gate. -->
-						<section class="editorial" data-testid="unified-album-similar-album">
-							<h3>{editorial.view.title}</h3>
-							{#if editorial.view.artworkKey}
-								<img
-									class="child-art"
-									src={imageUrl(editorial.view.artworkKey, { scale: 'fit', width: 128, height: 128 })}
-									alt=""
-									loading="lazy"
-									data-testid="unified-album-similar-album-art"
-									use:hideOnError
-								/>
-							{/if}
-							{#if editorial.view.subtitle}
-								<p class="child-subtitle">{editorial.view.subtitle}</p>
-							{/if}
-							<button
-								type="button"
-								class="follow-back"
-								data-testid="unified-album-similar-album-back"
-								onclick={onEditorialBack}
-							>
-								Back to album info
-							</button>
-						</section>
-						<EditorialTextSection
-							heading="Review"
-							section="review"
-							{editorial}
-							testId="unified-album-similar-review"
-							onRetry={onEditorialRetry}
-						/>
-						<EditorialCreditsSection
-							{editorial}
-							testId="unified-album-similar-credits"
-							onFollow={onEditorialFollow}
-						/>
-					{:else if trackInfo !== null && editorial?.view?.kind !== 'artist'}
-						<!-- Exact-track child view (Slice 5, ri5-2): the heading is
-						     the page's OWN exact track title — public data first;
-						     the settled graph's role-grouped credits layer on only
-						     when the enrichment arrives. -->
-						<section class="editorial" data-testid="unified-album-track-info">
-							<h3>{trackInfo.title}</h3>
-							<button
-								type="button"
-								class="follow-back"
-								data-testid="unified-album-track-info-back"
-								onclick={closeTrackInfo}
-							>
-								Back to album info
-							</button>
-						</section>
-						<EditorialTextSection
-							heading="About the composition"
-							section="description"
-							{editorial}
-							testId="unified-album-track-description"
-							onRetry={onEditorialRetry}
-						/>
-						<EditorialCreditsSection
-							{editorial}
-							kind="track"
-							testId="unified-album-track-credits"
-							onFollow={onEditorialFollow}
-						/>
-					{:else if editorial?.view?.kind === 'artist'}
-						<!-- A followed credit performer (Slice 4): identity heading,
-						     biography, and the way back to the album's own view. -->
-						<section class="editorial" data-testid="unified-album-credit-performer">
-							<h3>{editorial.view.title}</h3>
-							{#if editorial.view.artworkKey}
-								<img
-									class="child-art"
-									src={imageUrl(editorial.view.artworkKey, { scale: 'fit', width: 128, height: 128 })}
-									alt=""
-									loading="lazy"
-									data-testid="unified-album-credit-performer-art"
-									use:hideOnError
-								/>
-							{/if}
-							<button
-								type="button"
-								class="follow-back"
-								data-testid="unified-album-credit-performer-back"
-								onclick={onEditorialBack}
-							>
-								<!-- The control names the real destination (ri5-4): a
-								     performer followed from track credits backs out to
-								     those credits, not to the album view. -->
-								{trackInfo !== null ? 'Back to track credits' : 'Back to album info'}
-							</button>
-						</section>
-						<EditorialTextSection
-							heading="Biography"
-							section="biography"
-							{editorial}
-							testId="unified-album-performer-biography"
-							onRetry={onEditorialRetry}
-						/>
-					{:else}
-						<EditorialTextSection
-							heading="Review"
-							section="review"
-							{editorial}
-							testId="unified-album-review"
-							onRetry={onEditorialRetry}
-						/>
-						<EditorialCreditsSection
-							{editorial}
-							testId="unified-album-credits"
-							onFollow={onEditorialFollow}
-						/>
-						<EditorialRelationshipSection
-							{editorial}
-							kind="album"
-							testId="unified-album-related"
-							onFollow={onEditorialFollow}
-						/>
+					{#if sheet.live != null || sheet.versions.length === 1}
+						{#if trackInfo !== null}
+							<!-- Exact-track child view (Slice 5): the page's OWN exact track
+							     title, which is what the address names, and the way back to
+							     the album's own view. -->
+							<section class="track-child" data-testid="unified-album-track-info">
+								<h3>{trackInfo.title}</h3>
+								<button
+									type="button"
+									class="follow-back"
+									data-testid="unified-album-track-info-back"
+									onclick={closeTrackInfo}
+								>
+									Back to album info
+								</button>
+							</section>
+						{/if}
 					{/if}
-				{/if}
 				<div class="stub">{sheet.orderedTracks.length} tracks loaded from your Core.</div>
 			{/if}
 		</div>
@@ -658,6 +557,15 @@
 	.version-copy small.error {
 		opacity: 1;
 		color: var(--error, #e66);
+	}
+	.degraded-notice {
+		margin: 8px 0 0;
+		padding: 7px 10px;
+		border: 1px solid var(--line-subtle);
+		border-radius: 6px;
+		background: var(--songr-surface-11);
+		color: var(--soft);
+		font-size: 12px;
 	}
 	.album-tabs {
 		display: flex;
@@ -762,17 +670,12 @@
 		color: var(--soft);
 		font-size: 11px;
 	}
-	.zone-picker,
 	.action-choices {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
 		gap: 8px;
 		margin-top: 12px;
-	}
-	.zone-label {
-		font-size: 13px;
-		opacity: 0.75;
 	}
 	.tracks {
 		list-style: none;
@@ -800,13 +703,12 @@
 	.retry {
 		margin-top: 12px;
 	}
-	.editorial {
+	.track-child {
 		margin-top: 18px;
 	}
-	/* Followed-child identity heading (q6): the child title reads as
-	   identity, not a section label — same treatment as the artist page's
-	   followed-child heading. */
-	.editorial h3 {
+	/* Child identity heading (q6): the child title reads as identity, not a
+	   section label. */
+	.track-child h3 {
 		margin: 0 0 6px;
 		font-size: 15px;
 		font-weight: 600;
@@ -822,22 +724,6 @@
 	.follow-back:hover {
 		color: var(--accent2);
 	}
-	.child-subtitle {
-		margin: 0 0 4px;
-		font-size: 12px;
-		color: var(--soft);
-	}
-	.child-art {
-		display: block;
-		width: 64px;
-		height: 64px;
-		margin: 4px 0 8px;
-		border-radius: 4px;
-		object-fit: cover;
-		background: var(--songr-surface-11);
-		/* 1px keyline, matching the tile art chrome at this size (q6). */
-		box-shadow: 0 0 0 1px var(--line-subtle);
-	}
 	.tinfo {
 		padding: 2px 8px;
 		border: 1px solid var(--line-subtle);
@@ -846,6 +732,7 @@
 		color: var(--soft);
 		font-size: 11px;
 		cursor: pointer;
+		text-decoration: none;
 	}
 	.tinfo:hover {
 		border-color: var(--accent);

@@ -1,6 +1,14 @@
 import path from "path";
 
-import { ConfigError, loadConfig } from "../env";
+import {
+  BROWSE_CANARY_LATENCY_MULTIPLE,
+} from "../../core/roon/BrowseCanaryService";
+import { DEFAULT_ROON_CALL_TIMEOUT_MS } from "../../core/roon/timeout";
+import {
+  ConfigError,
+  DEFAULT_BROWSE_CANARY_BASELINE_P95_MS,
+  loadConfig,
+} from "../env";
 
 /**
  * Snapshot/restore for the variables a test mutates. Jest runs the backend
@@ -35,7 +43,7 @@ const withEnv = (names: string[]) => {
   return { save, restore, clear };
 };
 
-describe("Catalog path configuration", () => {
+describe("Retired catalog store path", () => {
   const env = withEnv(["CATALOG_PATH", "TIMELINE_CATALOG_PATH"]);
 
   beforeEach(() => {
@@ -45,24 +53,24 @@ describe("Catalog path configuration", () => {
 
   afterEach(env.restore);
 
-  it("defaults to a controller-local catalog directory", () => {
-    expect(loadConfig().catalogPath).toBe(path.resolve("./data/catalog"));
+  it("defaults to the controller-local directory the store used", () => {
+    expect(loadConfig().retiredCatalogPath).toBe(path.resolve("./data/catalog"));
   });
 
-  it("resolves an explicit catalog directory", () => {
+  it("resolves an explicit directory an operator moved it to", () => {
     process.env.CATALOG_PATH = "./var/catalog";
-    expect(loadConfig().catalogPath).toBe(path.resolve("./var/catalog"));
+    expect(loadConfig().retiredCatalogPath).toBe(path.resolve("./var/catalog"));
   });
 
   it("honors the legacy TIMELINE_CATALOG_PATH key from pre-removal deployments", () => {
     process.env.TIMELINE_CATALOG_PATH = "./var/legacy-catalog";
-    expect(loadConfig().catalogPath).toBe(path.resolve("./var/legacy-catalog"));
+    expect(loadConfig().retiredCatalogPath).toBe(path.resolve("./var/legacy-catalog"));
   });
 
   it("prefers CATALOG_PATH when both keys are set", () => {
     process.env.CATALOG_PATH = "./var/catalog";
     process.env.TIMELINE_CATALOG_PATH = "./var/legacy-catalog";
-    expect(loadConfig().catalogPath).toBe(path.resolve("./var/catalog"));
+    expect(loadConfig().retiredCatalogPath).toBe(path.resolve("./var/catalog"));
   });
 });
 
@@ -159,7 +167,7 @@ describe("Config and data base directories", () => {
       path.resolve("./data/recently-played.json")
     );
     expect(config.favoritesPath).toBe(path.resolve("./data/favorites.json"));
-    expect(config.catalogPath).toBe(path.resolve("./data/catalog"));
+    expect(config.retiredCatalogPath).toBe(path.resolve("./data/catalog"));
   });
 
   it("relocates the pairing token with CONFIG_DIR", () => {
@@ -183,7 +191,7 @@ describe("Config and data base directories", () => {
     expect(config.favoritesPath).toBe(
       path.join("/tmp/songr-test/data", "favorites.json")
     );
-    expect(config.catalogPath).toBe(path.join("/tmp/songr-test/data", "catalog"));
+    expect(config.retiredCatalogPath).toBe(path.join("/tmp/songr-test/data", "catalog"));
   });
 
   it("leaves CONFIG_DIR and DATA_DIR independent of each other", () => {
@@ -193,7 +201,7 @@ describe("Config and data base directories", () => {
     expect(config.roonTokenPath).toBe(
       path.join("/tmp/songr-test/config", "roon-token.json")
     );
-    expect(config.catalogPath).toBe(path.resolve("./data/catalog"));
+    expect(config.retiredCatalogPath).toBe(path.resolve("./data/catalog"));
   });
 
   it("resolves a relative base dir against the working directory", () => {
@@ -217,7 +225,7 @@ describe("Config and data base directories", () => {
       "/tmp/songr-test/elsewhere/favorites.json"
     );
     // Unoverridden entries still follow the base dir.
-    expect(config.catalogPath).toBe(path.join("/tmp/songr-test/data", "catalog"));
+    expect(config.retiredCatalogPath).toBe(path.join("/tmp/songr-test/data", "catalog"));
   });
 
   it("rejects a blank-but-present base dir the same way as other paths", () => {
@@ -227,5 +235,88 @@ describe("Config and data base directories", () => {
     expect(loadConfig().roonTokenPath).toBe(
       path.resolve("./config/roon-token.json")
     );
+  });
+});
+
+/**
+ * The post-connect load trial's canary switches
+ * (`.agents/plans/core-wedge-postconnect.md` §A0/§A3). The canary is real
+ * traffic against the Core, so the default must be off; and a switch that
+ * read `=0` as on would silently invert what a trial cell was set up to
+ * measure, which is why an unrecognized value is refused rather than guessed.
+ */
+describe("browse canary configuration", () => {
+  const env = withEnv([
+    "ROON_BROWSE_CANARY",
+    "ROON_BROWSE_CANARY_BASELINE_P95_MS",
+  ]);
+
+  beforeEach(() => {
+    env.save();
+    env.clear();
+  });
+
+  afterEach(env.restore);
+
+  it("runs the canary on a stock install, against the shipped reference", () => {
+    // A build that shipped the canary off shipped a sweep governor that could
+    // never freeze a baseline, and so could never ramp past one. The stock
+    // install has to reach the full ramp with nothing configured.
+    const config = loadConfig();
+    expect(config.browseCanaryEnabled).toBe(true);
+    expect(config.browseCanaryBaselineP95Ms).toBe(
+      DEFAULT_BROWSE_CANARY_BASELINE_P95_MS
+    );
+  });
+
+  it("draws the shipped line well clear of a healthy Core and well inside a wedge", () => {
+    // Every rule fires at 3x the reference, so this is the number that
+    // matters. It has to sit far above a slow-but-healthy root browse and far
+    // below the 15 s call budget, or it is either a nuisance or a decoration.
+    const thresholdMs =
+      DEFAULT_BROWSE_CANARY_BASELINE_P95_MS * BROWSE_CANARY_LATENCY_MULTIPLE;
+    expect(thresholdMs).toBeGreaterThanOrEqual(1_000);
+    expect(thresholdMs).toBeLessThan(DEFAULT_ROON_CALL_TIMEOUT_MS);
+    // The observed wedge precursor included a 3.4 s stall.
+    expect(thresholdMs).toBeLessThan(3_400);
+  });
+
+  it.each(["1", "true", "yes", "on", "ON", " true "])(
+    "switches the canary on for %j",
+    (value) => {
+      process.env.ROON_BROWSE_CANARY = value;
+      expect(loadConfig().browseCanaryEnabled).toBe(true);
+    }
+  );
+
+  it.each(["0", "false", "no", "off"])(
+    "takes %j as the emergency valve",
+    (value) => {
+      process.env.ROON_BROWSE_CANARY = value;
+      expect(loadConfig().browseCanaryEnabled).toBe(false);
+    }
+  );
+
+  it("reads an empty value as unset rather than as off", () => {
+    // A commented-out line in a deployed .env leaves the variable set to the
+    // empty string. That is nobody having configured it, not somebody having
+    // turned it off.
+    process.env.ROON_BROWSE_CANARY = "";
+    expect(loadConfig().browseCanaryEnabled).toBe(true);
+  });
+
+  it("refuses a value it cannot read as on or off", () => {
+    process.env.ROON_BROWSE_CANARY = "maybe";
+    expect(() => loadConfig()).toThrow(/ROON_BROWSE_CANARY/u);
+  });
+
+  it("carries a configured baseline p95", () => {
+    process.env.ROON_BROWSE_CANARY_BASELINE_P95_MS = "420";
+    expect(loadConfig().browseCanaryBaselineP95Ms).toBe(420);
+  });
+
+  it.each(["0", "-1", "abc"])("refuses the baseline %j", (value) => {
+    process.env.ROON_BROWSE_CANARY_BASELINE_P95_MS = value;
+    expect(() => loadConfig()).toThrow(/ROON_BROWSE_CANARY_BASELINE_P95_MS/u);
   });
 });

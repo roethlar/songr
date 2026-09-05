@@ -1,9 +1,12 @@
 import {
+	CLASSIC_BROWSE_ID_MAX_LENGTH,
 	CLASSIC_SEARCH_ACK_TIMEOUT_MS,
 	CLASSIC_SEARCH_COORDINATED_CALL_CEILING_MS,
 	CLASSIC_SEARCH_EXPANSION_DEADLINE_MS,
+  CLASSIC_SESSION_RETIRED_CONTRACT,
   normalizeClassicBrowseCommandAck,
   normalizeClassicBrowseCommandRequest,
+  normalizeClassicSessionRetiredEvent,
   normalizeClassicSessionAcquireAck,
   normalizeClassicSessionAcquireRequest,
   normalizeClassicSessionReleaseRequest,
@@ -13,6 +16,34 @@ import {
 const session = { handleId: "classic-handle-1", generation: 7 };
 
 describe("classic browse wire contracts", () => {
+  it("accepts only an exact retired-session event", () => {
+    const retired = {
+      contract: CLASSIC_SESSION_RETIRED_CONTRACT,
+      tabId: "tab-1",
+      session,
+      reason: "SESSION_LOST",
+    };
+    expect(normalizeClassicSessionRetiredEvent(retired)).toEqual(retired);
+
+    const prototypeBearing = Object.assign(
+      Object.create({ inherited: true }) as Record<string, unknown>,
+      retired
+    );
+    for (const malformed of [
+      { ...retired, extra: true },
+      { contract: retired.contract, tabId: retired.tabId, session },
+      { ...retired, tabId: "bad tab" },
+      { ...retired, tabId: "x".repeat(CLASSIC_BROWSE_ID_MAX_LENGTH + 1) },
+      { ...retired, session: { ...session, handleId: "bad handle" } },
+      { ...retired, session: { ...session, generation: -1 } },
+      { ...retired, session: { ...session, generation: 1.5 } },
+      { ...retired, reason: "STALE_GENERATION" },
+      prototypeBearing,
+    ]) {
+      expect(normalizeClassicSessionRetiredEvent(malformed)).toBeNull();
+    }
+  });
+
   it("keeps the grouped-search acknowledgment beyond its worst-case mutation window", () => {
     const latestServerSettlement =
       CLASSIC_SEARCH_EXPANSION_DEADLINE_MS +

@@ -13,8 +13,7 @@
  * change to it fails a test rather than producing an app that starts and then
  * serves a blank page.
  *
- * Nothing in this file is specific to the private tree. It is deliberately
- * plain: the desktop shell is product code that ships in both trees.
+ * Songr ships one public desktop identity, in every checkout.
  */
 
 import path from 'path';
@@ -93,101 +92,19 @@ export const PRODUCT_NAME = 'Songr';
  */
 export const PUBLIC_APP_ID = 'app.songr.desktop';
 
-/**
- * Suffix the private tree's build appends. Plan §10 asks for "appId per tree
- * (public/private suffix)": two installed apps that do not collide in the
- * operating system's application registry, so the owner can run their own
- * build beside a public release without either one shadowing the other.
- */
-export const PRIVATE_APP_ID_SUFFIX = '.private';
-
-/**
- * The application id for a tree.
- *
- * `privateTree` is decided by the caller from a marker the export pipeline
- * cannot carry (see `scripts/package-app.mjs`), never by a build-time flag: an
- * artifact's identity should follow from what was built, not from what the
- * person building it remembered to type.
- */
-export function appIdForTree(privateTree: boolean): string {
-  return privateTree ? `${PUBLIC_APP_ID}${PRIVATE_APP_ID_SUFFIX}` : PUBLIC_APP_ID;
-}
-
-/**
- * The product name for a tree.
- *
- * The name has to split with the id, not just the id (dt7-1): the bundle
- * name is what users and installers see, and two installed "Songr" apps are
- * one too many. On its own it does NOT split the runtime identity — userData
- * and the single-instance lock come from the packaged manifest, not the
- * bundle name — so this is only ever consumed through `builderIdentityArgs`,
- * which pairs it with the extraMetadata override. Owner-vetoable naming, same
- * as the id.
- */
-export function productNameForTree(privateTree: boolean): string {
-  return privateTree ? `${PRODUCT_NAME} Private` : PRODUCT_NAME;
-}
-
-/**
- * The runtime name for a tree: the `name` field of the packaged app's own
- * package.json.
- *
- * This is the identity Electron actually keys on. `app.getName()` reads the
- * packaged manifest (productName first, then name), and userData — plus the
- * single-instance lock that lives in it — derives from that. It is not the
- * workspace name (`roon-controller-desktop`): the workspace name would name a
- * dev run's data directory, and it is deliberately not product-shaped. The
- * public literal matches the Linux `executableName`/`packageName` in
- * `electron-builder.yml`, so every per-tree name a user can encounter splits
- * the same way.
- */
+/** Stable runtime and Linux package name; also keeps existing user data. */
 export const PUBLIC_RUNTIME_NAME = 'songr';
-export const PRIVATE_RUNTIME_NAME_SUFFIX = '-private';
 
-export function runtimeNameForTree(privateTree: boolean): string {
-  return privateTree
-    ? `${PUBLIC_RUNTIME_NAME}${PRIVATE_RUNTIME_NAME_SUFFIX}`
-    : PUBLIC_RUNTIME_NAME;
-}
-
-/**
- * The electron-builder CLI arguments that fix one tree's whole application
- * identity, bundle AND runtime.
- *
- * The runtime half is the lesson of the pulled v1.1.4 release. dt7-1 split
- * `--config.productName`, but that names the bundle and the artifacts; it
- * never reaches the app package.json inside the bundle, which electron-builder
- * rewrites only from `extraMetadata` (app-builder-lib's fileTransformer
- * deep-assigns it into the manifest it packs). So both 1.1.4 builds shipped
- * `name: "roon-controller-desktop"` with no productName in their packaged
- * manifests, Electron derived the same userData and the same single-instance
- * lock for both, and launching the public app focused the private one's
- * window. The extraMetadata pair below is what makes the split real; the CLI
- * values override the public literals in `electron-builder.yml`.
- */
-export function builderIdentityArgs(privateTree: boolean): string[] {
+/** All identity channels must agree, including Electron's runtime manifest. */
+export function builderIdentityArgs(): string[] {
   return [
-    `--config.appId=${appIdForTree(privateTree)}`,
-    `--config.productName=${productNameForTree(privateTree)}`,
-    `--config.extraMetadata.name=${runtimeNameForTree(privateTree)}`,
-    `--config.extraMetadata.productName=${productNameForTree(privateTree)}`,
-    // The Linux package identity is a THIRD channel, separate from the bundle
-    // and the runtime. `linux.executableName` (with syncDesktopName) names the
-    // binary, the .desktop file, its `Icon=` key and the installed icon files;
-    // the deb and rpm package names live under their own sections, not under
-    // `linux`. Left at the config's defaults both trees produced a package
-    // called `songr` owning `/usr/bin/songr`, `songr.desktop` and
-    // `hicolor/*/apps/songr.png`, so the private and public packages could not
-    // be installed side by side even though their bundles and runtimes were
-    // already split.
-    `--config.linux.executableName=${runtimeNameForTree(privateTree)}`,
-    `--config.deb.packageName=${runtimeNameForTree(privateTree)}`,
-    `--config.rpm.packageName=${runtimeNameForTree(privateTree)}`,
-    // `syncDesktopName` derives the .desktop FILENAME from `desktopName` in
-    // package.json and only falls back to `executableName` when it is absent —
-    // and package.json hardcodes `songr.desktop`, so without this override both
-    // trees installed the same `/usr/share/applications/songr.desktop` even
-    // once every other name had been split.
-    `--config.extraMetadata.desktopName=${runtimeNameForTree(privateTree)}.desktop`,
+    `--config.appId=${PUBLIC_APP_ID}`,
+    `--config.productName=${PRODUCT_NAME}`,
+    `--config.extraMetadata.name=${PUBLIC_RUNTIME_NAME}`,
+    `--config.extraMetadata.productName=${PRODUCT_NAME}`,
+    `--config.linux.executableName=${PUBLIC_RUNTIME_NAME}`,
+    `--config.deb.packageName=${PUBLIC_RUNTIME_NAME}`,
+    `--config.rpm.packageName=${PUBLIC_RUNTIME_NAME}`,
+    `--config.extraMetadata.desktopName=${PUBLIC_RUNTIME_NAME}.desktop`,
   ];
 }

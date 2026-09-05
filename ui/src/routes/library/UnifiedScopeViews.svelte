@@ -1,21 +1,13 @@
 <script lang="ts">
 	import type { UnifiedLibraryDrillTarget, UnifiedLibraryScope } from '$lib/libraryPageState';
 	import { imageUrl } from '$lib/imageUrl';
+	import { shouldHandleLibraryAnchorClick } from '$lib/libraryPageNavigation';
 	import type { UnifiedSongActionSemantic } from '@shared/unifiedSearchContracts';
 	import type {
 		LetterBucket,
 		LibraryAlbumEntry,
 		LibraryArtistEntry
-	} from '$lib/stores/libraryIndexStore';
-	import type { PublicSongActionController } from '$lib/library/PublicSongActionController';
-	import type { Readable } from 'svelte/store';
-	import {
-		libraryScopeSlots,
-		type MostPlayedState,
-		type PlaylistsState,
-		type ResolvedLibraryScopeSlots
-	} from '@libraryFeatures';
-	import type { ScopeActionTarget } from '$lib/libraryFeatures/scopeSlotContract';
+	} from '$lib/libraryEntries';
 	import {
 		formatGenreAlbumCount,
 		type NamedCountsState
@@ -32,8 +24,7 @@
 		sortAlbums,
 		sortAlbumsByRecentlyAdded,
 		sortArtists,
-		sortNamedCounts,
-		type DateFeatureGate
+		sortNamedCounts
 	} from '$lib/unifiedLibrarySorts';
 
 	/**
@@ -56,61 +47,24 @@
 		randomSeed?: number;
 		groupAlbums?: boolean;
 		railTarget: LetterBucket | null;
-		/**
-		 * Native date-feature gate (Slice 5): a restored Recently added page
-		 * whose gate has since dropped degrades to the honest reason instead
-		 * of an ordering the data cannot back.
-		 */
-		dateFeatureGate: DateFeatureGate;
-		/** All-time native metrics, drills, and shared song action wiring. */
-		mostPlayed?: UnifiedMostPlayedViewProps;
-		/**
-		 * Playlists scope (Slice 7): the playlist-feature gate (base native
-		 * capability, no date/play gate), the scope store, and the action
-		 * wiring for resolved tracks. A restored Playlists page whose gate
-		 * dropped renders the carried reason.
-		 */
-		playlists?: UnifiedPlaylistsViewProps;
-		/**
-		 * The extended scope views this build carries, resolved through the
-		 * `@libraryFeatures` alias. A `null` slot means the build has no such
-		 * view, and the scope renders its hint instead — absent, never disabled.
-		 */
-		scopeSlots?: Pick<ResolvedLibraryScopeSlots, 'mostPlayedView' | 'playlistsView'>;
 		genres: NamedCountsState;
 		recent: RecentlyPlayedState;
 		onDrill?: (target: UnifiedLibraryDrillTarget) => void;
-	}
-
-	interface UnifiedPlaylistsViewProps {
-		readonly gate: DateFeatureGate;
-		readonly store: Readable<PlaylistsState>;
-		readonly open: (fetchFn: typeof fetch, playlistId: string) => Promise<void>;
-		readonly close: () => void;
-		readonly actionController: PublicSongActionController;
-		readonly zones: readonly { readonly zoneId: string; readonly name: string }[];
-		readonly onBeginAction: (
-			target: ScopeActionTarget,
-			zoneId: string,
-			desiredSemantic: UnifiedSongActionSemantic
-		) => void;
-		readonly albums: readonly LibraryAlbumEntry[];
-		readonly fetchFn: typeof fetch;
-	}
-
-	interface UnifiedMostPlayedViewProps {
-		readonly gate: DateFeatureGate;
-		readonly state: MostPlayedState;
-		readonly actionController: PublicSongActionController;
-		readonly zones: readonly { readonly zoneId: string; readonly name: string }[];
-		readonly onBeginAction: (
-			target: ScopeActionTarget,
-			zoneId: string,
-			desiredSemantic: UnifiedSongActionSemantic
-		) => void;
-		readonly onClearAction: () => void;
-		readonly onOpenAlbum: (albumLocalId: string) => void;
-		readonly fetchFn: typeof fetch;
+		/**
+		 * Opens one row Roon itself rendered, by the reference that row carries
+		 * (`.agents/plans/library-live-view.md` Slice 2).
+		 *
+		 * A live row is never named by a drill target: it has no catalog
+		 * identity, and none is minted for it. The whole entry is handed back
+		 * because the host — the one place that knows which list this is —
+		 * builds the row's address from it.
+		 */
+		onOpenLiveArtist?: (entry: LibraryArtistEntry) => void;
+		onOpenLiveAlbum?: (entry: LibraryAlbumEntry) => void;
+		hrefForArtist?: (entry: LibraryArtistEntry) => string | null;
+	hrefForAlbum?: (entry: LibraryAlbumEntry) => string | null;
+	hrefForDrill?: (target: UnifiedLibraryDrillTarget) => string | null;
+	albumTestId?: string;
 	}
 
 	const {
@@ -121,29 +75,26 @@
 		randomSeed = 1,
 		groupAlbums = true,
 		railTarget,
-		dateFeatureGate,
-		mostPlayed = undefined,
-		playlists = undefined,
-		scopeSlots = libraryScopeSlots,
 		genres,
 		recent,
-		onDrill
+		onDrill,
+		onOpenLiveArtist,
+		onOpenLiveAlbum,
+		hrefForArtist,
+		hrefForAlbum,
+		hrefForDrill,
+		albumTestId = 'unified-tile'
 	}: Props = $props();
 
-	/**
-	 * Bound as locals so the markup renders a slot component. Capitalised
-	 * because that is how Svelte tells a component expression from an element.
-	 */
-	const MostPlayedView = $derived(scopeSlots.mostPlayedView);
-	const PlaylistsView = $derived(scopeSlots.playlistsView);
-
 	interface TileItem {
+		readonly source?: LibraryAlbumEntry;
 		readonly key: string;
 		readonly title: string;
 		readonly artist: string;
 		readonly imageKey: string | null;
 		readonly versionCount: number;
-		readonly drill?: UnifiedLibraryDrillTarget;
+		/** The live row this tile is, when it came from Roon's own list. */
+		readonly live?: LibraryAlbumEntry;
 	}
 
 	interface Group<T> {
@@ -202,16 +153,14 @@
 	);
 
 	const albumTile = (entry: LibraryAlbumEntry): TileItem => ({
+		source: entry,
 		key: entry.id,
 		title: entry.title,
 		artist: entry.artist,
 		imageKey: entry.imageKey ?? null,
 		versionCount: entry.versionCount ?? 1,
-		// Albums without a catalog identity stay inert (browse fallback
-		// rows); the sheet needs a stable localId.
-		...(entry.catalogLocalId
-			? { drill: { kind: 'album', localId: entry.catalogLocalId } as const }
-			: {})
+		// A live row opens by its own reference, which is the whole identity it
+		live: entry
 	});
 
 	const albumsSorted = $derived(sortAlbums(albums, sorts.albums, randomSeed));
@@ -299,16 +248,28 @@
 		return null;
 	});
 
+	function followAddress(event: MouseEvent, open: (() => void) | undefined): void {
+		if (open === undefined || !shouldHandleLibraryAnchorClick(event)) return;
+		event.preventDefault();
+		open();
+	}
 </script>
 
 {#snippet artistRows(rows: readonly LibraryArtistEntry[])}
 	<div class="alist">
 		{#each rows as entry (entry.id)}
-			<button
-				type="button"
+			{@const href = hrefForArtist?.(entry) ?? null}
+			{@const open = onOpenLiveArtist ? () => onOpenLiveArtist(entry) : undefined}
+			<svelte:element
+				this={href === null ? 'button' : 'a'}
+				role={href === null ? 'button' : 'link'}
+				type={href === null ? 'button' : undefined}
+				{href}
 				class="arow"
 				data-testid="unified-row"
-				onclick={onDrill ? () => onDrill({ kind: 'artist', localId: entry.id }) : undefined}
+				disabled={href === null && open === undefined}
+				onclick={(event: MouseEvent) =>
+					href === null ? open?.() : followAddress(event, open)}
 			>
 				<span class="an">{entry.name}</span><span class="ad"></span><span class="ac mono"
 					><!-- Build-v5 renders the count Roon supplies on every Artists row. -->{entry.albumCount ===
@@ -316,7 +277,7 @@
 						? ''
 						: entry.albumCount}</span
 				>
-			</button>
+			</svelte:element>
 		{/each}
 	</div>
 {/snippet}
@@ -324,13 +285,23 @@
 {#snippet albumTiles(items: readonly TileItem[])}
 	<div class="tiles">
 		{#each items as tile (tile.key)}
-			{@const drillable = tile.drill !== undefined && onDrill !== undefined}
-			<button
-				type="button"
+			{@const liveEntry = tile.live}
+			{@const drillable = liveEntry !== undefined && onOpenLiveAlbum !== undefined}
+			{@const href = tile.source === undefined ? null : (hrefForAlbum?.(tile.source) ?? null)}
+			{@const open =
+				!drillable || liveEntry === undefined
+					? undefined
+					: () => onOpenLiveAlbum?.(liveEntry)}
+			<svelte:element
+				this={href === null ? 'button' : 'a'}
+				role={href === null ? 'button' : 'link'}
+				type={href === null ? 'button' : undefined}
+				{href}
 				class="tile"
-				data-testid="unified-tile"
-				disabled={!drillable}
-				onclick={drillable ? () => onDrill?.(tile.drill!) : undefined}
+				data-testid={albumTestId}
+				disabled={href === null && !drillable}
+				onclick={(event: MouseEvent) =>
+					href === null ? open?.() : followAddress(event, open)}
 			>
 				<div class="art">
 					{#if tile.imageKey}
@@ -349,7 +320,7 @@
 				{#if tile.versionCount > 1}
 					<div class="tv" data-testid="unified-album-version-count">{tile.versionCount} versions</div>
 				{/if}
-			</button>
+			</svelte:element>
 		{/each}
 	</div>
 {/snippet}
@@ -357,15 +328,22 @@
 {#snippet cardList(cards: readonly CardItem[])}
 	<div class="glist">
 		{#each cards as card (card.key)}
-			<button
-				type="button"
+			{@const href = hrefForDrill?.(card.drill) ?? null}
+			{@const open = onDrill ? () => onDrill(card.drill) : undefined}
+			<svelte:element
+				this={href === null ? 'button' : 'a'}
+				role={href === null ? 'button' : 'link'}
+				type={href === null ? 'button' : undefined}
+				{href}
 				class="gcard"
 				data-testid="unified-card"
-				onclick={onDrill ? () => onDrill(card.drill) : undefined}
+				disabled={href === null && open === undefined}
+				onclick={(event: MouseEvent) =>
+					href === null ? open?.() : followAddress(event, open)}
 			>
 				<div class="gn">{card.label}</div>
 				<div class="gc mono">{formatGenreAlbumCount(card.count)}</div>
-			</button>
+			</svelte:element>
 		{/each}
 	</div>
 {/snippet}
@@ -420,53 +398,11 @@
 			Only what this controller watched play. Roon does not share its own history.
 		</div>
 	{:else if scope === 'recently-added'}
-		{#if !dateFeatureGate.available}
-			<!-- Restored page outliving the feature: honest reason, no guessed order. -->
-			<p class="hint" data-testid="unified-recently-added-gated">
-				{dateFeatureGate.reason ?? NO_IMPORT_DATES_REASON}
-			</p>
-		{:else}
-			{@render albumTiles(recentlyAddedTiles)}
-		{/if}
-	{:else if scope === 'most-played'}
-		{#if mostPlayed && MostPlayedView}
-			<MostPlayedView
-				gate={mostPlayed.gate}
-				state={mostPlayed.state}
-				actionController={mostPlayed.actionController}
-				zones={mostPlayed.zones}
-				onBeginAction={mostPlayed.onBeginAction}
-				onClearAction={mostPlayed.onClearAction}
-				onOpenAlbum={mostPlayed.onOpenAlbum}
-				fetchFn={mostPlayed.fetchFn}
-			/>
-		{:else}
-			<!-- No view in this build: honest hint, never a disabled surface. -->
-			<p class="hint" data-testid="unified-most-played-gated">Most played is unavailable.</p>
-		{/if}
-	{:else if scope === 'playlists'}
-		{#if playlists && playlists.gate.available && PlaylistsView}
-			<PlaylistsView
-				gate={playlists.gate}
-				playlistsStore={playlists.store}
-				openPlaylistData={playlists.open}
-				closePlaylistView={playlists.close}
-				actionController={playlists.actionController}
-				zones={playlists.zones}
-				onBeginAction={playlists.onBeginAction}
-				albums={playlists.albums}
-				fetchFn={playlists.fetchFn}
-			/>
-		{:else}
-			<!--
-				Restored page outliving the feature, or a build without the view:
-				the carried reason either way, and no guessed data. The gate is
-				checked here rather than only inside the view so the answer
-				survives the view being absent from the build.
-			-->
-			<p class="hint" data-testid="unified-playlists-gated">
-				{playlists?.gate.reason ?? 'Playlists are unavailable.'}
-			</p>
-		{/if}
+		<!-- A restored address outliving the feature: the honest reason, never a
+		     guessed order. Roon's public browse API exposes no import date, and
+		     the native layer that used to supply one is gone. -->
+		<p class="hint" data-testid="unified-recently-added-gated">
+			{NO_IMPORT_DATES_REASON}
+		</p>
 	{/if}
 </div>

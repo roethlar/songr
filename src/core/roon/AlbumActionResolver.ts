@@ -6,23 +6,14 @@ import {
   AlbumActionSemantic,
   AlbumActionTrackSelector,
 } from "../../shared/albumActionContracts";
-import {
-  AlbumRef,
-  ArtistRef,
-  normalizeCatalogText,
-} from "../../shared/catalogContracts";
+import { normalizeCatalogText } from "../../shared/catalogContracts";
 import { BrowseItem, BrowseResult } from "../../shared/types";
-import { createCatalogTrackTitleFingerprint } from "../catalog/CatalogReconciliation";
 import { CoordinatedBrowseSession } from "./BrowseSessionCoordinator";
-import {
-  DiscographyResolver,
-  ObservedDiscography,
-} from "./DiscographyResolver";
+import { CollectionDrillResolver } from "./CollectionDrillResolver";
+import { CollectionDrillOpenLocator } from "../../shared/collectionDrillContracts";
 
-const MAX_SEARCH_ROWS = 500;
 const MAX_TRACK_ROWS = 500;
 const MAX_DETAIL_ROWS = MAX_TRACK_ROWS + ALBUM_ACTION_MAX_CHOICES;
-const MAX_CANDIDATE_DETAIL_DEPTH = 2;
 const MAX_ACTION_DEPTH = 4;
 const CONTROL_CHARACTER = /\p{Cc}/u;
 
@@ -51,7 +42,12 @@ export class AlbumActionResolutionError extends Error {
  * are only meaningful within the hierarchy/session that produced them, so
  * this must travel with the item key to execution time.
  */
-export type AlbumActionBrowseHierarchy = "search" | "artists";
+export type AlbumActionBrowseHierarchy =
+  | "search"
+  | "albums"
+  | "artists"
+  | "genres"
+  | "composers";
 
 export interface ResolvedAlbumAction {
   readonly label: string;
@@ -66,12 +62,63 @@ export interface ResolvedAlbumActions {
   readonly actions: readonly ResolvedAlbumAction[];
 }
 
-export interface AlbumActionVersionSource {
-  readonly album: Readonly<AlbumRef>;
-  readonly artist: Readonly<ArtistRef>;
+/**
+ * What an action on a collection-opened page has to go on.
+ *
+ * A locator and a digest, and nothing that names a catalog record — because
+ * there is no catalog record. The locator finds the row again by re-walking
+ * its own drill, and the digest is the fingerprint of the track list the page
+ * published, so an album whose contents moved under the page cannot be acted
+ * on by mistake.
+ *
+ * There is no version count here and there does not need to be one: a page
+ * opens from a collection drill only when its rendering is unique inside that
+ * drill, so the row IS the version.
+ */
+export interface AlbumActionCollectionSource {
+  readonly locator: Readonly<CollectionDrillOpenLocator>;
   readonly detailDigest: string;
-  readonly versionCount: number;
 }
+
+/**
+ * What an action on a live library reference has to go on: the reference,
+ * already resolved to the row it names on the session that minted it.
+ *
+ * There is nothing else, and nothing else is needed. Measured on the owner's
+ * Core 2026-09-03 (`.agents/state.md`): browsing an album's `Play Album` row
+ * with a zone bound answers with the four action leaves, and so does a track
+ * row's own reference — including for both halves of a Roon-duplicated pair,
+ * which each answered for themselves. So the reader's own click IS the subject.
+ *
+ * WHY THERE IS NO DIGEST HERE, UNLIKE THE OTHER TWO SOURCES. Those two have to
+ * find the row again, by re-walking a drill or re-observing a discography, and
+ * a fingerprint is how they prove they found the same one. This source never
+ * looks for anything: the reference is bound to a snapshot, the snapshot is
+ * retired whole the moment the library is re-read, and a reference from a
+ * retired snapshot is refused rather than re-matched. There is no window in
+ * which the row could have moved and no name to compare it against.
+ */
+export interface AlbumActionReferenceSource {
+  readonly itemKey: string;
+  readonly hierarchy: AlbumActionBrowseHierarchy;
+  /** Roon's own text for the row, carried for refusal messages only. */
+  readonly title: string;
+}
+
+/**
+ * The one kind of page an action lease can still be granted to, kept tagged so
+ * the service dispatches on the tag rather than on the shape.
+ *
+ * There used to be a second, `catalog`, whose source named a reconciled album
+ * record and re-observed its artist's discography to find the row again. It
+ * died with the saved catalog model (`.agents/plans/library-live-view.md`
+ * Slice 4). A live library reference is not a page source at all — it needs no
+ * page behind it — and travels as its own authority arm in the service.
+ */
+export type AlbumActionPageSource = {
+  readonly kind: "collection";
+  readonly source: AlbumActionCollectionSource;
+};
 
 export function createAlbumVersionDetailDigest(
   title: string,
@@ -90,377 +137,139 @@ export function createAlbumVersionDetailDigest(
 }
 
 export interface AlbumActionResolverPort {
-  resolve(
+  resolveCollectionVersion(
     session: CoordinatedBrowseSession,
-    album: Readonly<AlbumRef>,
+    source: Readonly<AlbumActionCollectionSource>,
     zoneId: string,
     track?: Readonly<AlbumActionTrackSelector>
   ): Promise<ResolvedAlbumActions>;
-  resolveSelectedVersion(
+  resolveReference(
     session: CoordinatedBrowseSession,
-    source: Readonly<AlbumActionVersionSource>,
-    zoneId: string,
-    track?: Readonly<AlbumActionTrackSelector>
+    source: Readonly<AlbumActionReferenceSource>,
+    zoneId: string
   ): Promise<ResolvedAlbumActions>;
 }
 
 /**
- * Resolves the exact action leaves Roon currently exposes for one reconciled
- * catalog edition. Every call stays inside the action lease and carries its
- * original zone. Ephemeral item keys never leave the returned server object.
+ * Resolves the exact action leaves Roon currently exposes for one album page
+ * or one live library reference. Every call stays inside the action lease and
+ * carries its original zone. Ephemeral item keys never leave the returned
+ * server object.
  */
 export class AlbumActionResolver implements AlbumActionResolverPort {
   public constructor(
-    private readonly discographyResolver = new DiscographyResolver()
+    private readonly collectionDrillResolver = new CollectionDrillResolver()
   ) {}
 
-  public async resolveSelectedVersion(
+  /**
+   * Resolves the action leaves for a page opened from a genre or composer
+   * drill.
+   *
+   * The whole path stays inside that drill: the locator is re-walked to the
+   * row, the row is opened, and the leaves are read in the SAME hierarchy the
+   * key came from — Roon's keys mean nothing outside the hierarchy and session
+   * that issued them, which is why the hierarchy travels with them.
+   *
+   * The digest is the guard: the fingerprint of the ordered track titles this
+   * page published. If the
+   * album's contents moved since, the action refuses rather than playing
+   * something the reader did not see. Note what is NOT checked — the detail
+   * header's subtitle. A drill row's credit line may be absent, and an absent
+   * credit has nothing to compare; the title and the track list carry it.
+   */
+  public async resolveCollectionVersion(
     session: CoordinatedBrowseSession,
-    source: Readonly<AlbumActionVersionSource>,
+    source: Readonly<AlbumActionCollectionSource>,
     zoneId: string,
     track?: Readonly<AlbumActionTrackSelector>
   ): Promise<ResolvedAlbumActions> {
     const zonedSession = this.zoneBoundSession(session, zoneId);
-    const resolution = await this.discographyResolver.resolve(
+    const resolution = await this.collectionDrillResolver.resolve(
       zonedSession,
-      source.artist
+      source.locator
     );
     if (resolution.kind !== "resolved") {
       throw new AlbumActionResolutionError(
         resolution.kind === "missing" ? "ALBUM_NOT_FOUND" : "ALBUM_AMBIGUOUS",
         resolution.kind === "missing"
-          ? "The selected album artist is no longer available"
-          : "The selected album artist is no longer unique"
+          ? "The selected album is no longer in that collection"
+          : "The selected album is no longer unique in that collection"
       );
     }
-    const discography = await this.discographyResolver.observeCurrent(
-      zonedSession,
-      source.artist
-    );
-    const versionRows = this.versionRows(discography, source);
-    if (versionRows.length !== source.versionCount) {
+    const detail = await zonedSession.browse({
+      hierarchy: resolution.hierarchy,
+      zoneId,
+      itemKey: resolution.itemKey,
+      pageSize: MAX_DETAIL_ROWS,
+    });
+    this.assertComplete(detail, MAX_DETAIL_ROWS, "ALBUM_AMBIGUOUS");
+    if (
+      normalizeCatalogText(detail.title ?? "") !==
+      normalizeCatalogText(resolution.rendering.exactTitle)
+    ) {
       throw new AlbumActionResolutionError(
         "ALBUM_CHANGED",
-        "The album version set changed"
+        "The selected album's live detail no longer matches the drill row"
       );
     }
-    const versionKeys = versionRows.map((row) => row.itemKey);
-    let current = discography;
-    let matchingItemKey: string | null = null;
-    let matchingCount = 0;
-    for (let index = 0; index < versionKeys.length; index += 1) {
-      this.assertStableVersionRows(current, source, versionKeys);
-      const detail = await this.readVersionDetail(
-        zonedSession,
-        source,
-        versionKeys[index]
-      );
-      if (detail.digest === source.detailDigest) {
-        matchingItemKey = versionKeys[index];
-        matchingCount += 1;
-      }
-      const parent = await zonedSession.pop({
-        hierarchy: "artists",
-        levels: 1,
-        refresh: false,
-        pageSize: 100,
-      });
-      current = await this.discographyResolver.observeCurrent(
-        zonedSession,
-        source.artist,
-        parent
-      );
-    }
-    if (matchingCount === 0 || !matchingItemKey) {
+    const digest = createAlbumVersionDetailDigest(
+      resolution.rendering.exactTitle,
+      resolution.rendering.exactCredit,
+      this.trackRows(detail.items).map((row) => row.title)
+    );
+    if (digest !== source.detailDigest) {
       throw new AlbumActionResolutionError(
         "ALBUM_CHANGED",
         "The selected album track list changed"
       );
     }
-    if (matchingCount !== 1) {
-      throw new AlbumActionResolutionError(
-        "ALBUM_AMBIGUOUS",
-        "The selected album version is not distinguishable for actions"
-      );
-    }
-    this.assertStableVersionRows(current, source, versionKeys);
-    const finalDetail = await this.readVersionDetail(
-      zonedSession,
-      source,
-      matchingItemKey
-    );
-    if (finalDetail.digest !== source.detailDigest) {
-      throw new AlbumActionResolutionError(
-        "ALBUM_CHANGED",
-        "The selected album track list changed during final validation"
-      );
-    }
-
     const target = track
-      ? this.trackRow(finalDetail.detail, track)
-      : this.playAlbumRow(finalDetail.detail);
+      ? this.trackRow(detail, track)
+      : this.playAlbumRow(detail);
     const leaves = await this.resolveLeaves(
       zonedSession,
       zoneId,
       target,
-      "artists"
+      resolution.hierarchy
     );
-    return Object.freeze({ actions: Object.freeze(leaves) });
-  }
-
-  private versionRows(
-    discography: Readonly<ObservedDiscography>,
-    source: Readonly<AlbumActionVersionSource>
-  ): ObservedDiscography["liveAlbums"] {
-    return discography.liveAlbums.filter((row) => {
-      const observed = discography.observation.albums[row.observationIndex];
-      return Boolean(
-        observed &&
-          normalizeCatalogText(observed.exactTitle) ===
-            source.album.normalizedTitle &&
-          normalizeCatalogText(observed.exactArtist) ===
-            source.album.normalizedArtist
-      );
-    });
-  }
-
-  private assertStableVersionRows(
-    discography: Readonly<ObservedDiscography>,
-    source: Readonly<AlbumActionVersionSource>,
-    versionKeys: readonly string[]
-  ): void {
-    const rows = this.versionRows(discography, source);
-    const currentKeys = new Set(rows.map((row) => row.itemKey));
-    if (
-      rows.length !== source.versionCount ||
-      currentKeys.size !== versionKeys.length ||
-      versionKeys.some((itemKey) => !currentKeys.has(itemKey))
-    ) {
-      throw new AlbumActionResolutionError(
-        "ALBUM_CHANGED",
-        "The album version set changed during action resolution"
-      );
-    }
-  }
-
-  private async readVersionDetail(
-    session: CoordinatedBrowseSession,
-    source: Readonly<AlbumActionVersionSource>,
-    itemKey: string
-  ): Promise<{ readonly detail: BrowseResult; readonly digest: string }> {
-    const detail = await session.browse({
-      hierarchy: "artists",
-      itemKey,
-      offset: 0,
-      pageSize: MAX_DETAIL_ROWS,
-    });
-    this.assertComplete(detail, MAX_DETAIL_ROWS, "ALBUM_CHANGED");
-    const detailTitle = detail.title ?? "";
-    const detailArtist = detail.subtitle ?? "";
-    if (
-      normalizeCatalogText(detailTitle) !== source.album.normalizedTitle ||
-      normalizeCatalogText(detailArtist) !== source.album.normalizedArtist
-    ) {
-      throw new AlbumActionResolutionError(
-        "ALBUM_CHANGED",
-        "An album version detail header changed"
-      );
-    }
-    const structural = this.structuralRows(detail.items);
-    if (
-      structural.length !== detail.items.length ||
-      new Set(structural.map((item) => item.itemKey)).size !== structural.length
-    ) {
-      throw new AlbumActionResolutionError(
-        "ALBUM_CHANGED",
-        "An album version detail contained invalid rows"
-      );
-    }
-    const tracks = this.trackRows(detail.items);
-    if (
-      tracks.length === 0 ||
-      structural.length - tracks.length > ALBUM_ACTION_MAX_CHOICES
-    ) {
-      throw new AlbumActionResolutionError(
-        "ALBUM_CHANGED",
-        "An album version track list changed"
-      );
-    }
-    return {
-      detail,
-      digest: createAlbumVersionDetailDigest(
-        detailTitle,
-        detailArtist,
-        tracks.map((candidate) => candidate.title)
-      ),
-    };
-  }
-
-  public async resolve(
-    session: CoordinatedBrowseSession,
-    album: Readonly<AlbumRef>,
-    zoneId: string,
-    track?: Readonly<AlbumActionTrackSelector>
-  ): Promise<ResolvedAlbumActions> {
-    if (
-      album.resolutionStatus !== "resolved" ||
-      !album.trackTitleFingerprint
-    ) {
-      throw new AlbumActionResolutionError(
-        "ALBUM_NOT_FOUND",
-        "The album has no resolved edition fingerprint"
-      );
-    }
-    if (normalizeCatalogText(album.editionText).length > 0) {
-      throw new AlbumActionResolutionError(
-        "ALBUM_AMBIGUOUS",
-        "The current Browse detail cannot prove the catalog edition text"
-      );
-    }
-    const root = await session.browse({
-      hierarchy: "search",
-      zoneId,
-      input: album.exactTitle,
-      popAll: true,
-      pageSize: MAX_SEARCH_ROWS,
-    });
-    this.assertComplete(root, MAX_SEARCH_ROWS, "ALBUM_AMBIGUOUS");
-
-    const categories = this.structuralRows(root.items).filter(
-      (item) => normalizeCatalogText(item.title) === "albums"
-    );
-    if (categories.length > 1) {
-      throw new AlbumActionResolutionError(
-        "ALBUM_AMBIGUOUS",
-        "Search exposed more than one Albums category"
-      );
-    }
-
-    let parent = root;
-    if (categories.length === 1) {
-      parent = await session.browse({
-        hierarchy: "search",
-        zoneId,
-        itemKey: categories[0].itemKey,
-        pageSize: MAX_SEARCH_ROWS,
-      });
-      this.assertComplete(parent, MAX_SEARCH_ROWS, "ALBUM_AMBIGUOUS");
-    }
-
-    const candidates = this.structuralRows(parent.items).filter(
-      (item) =>
-        normalizeCatalogText(item.title) === album.normalizedTitle &&
-        normalizeCatalogText(item.subtitle ?? "") === album.normalizedArtist
-    );
-    if (candidates.length === 0) {
-      throw new AlbumActionResolutionError(
-        "ALBUM_NOT_FOUND",
-        "No exact title and artist candidate was found"
-      );
-    }
-
-    const matchingKeys: string[] = [];
-    for (const candidate of candidates) {
-      const opened = await this.openCandidateDetail(
-        session,
-        album,
-        zoneId,
-        candidate.itemKey
-      );
-      if (this.detailMatches(opened.detail, album)) {
-        matchingKeys.push(candidate.itemKey);
-      }
-      parent = await session.pop({
-        hierarchy: "search",
-        zoneId,
-        levels: opened.levels,
-        pageSize: MAX_SEARCH_ROWS,
-      });
-      this.assertComplete(parent, MAX_SEARCH_ROWS, "ALBUM_AMBIGUOUS");
-    }
-
-    if (matchingKeys.length !== 1) {
-      throw new AlbumActionResolutionError(
-        matchingKeys.length === 0 ? "ALBUM_NOT_FOUND" : "ALBUM_AMBIGUOUS",
-        matchingKeys.length === 0
-          ? "No exact candidate matched the catalog track fingerprint"
-          : "More than one candidate matched the catalog track fingerprint"
-      );
-    }
-
-    const freshCandidate = parent.items.find(
-      (item) => item.itemKey === matchingKeys[0]
-    );
-    if (!freshCandidate || !this.isStructural(freshCandidate)) {
-      throw new AlbumActionResolutionError(
-        "ALBUM_AMBIGUOUS",
-        "The selected candidate did not survive parent re-resolution"
-      );
-    }
-
-    const { detail } = await this.openCandidateDetail(
-      session,
-      album,
-      zoneId,
-      freshCandidate.itemKey
-    );
-    if (!this.detailMatches(detail, album)) {
-      throw new AlbumActionResolutionError(
-        "ALBUM_AMBIGUOUS",
-        "The selected edition changed during action resolution"
-      );
-    }
-    const target = track
-      ? this.trackRow(detail, track)
-      : this.playAlbumRow(detail);
-    const leaves = await this.resolveLeaves(session, zoneId, target, "search");
     return Object.freeze({ actions: Object.freeze(leaves) });
   }
 
   /**
-   * Search can expose one exact album result as a one-row self wrapper before
-   * its real detail. Descend only through that complete, uniquely identical
-   * wrapper and keep the depth for an exact return to the candidate parent.
+   * Resolve the action leaves for one live library reference.
+   *
+   * `.agents/plans/library-live-view.md` Slice 2, and the whole of the live
+   * album page's playback path. There is no search, no drill, no discography
+   * re-observation and no re-matching of any kind: the row the reader clicked
+   * was published by the session this call runs on, in the generation this
+   * call is anchored to, so the only thing left to do is ask Roon what can be
+   * done with it. Everything after that is the same code the other two sources
+   * end in — `resolveLeaves` descends the action list and `normalizeLeaves`
+   * refuses an ambiguous one — so there is one rule about what a leaf is.
+   *
+   * The zone binds the same way it does everywhere else here, and it is the
+   * reason this works at all: Roon renders `Play Now` / `Add Next` / `Queue` /
+   * `Start Radio` only for a browse carrying a zone.
    */
-  private async openCandidateDetail(
+  public async resolveReference(
     session: CoordinatedBrowseSession,
-    album: Readonly<AlbumRef>,
-    zoneId: string,
-    itemKey: string
-  ): Promise<{ detail: BrowseResult; levels: number }> {
-    let detail = await session.browse({
-      hierarchy: "search",
+    source: Readonly<AlbumActionReferenceSource>,
+    zoneId: string
+  ): Promise<ResolvedAlbumActions> {
+    const zonedSession = this.zoneBoundSession(session, zoneId);
+    const leaves = await this.resolveLeaves(
+      zonedSession,
       zoneId,
-      itemKey,
-      pageSize: MAX_DETAIL_ROWS,
-    });
-    for (let levels = 1; levels < MAX_CANDIDATE_DETAIL_DEPTH; levels += 1) {
-      if (this.detailMatches(detail, album)) return { detail, levels };
-      const rows = this.structuralRows(detail.items);
-      const nested =
-        normalizeCatalogText(detail.title ?? "") === album.normalizedTitle &&
-        normalizeCatalogText(detail.subtitle ?? "") === album.normalizedArtist &&
-        rows.length === 1 &&
-        rows[0].hint === "list" &&
-        normalizeCatalogText(rows[0].title) === album.normalizedTitle &&
-        normalizeCatalogText(rows[0].subtitle ?? "") === album.normalizedArtist
-          ? rows[0]
-          : null;
-      if (!nested) return { detail, levels };
-      detail = await session.browse({
-        hierarchy: "search",
-        zoneId,
-        itemKey: nested.itemKey,
-        pageSize: MAX_DETAIL_ROWS,
-      });
-    }
-    return { detail, levels: MAX_CANDIDATE_DETAIL_DEPTH };
+      { itemKey: source.itemKey },
+      source.hierarchy
+    );
+    return Object.freeze({ actions: Object.freeze(leaves) });
   }
 
   /**
    * Bind the client's index/title selector to exactly one live track row of
    * the already-verified album detail. The index addresses the same ordered
-   * track list the fingerprint proved, so a drifted list cannot rebind.
+   * track list the digest proved, so a drifted list cannot rebind.
    */
   private trackRow(
     detail: BrowseResult,
@@ -485,25 +294,6 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
       );
     }
     return row;
-  }
-
-  private detailMatches(
-    detail: BrowseResult,
-    album: Readonly<AlbumRef>
-  ): boolean {
-    this.assertComplete(detail, MAX_DETAIL_ROWS, "ALBUM_AMBIGUOUS");
-    if (
-      normalizeCatalogText(detail.title ?? "") !== album.normalizedTitle ||
-      normalizeCatalogText(detail.subtitle ?? "") !== album.normalizedArtist
-    ) {
-      return false;
-    }
-    const tracks = this.trackRows(detail.items);
-    return (
-      tracks.length > 0 &&
-      createCatalogTrackTitleFingerprint(tracks.map((track) => track.title)) ===
-        album.trackTitleFingerprint
-    );
   }
 
   private trackRows(items: readonly BrowseItem[]): BrowseItem[] {
@@ -559,10 +349,14 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
   private async resolveLeaves(
     session: CoordinatedBrowseSession,
     zoneId: string,
-    initial: BrowseItem,
+    // Only the key is read, so the parameter says only that. A live reference
+    // resolves to a row rather than to a `BrowseItem`, and widening the type to
+    // fit would have meant inventing `isLoadable`/`isPlayable` values nobody
+    // measured.
+    initial: { readonly itemKey?: string },
     hierarchy: AlbumActionBrowseHierarchy
   ): Promise<ResolvedAlbumAction[]> {
-    let cursor = initial;
+    let cursor: { readonly itemKey?: string } = initial;
     for (let depth = 0; depth < MAX_ACTION_DEPTH; depth += 1) {
       const result = await session.browse({
         hierarchy,

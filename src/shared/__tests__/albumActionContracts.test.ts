@@ -12,6 +12,7 @@ import {
   normalizeAlbumActionFailedEvent,
   normalizeAlbumActionResolvedEvent,
   type AlbumActionResolutionCorrelation,
+  isAlbumActionReferenceRequest,
 } from "../albumActionContracts";
 
 const REQUEST_ID = "request-01";
@@ -54,6 +55,75 @@ describe("album action begin contracts", () => {
     expect(normalized).not.toBe(source);
   });
 
+  // `.agents/plans/library-live-view.md` Slice 2. The live album page addresses
+  // the row Roon rendered, so its request carries a reference instead of a page
+  // and a version. The two shapes are told apart by their exact key sets.
+  it("normalizes a begin request that addresses one live library reference", () => {
+    const source = {
+      requestId: REQUEST_ID,
+      ref: { generation: "gen-01", token: "token-01" },
+      zoneId: "zone-01",
+      tabId: "tab-01",
+      generation: 4,
+    };
+    const normalized = normalizeAlbumActionBeginRequest(source);
+    expect(normalized).toEqual(source);
+    expect(normalized).not.toBe(source);
+    expect(normalized && isAlbumActionReferenceRequest(normalized)).toBe(true);
+    if (!normalized || !isAlbumActionReferenceRequest(normalized)) {
+      throw new Error("expected a reference request");
+    }
+    expect(normalized.ref).not.toBe(source.ref);
+  });
+
+  it.each([
+    [
+      "a body carrying both addressings",
+      {
+        requestId: REQUEST_ID,
+        ref: { generation: "gen-01", token: "token-01" },
+        pageId: PAGE_ID,
+        versionId: VERSION_ID,
+        zoneId: "zone-01",
+        tabId: "tab-01",
+        generation: 4,
+      },
+    ],
+    [
+      "a reference request carrying a track selector",
+      {
+        requestId: REQUEST_ID,
+        ref: { generation: "gen-01", token: "token-01" },
+        zoneId: "zone-01",
+        tabId: "tab-01",
+        generation: 4,
+        track: { index: 3, title: "Third Track" },
+      },
+    ],
+    [
+      "a reference with an empty token",
+      {
+        requestId: REQUEST_ID,
+        ref: { generation: "gen-01", token: "" },
+        zoneId: "zone-01",
+        tabId: "tab-01",
+        generation: 4,
+      },
+    ],
+    [
+      "a reference that is not an object",
+      {
+        requestId: REQUEST_ID,
+        ref: "gen-01:token-01",
+        zoneId: "zone-01",
+        tabId: "tab-01",
+        generation: 4,
+      },
+    ],
+  ])("refuses %s", (_name, source) => {
+    expect(normalizeAlbumActionBeginRequest(source)).toBeNull();
+  });
+
   it("normalizes a begin request carrying a track selector", () => {
     const source = {
       requestId: REQUEST_ID,
@@ -66,7 +136,11 @@ describe("album action begin contracts", () => {
     };
     const normalized = normalizeAlbumActionBeginRequest(source);
     expect(normalized).toEqual(source);
-    expect(normalized?.track).not.toBe(source.track);
+    expect(
+      normalized && !isAlbumActionReferenceRequest(normalized)
+        ? normalized.track
+        : undefined
+    ).not.toBe(source.track);
   });
 
   it.each([

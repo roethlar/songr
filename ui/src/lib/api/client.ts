@@ -25,25 +25,17 @@ import {
 	type ClassicBrowseSessionClaim
 } from '$lib/stores/classicBrowseSessionStore';
 import {
-	CATALOG_ARTIST_ALBUMS_DEFAULT_LIMIT,
-	CATALOG_ARTIST_ALBUMS_MAX_LIMIT,
-	CATALOG_ARTIST_QUERY_MAX_LENGTH,
-	CATALOG_ARTIST_SEARCH_DEFAULT_LIMIT,
-	CATALOG_ARTIST_SEARCH_MAX_LIMIT,
-	isCatalogLocalId,
-	normalizeCatalogArtistAlbumsResponse,
-	normalizeCatalogArtistSearchResponse,
-	normalizeCatalogRefreshAcceptedResponse,
-	normalizeCatalogStatus,
-	type CatalogArtistAlbumsResponse,
-	type CatalogArtistSearchResponse,
-	type CatalogRefreshAcceptedResponse,
-	type CatalogStatus
-} from '@shared/catalogContracts';
+	LIBRARY_OPAQUE_MAX_LENGTH,
+	normalizeLibraryRootsResponse,
+	normalizeLibraryRootsUnavailable,
+	type LibraryRootsResponse,
+	type LibraryRootsUnavailable,
+	type LibraryRowReference
+} from '@shared/libraryRootsContracts';
 import {
-	normalizeCatalogIndexResponse,
-	type CatalogIndexResponse
-} from '@shared/catalogIndexContracts';
+	normalizeLibraryOpenResponse,
+	type LibraryOpenResponse
+} from '@shared/libraryOpenContracts';
 import { buildApiRequestInit } from '@shared/apiRequest';
 
 export class ApiError extends Error {
@@ -90,50 +82,115 @@ async function request<T>(fetchFn: FetchLike, input: RequestInfo, init?: Request
 
 	return (await response.json()) as T;
 }
-
-function invalidCatalogResponse(body: unknown): ApiError {
-	return new ApiError('Invalid catalog response', 502, body);
-}
-
 /**
- * Exported so sibling feature clients share this transport rather than
- * reimplementing it. Not part of the surface callers should reach for
- * directly — prefer a named fetcher below.
+ * The live library's two roots (`.agents/plans/library-live-view.md` Slice 1).
+ *
+ * `unavailable` is an ANSWER, not a transport failure: a paired Core that is
+ * being spared, or no Core at all, is something the surface has to say out
+ * loud, and flattening it into an error — or worse, into an empty library —
+ * would render as a library that lost its contents.
+ *
+ * Passing the generation the caller already holds turns this into the cheap
+ * check: the server confirms it against Roon's own root counts and answers
+ * `current` with no rows, or hands back the whole new snapshot if what the
+ * caller holds is gone.
  */
-export async function catalogRequest<T>(
+export type LibraryRootsResult =
+	| { kind: 'roots'; roots: LibraryRootsResponse }
+	| { kind: 'unavailable'; unavailable: LibraryRootsUnavailable };
+
+async function libraryRootsRequest(
 	fetchFn: FetchLike,
-	input: RequestInfo,
-	normalize: (value: unknown) => T | null,
+	input: string,
 	init?: RequestInit
-): Promise<T> {
+): Promise<LibraryRootsResult> {
 	let body: unknown;
 	try {
 		body = await request<unknown>(fetchFn, input, init);
 	} catch (error) {
-		if (error instanceof SyntaxError) throw invalidCatalogResponse(null);
+		if (error instanceof ApiError && error.status === 503) {
+			const unavailable = normalizeLibraryRootsUnavailable(error.body);
+			if (unavailable) return { kind: 'unavailable', unavailable };
+		}
+		if (error instanceof SyntaxError) throw new ApiError('Invalid library response', 502, null);
 		throw error;
 	}
-	const normalized = normalize(body);
-	if (!normalized) throw invalidCatalogResponse(body);
-	return normalized;
+	const roots = normalizeLibraryRootsResponse(body);
+	if (!roots) throw new ApiError('Invalid library response', 502, body);
+	return { kind: 'roots', roots };
 }
 
-function catalogLimit(value: number, maximum: number): number {
-	if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
-		throw new RangeError('Catalog limit is invalid');
+export function fetchLibraryRoots(
+	fetchFn: FetchLike,
+	heldGeneration?: string
+): Promise<LibraryRootsResult> {
+	if (heldGeneration !== undefined) {
+		// Bounded before it is sent rather than after it comes back: a
+		// generation this long is not one this server minted.
+		if (heldGeneration.length === 0 || heldGeneration.length > LIBRARY_OPAQUE_MAX_LENGTH) {
+			throw new TypeError('Library generation is invalid');
+		}
+		const params = new URLSearchParams({ generation: heldGeneration });
+		return libraryRootsRequest(fetchFn, `/api/library/roots?${params.toString()}`);
 	}
-	return value;
+	return libraryRootsRequest(fetchFn, '/api/library/roots');
 }
 
-function catalogArtistQuery(value: string): string {
-	if (typeof value !== 'string' || value.length > CATALOG_ARTIST_QUERY_MAX_LENGTH) {
-		throw new TypeError('Catalog artist query is invalid');
+/** The reader's own Refresh: re-read both roots now, retiring every reference. */
+export function refreshLibraryRoots(fetchFn: FetchLike): Promise<LibraryRootsResult> {
+	return libraryRootsRequest(fetchFn, '/api/library/roots/refresh', { method: 'POST' });
+}
+
+/**
+ * Open one live row, or one on-demand root (`.agents/plans/library-live-view.md`
+ * Slice 2).
+ *
+ * All three outcomes the server states — a level, `stale`, `unavailable` — come
+ * back as ANSWERS rather than exceptions, because each is something the surface
+ * has to say in different words. `stale` in particular is not a failure: it is
+ * the library saying the snapshot the reader held has been replaced, and the
+ * reader's response is to re-resolve, not to retry the same dead reference.
+ *
+ * A transport failure is still thrown. Flattening one into `unavailable` would
+ * put a sentence about the Core on screen for what is a broken connection.
+ */
+async function libraryOpenRequest(
+	fetchFn: FetchLike,
+	body: unknown
+): Promise<LibraryOpenResponse> {
+	let payload: unknown;
+	try {
+		payload = await request<unknown>(fetchFn, '/api/library/open', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body)
+		});
+	} catch (error) {
+		if (error instanceof ApiError && (error.status === 409 || error.status === 503)) {
+			const stated = normalizeLibraryOpenResponse(error.body);
+			if (stated) return stated;
+		}
+		if (error instanceof SyntaxError) throw new ApiError('Invalid library response', 502, null);
+		throw error;
 	}
-	const canonical = value.normalize('NFKC').trim().replace(/\s+/gu, ' ');
-	if (canonical.length > CATALOG_ARTIST_QUERY_MAX_LENGTH || CONTROL_CHARACTER.test(canonical)) {
-		throw new TypeError('Catalog artist query is invalid');
-	}
-	return canonical;
+	const level = normalizeLibraryOpenResponse(payload);
+	if (!level) throw new ApiError('Invalid library response', 502, payload);
+	return level;
+}
+
+export function openLibraryReference(
+	fetchFn: FetchLike,
+	ref: LibraryRowReference
+): Promise<LibraryOpenResponse> {
+	return libraryOpenRequest(fetchFn, { ref });
+}
+
+/** Roon's Genres and Composers roots, read only when a reader asks for one. */
+export function openLibraryRoot(
+	fetchFn: FetchLike,
+	root: 'genres' | 'composers'
+): Promise<LibraryOpenResponse> {
+	return libraryOpenRequest(fetchFn, { root });
 }
 
 export function fetchCoreStatus(fetchFn: FetchLike): Promise<CoreStatusResponse> {
@@ -157,125 +214,10 @@ export function fetchOnboardingStatus(fetchFn: FetchLike): Promise<OnboardingSta
 	return request<OnboardingStatusResponse>(fetchFn, '/api/onboarding');
 }
 
-export function fetchCatalogStatus(fetchFn: FetchLike): Promise<CatalogStatus> {
-	return catalogRequest(fetchFn, '/api/catalog/status', normalizeCatalogStatus);
-}
-
-export type CatalogIndexResult =
-	| { kind: 'index'; index: CatalogIndexResponse }
-	| { kind: 'empty' };
-
-/**
- * GET /api/catalog/index. A 409 is the server's honest "catalog empty"
- * answer and is returned as `{ kind: 'empty' }` so callers can fall back
- * to browse-drain; everything else invalid throws like the sibling
- * catalog fetchers.
- */
-export async function fetchCatalogIndex(fetchFn: FetchLike): Promise<CatalogIndexResult> {
-	try {
-		const index = await catalogRequest(
-			fetchFn,
-			'/api/catalog/index',
-			normalizeCatalogIndexResponse
-		);
-		return { kind: 'index', index };
-	} catch (error) {
-		if (error instanceof ApiError && error.status === 409) return { kind: 'empty' };
-		throw error;
-	}
-}
-
-export function refreshCatalog(fetchFn: FetchLike): Promise<CatalogRefreshAcceptedResponse> {
-	return catalogRequest(
-		fetchFn,
-		'/api/catalog/refresh',
-		normalizeCatalogRefreshAcceptedResponse,
-		{ method: 'POST' }
-	);
-}
-
-export async function searchCatalogArtists(
-	fetchFn: FetchLike,
-	queryValue: string,
-	limitValue = CATALOG_ARTIST_SEARCH_DEFAULT_LIMIT
-): Promise<CatalogArtistSearchResponse> {
-	const query = catalogArtistQuery(queryValue);
-	const limit = catalogLimit(limitValue, CATALOG_ARTIST_SEARCH_MAX_LIMIT);
-	const params = new URLSearchParams({ query, limit: String(limit) });
-	const response = await catalogRequest(
-		fetchFn,
-		`/api/catalog/artists?${params.toString()}`,
-		normalizeCatalogArtistSearchResponse
-	);
-	if (response.query !== query || response.limit !== limit) {
-		throw invalidCatalogResponse(response);
-	}
-	return response;
-}
-
-export async function fetchCatalogArtistAlbums(
-	fetchFn: FetchLike,
-	artistLocalId: string,
-	limitValue = CATALOG_ARTIST_ALBUMS_DEFAULT_LIMIT
-): Promise<CatalogArtistAlbumsResponse> {
-	if (!isCatalogLocalId(artistLocalId)) {
-		throw new TypeError('Catalog artist ID is invalid');
-	}
-	const limit = catalogLimit(limitValue, CATALOG_ARTIST_ALBUMS_MAX_LIMIT);
-	const params = new URLSearchParams({ limit: String(limit) });
-	const response = await catalogRequest(
-		fetchFn,
-		`/api/catalog/artists/${encodeURIComponent(artistLocalId)}/albums?${params.toString()}`,
-		normalizeCatalogArtistAlbumsResponse
-	);
-	if (response.artist.localId !== artistLocalId || response.limit !== limit) {
-		throw invalidCatalogResponse(response);
-	}
-	return response;
-}
-
-export async function loadCatalogArtistAlbums(
-	fetchFn: FetchLike,
-	artistLocalId: string,
-	revisionValue: number,
-	limitValue = CATALOG_ARTIST_ALBUMS_DEFAULT_LIMIT
-): Promise<CatalogArtistAlbumsResponse> {
-	if (!isCatalogLocalId(artistLocalId)) {
-		throw new TypeError('Catalog artist ID is invalid');
-	}
-	if (
-		!Number.isSafeInteger(revisionValue) ||
-		revisionValue < 1 ||
-		revisionValue >= Number.MAX_SAFE_INTEGER
-	) {
-		throw new RangeError('Catalog revision is invalid');
-	}
-	const limit = catalogLimit(limitValue, CATALOG_ARTIST_ALBUMS_MAX_LIMIT);
-	const params = new URLSearchParams({
-		revision: String(revisionValue),
-		limit: String(limit)
-	});
-	const response = await catalogRequest(
-		fetchFn,
-		`/api/catalog/artists/${encodeURIComponent(artistLocalId)}/albums/load?${params.toString()}`,
-		normalizeCatalogArtistAlbumsResponse,
-		{ method: 'POST' }
-	);
-	if (
-		response.artist.localId !== artistLocalId ||
-		response.limit !== limit ||
-		(response.status.revision !== revisionValue && response.status.revision !== revisionValue + 1)
-	) {
-		throw invalidCatalogResponse(response);
-	}
-	return response;
-}
-
 /**
  * /api/health answers 503 with the SAME diagnostic body when a critical
- * subsystem is degraded. Non-critical catalog diagnostics may be degraded in
- * a 200 body. Either way, 503 diagnostics are data rather than a transport
- * failure, so recover them from the ApiError instead of throwing.
+ * subsystem is degraded. Either way, 503 diagnostics are data rather than a
+ * transport failure, so recover them from the ApiError instead of throwing.
  */
 export async function fetchHealth(fetchFn: FetchLike): Promise<HealthResponse> {
 	try {

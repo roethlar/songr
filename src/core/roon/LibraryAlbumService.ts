@@ -2,12 +2,6 @@ import { randomUUID } from "crypto";
 import { Logger } from "pino";
 
 import {
-  normalizeCatalogTrackTitle,
-  ResolvedSelectedArtistObservation,
-} from "../catalog/CatalogReconciliation";
-import { CatalogSnapshot } from "../catalog/CatalogService";
-import {
-  LIBRARY_ALBUM_MAX_VERSIONS,
   LIBRARY_ALBUM_MAX_TRACKS,
   LIBRARY_ALBUM_TEXT_MAX_LENGTH,
   LibraryAlbumCancelAck,
@@ -27,11 +21,16 @@ import {
   normalizeLibraryAlbumSelectRequest,
 } from "../../shared/libraryAlbumContracts";
 import {
-  AlbumRef,
-  ArtistRef,
-  normalizeCatalogText,
-} from "../../shared/catalogContracts";
-import { BrowseResult } from "../../shared/types";
+  CollectionDrillAlbumRendering,
+  CollectionDrillHierarchy,
+  CollectionDrillOpenFailureDetail,
+  CollectionDrillOpenLocator,
+} from "../../shared/collectionDrillContracts";
+import {
+  CollectionDrillResolution,
+  CollectionDrillResolver,
+  CollectionDrillResolverError,
+} from "./CollectionDrillResolver";
 import {
   ActionSessionAccess,
   ActionSessionHandle,
@@ -40,19 +39,13 @@ import {
 } from "./BrowseSessionCoordinator";
 import { RoonTimeoutError } from "./errors";
 import {
-  AlbumActionVersionSource,
+  AlbumActionPageSource,
   createAlbumVersionDetailDigest,
 } from "./AlbumActionResolver";
 import {
   AlbumDetailResolver,
   AlbumDetailResolverError,
-  AlbumEditionCandidate,
 } from "./AlbumDetailResolver";
-import {
-  DiscographyResolver,
-  DiscographyResolverError,
-  ObservedDiscography,
-} from "./DiscographyResolver";
 
 const DEFAULT_RESOLVING_TTL_MS = 30_000;
 const DEFAULT_REQUEST_TOMBSTONE_LIMIT = 256;
@@ -97,20 +90,19 @@ export interface LibraryAlbumActionAuthority {
   readonly tabId: string;
   readonly generation: number;
   readonly albumSignature: string;
+  /**
+   * The live row key the page still holds for this version, or the empty
+   * string for a collection-opened page, which holds none.
+   *
+   * A catalog page keeps its row key across the whole page session and the
+   * lease is checked against it. A collection page cannot: the key it resolved
+   * belonged to the browse session that opened it, and that session was
+   * released when the read finished. What stands in its place is the locator,
+   * which is in `albumSignature` and cannot change while the page is open, and
+   * which the action re-walks for itself.
+   */
   readonly retainedItemKey: string;
-  readonly source: Readonly<AlbumActionVersionSource>;
-}
-
-export interface LibraryAlbumCatalogPort {
-  getSnapshot(coreId: string): CatalogSnapshot | null;
-  reconcileSelectedArtist(
-    coreId: string,
-    artistLocalId: string,
-    observation: ResolvedSelectedArtistObservation
-  ): Promise<{
-    artist: Readonly<ArtistRef>;
-    albums: readonly Readonly<AlbumRef>[];
-  }>;
+  readonly source: Readonly<AlbumActionPageSource>;
 }
 
 export interface LibraryAlbumCoordinatorPort {
@@ -129,153 +121,56 @@ export interface LibraryAlbumCoordinatorPort {
   quarantineAction(access: ActionSessionAccess): void;
 }
 
-export interface LibraryAlbumResolution {
-  readonly observation: ResolvedSelectedArtistObservation;
-  readonly orderedTrackTitles: readonly string[];
-}
-
-export interface LibraryAlbumFallbackResolution {
-  readonly orderedTrackTitles: readonly string[];
-}
-
-export interface LibraryAlbumFallbackResolverPort {
+/**
+ * The two live reads a collection-opened page makes, behind one port.
+ *
+ * They are one port because they must happen in one session: the item key the
+ * first returns is bound to the Roon browse session that produced it, so the
+ * second has to run before that session is released. Keeping them together
+ * makes that impossible to get wrong at a call site and easy to fake in a test.
+ */
+export interface LibraryAlbumCollectionResolverPort {
   resolve(
-    coreId: string,
-    album: Readonly<AlbumRef>
-  ): Promise<LibraryAlbumFallbackResolution>;
+    session: CoordinatedBrowseSession,
+    locator: Readonly<CollectionDrillOpenLocator>,
+    options?: { assertCurrent?: () => void }
+  ): Promise<CollectionDrillResolution>;
+  readDetailRows(
+    session: CoordinatedBrowseSession,
+    hierarchy: CollectionDrillHierarchy,
+    itemKey: string,
+    expectedTitle: string
+  ): Promise<string[]>;
 }
 
-/** Channel-neutral version metadata supplied by an optional feature layer. */
-export interface LibraryAlbumInventoryVersion {
-  readonly stableKey: string;
-  readonly title: string;
-  readonly artist: string;
-  readonly editionText: string;
-  readonly sourceLabel?: string;
-  readonly releaseDate?: string;
-  readonly playCount?: number;
-  readonly lastPlayedAt?: string;
-  readonly isFavorite?: boolean;
-  readonly isListenLater?: boolean;
-  readonly isBanned?: boolean;
-}
-
-/** Exact read-only track metadata for one inventory version. */
-export interface LibraryAlbumInventoryTrack {
-  readonly title: string;
-  readonly trackNumber: number;
-  readonly mediaNumber: number;
-  readonly lengthSeconds: number | null;
-  readonly available: boolean;
-}
-
-export interface LibraryAlbumInventoryDetail {
-  readonly stableKey: string;
-  readonly tracks: readonly LibraryAlbumInventoryTrack[];
-}
-
-type LibraryAlbumDetailTrack = Omit<LibraryAlbumTrack, "index">;
-
-/** Optional richer inventory. Stable keys stay server-side and never cross the wire. */
-export interface LibraryAlbumVersionInventoryPort {
-  list(
-    coreId: string,
-    group: { readonly title: string; readonly artist: string }
-  ): Promise<readonly LibraryAlbumInventoryVersion[] | null>;
-  read(
-    coreId: string,
-    stableKeys: readonly string[]
-  ): Promise<readonly LibraryAlbumInventoryDetail[] | null>;
-}
-
-export class LibraryAlbumFallbackError extends Error {
+/** The real pair: the drill resolver, then the detail reader. */
+export class LibraryAlbumCollectionResolver
+  implements LibraryAlbumCollectionResolverPort
+{
   public constructor(
-    public readonly code: Extract<
-      LibraryAlbumFailureCode,
-      "DETAIL_INCOMPLETE" | "DETAIL_MISMATCH"
-    >,
-    message: string
-  ) {
-    super(message);
-    this.name = "LibraryAlbumFallbackError";
-    Object.setPrototypeOf(this, LibraryAlbumFallbackError.prototype);
-  }
-}
-
-export interface LibraryAlbumResolverPort {
-  observe(
-    session: CoordinatedBrowseSession,
-    artist: Readonly<ArtistRef>
-  ): Promise<ObservedDiscography>;
-  observeCurrent(
-    session: CoordinatedBrowseSession,
-    artist: Readonly<ArtistRef>,
-    first?: BrowseResult
-  ): Promise<ObservedDiscography>;
-  observeCandidates(
-    discography: ObservedDiscography,
-    album: Readonly<AlbumRef>
-  ): readonly AlbumEditionCandidate[];
-  resolveObservedCandidate(
-    session: CoordinatedBrowseSession,
-    artist: Readonly<ArtistRef>,
-    album: Readonly<AlbumRef>,
-    discography: ObservedDiscography,
-    observationIndex: number
-  ): Promise<LibraryAlbumResolution>;
-}
-
-/** Public, mode-neutral discography/detail machinery. */
-export class LibraryAlbumResolver implements LibraryAlbumResolverPort {
-  public constructor(
-    private readonly discographyResolver = new DiscographyResolver(),
+    private readonly drillResolver = new CollectionDrillResolver(),
     private readonly detailResolver = new AlbumDetailResolver()
   ) {}
 
-  public async observe(
+  public resolve(
     session: CoordinatedBrowseSession,
-    artist: Readonly<ArtistRef>
-  ): Promise<ObservedDiscography> {
-    const resolution = await this.discographyResolver.resolve(session, artist);
-    if (resolution.kind !== "resolved") {
-      throw new AlbumDetailResolverError(
-        resolution.kind === "missing" ? "ALBUM_NOT_FOUND" : "ALBUM_AMBIGUOUS",
-        resolution.kind === "missing"
-          ? "The album artist could not be re-observed live"
-          : "The album artist did not resolve uniquely"
-      );
-    }
-    return this.discographyResolver.observeCurrent(session, artist);
+    locator: Readonly<CollectionDrillOpenLocator>,
+    options: { assertCurrent?: () => void } = {}
+  ): Promise<CollectionDrillResolution> {
+    return this.drillResolver.resolve(session, locator, options);
   }
 
-  public observeCurrent(
+  public readDetailRows(
     session: CoordinatedBrowseSession,
-    artist: Readonly<ArtistRef>,
-    first?: BrowseResult
-  ): Promise<ObservedDiscography> {
-    return this.discographyResolver.observeCurrent(session, artist, first);
-  }
-
-  public observeCandidates(
-    discography: ObservedDiscography,
-    album: Readonly<AlbumRef>
-  ): readonly AlbumEditionCandidate[] {
-    return this.detailResolver.observeCandidates(discography, album);
-  }
-
-  public resolveObservedCandidate(
-    session: CoordinatedBrowseSession,
-    artist: Readonly<ArtistRef>,
-    album: Readonly<AlbumRef>,
-    discography: ObservedDiscography,
-    observationIndex: number
-  ): Promise<LibraryAlbumResolution> {
-    return this.detailResolver.resolveObservedCandidate(
+    hierarchy: CollectionDrillHierarchy,
+    itemKey: string,
+    expectedTitle: string
+  ): Promise<string[]> {
+    return this.detailResolver.readDetailRows(
       session,
-      artist,
-      album,
-      discography,
-      observationIndex
+      hierarchy,
+      itemKey,
+      expectedTitle
     );
   }
 }
@@ -285,50 +180,86 @@ export interface LibraryAlbumServiceOptions {
   requestTombstoneLimit?: number;
   now?: () => number;
   randomId?: () => string;
-  fallbackResolver?: LibraryAlbumFallbackResolverPort;
-  versionInventory?: LibraryAlbumVersionInventoryPort;
+  collectionResolver?: LibraryAlbumCollectionResolverPort;
 }
 
-type OperationPhase = "opening" | "ready" | "terminal" | "quarantined";
+type OperationPhase =
+  | "opening"
+  | "degrading"
+  | "ready"
+  | "terminal"
+  | "quarantined";
 
-type LibraryAlbumReadAuthority =
-  | {
-      readonly kind: "public";
-      readonly album: Readonly<AlbumRef>;
-      readonly artist: Readonly<ArtistRef>;
-    }
-  | { readonly kind: "extended"; readonly album: Readonly<AlbumRef> };
+/**
+ * Where an opening page stands in its live public read. Degrade is offered
+ * only from `"live-read"`, which makes the deadline race deterministic: the
+ * fulfillment path clears `resolutionInFlight` before its own deadline check,
+ * so a flag-based test would send timer-first and fulfillment-first schedules
+ * down different paths. Extended pages never leave `"idle"`, and the
+ * inventory merge runs in `"merging"`, so neither can degrade.
+ */
+type LiveReadStage = "idle" | "live-read" | "merging";
 
-interface PublicVersionAuthority {
-  readonly kind: "public";
-  readonly versionId: string;
-  readonly itemKey: string;
-  readonly publicSummary: LibraryAlbumVersionSummary;
-  summary: LibraryAlbumVersionSummary;
-  stableKey?: string;
-  cached?: LibraryAlbumResolvedEvent;
-  detailDigest?: string;
+/**
+ * What a page is reading, and by whose authority.
+ *
+ * One arm, and it names no record at all. A `collection` page was opened from
+ * a genre or composer drill row, and it holds the drill's own keyless locator —
+ * durable data that arrived in the request and cannot change while the page is
+ * open.
+ *
+ * There used to be two more arms, `public` and `extended`, naming a saved
+ * catalog album by its controller-minted id. They died with the catalog
+ * (`.agents/plans/library-live-view.md` Slice 4). It stays a tagged union
+ * rather than collapsing into the locator, because the tag is what every
+ * reader below asks before it assumes anything, and a second kind of page will
+ * be added here before it is added anywhere else.
+ */
+type LibraryAlbumReadAuthority = {
+  readonly kind: "collection";
+  readonly locator: Readonly<CollectionDrillOpenLocator>;
+};
+
+/**
+ * What a page puts at its head: a title, and an artist only when it has one.
+ *
+ * A collection-opened album whose drill row rendered no credit line has no
+ * artist, and nothing may be substituted — not the genre, not the composer,
+ * and not a catalog lookup on the title. Absent is carried as absent all the
+ * way to the wire.
+ */
+interface LibraryAlbumPageHeading {
+  readonly title: string;
+  readonly artist?: string;
 }
 
-interface ExtendedVersionAuthority {
-  readonly kind: "extended";
+/**
+ * The one version a collection-opened page ever has.
+ *
+ * Exactly one, and not by simplification: a drill row whose whole rendering
+ * repeats inside its own drill is refused as ambiguous before the page opens,
+ * so a page that opened at all was opened from a row nothing else in that
+ * drill reads like. The drill row IS the version. Its detail was read in the
+ * same session that resolved it, so the resolved event is already built by the
+ * time the versions event is published — there is no second round trip to make
+ * and nothing left to select.
+ */
+interface CollectionVersionAuthority {
+  readonly kind: "collection";
   readonly versionId: string;
   readonly summary: LibraryAlbumVersionSummary;
-  cached?: LibraryAlbumResolvedEvent;
+  /**
+   * The fingerprint of the ordered track titles this page published, taken
+   * over the drill row's own title and credit. An action lease is granted
+   * against it and the resolver re-computes it from a fresh read, so an album
+   * whose contents moved cannot be acted on by mistake.
+   */
+  readonly detailDigest: string;
+  /** Always set: the detail was read in the session that resolved the row. */
+  cached: LibraryAlbumResolvedEvent;
 }
 
-interface InventoryVersionAuthority {
-  readonly kind: "inventory";
-  readonly versionId: string;
-  readonly stableKey: string;
-  summary: LibraryAlbumVersionSummary;
-  cached?: LibraryAlbumResolvedEvent;
-}
-
-type LibraryAlbumVersionAuthority =
-  | PublicVersionAuthority
-  | ExtendedVersionAuthority
-  | InventoryVersionAuthority;
+type LibraryAlbumVersionAuthority = CollectionVersionAuthority;
 
 interface LibraryAlbumOperation {
   readonly operationId: string;
@@ -341,15 +272,12 @@ interface LibraryAlbumOperation {
   started: boolean;
   closed: boolean;
   resolutionInFlight: boolean;
+  liveStage: LiveReadStage;
   timer: Timer | null;
   detailTimer: Timer | null;
   albumSignature: string | null;
   authority: LibraryAlbumReadAuthority | null;
-  discography: ObservedDiscography | null;
-  sessionAtDetail: boolean;
   versions: Map<string, LibraryAlbumVersionAuthority>;
-  inventoryVersions: Map<string, LibraryAlbumInventoryVersion>;
-  publicVersionCount: number;
   selectedVersionId: string | null;
   selectionSerial: number;
   detailChain: Promise<void>;
@@ -358,7 +286,13 @@ interface LibraryAlbumOperation {
 class LibraryAlbumPhaseError extends Error {
   public constructor(
     public readonly code: LibraryAlbumFailureCode,
-    message: string
+    message: string,
+    /**
+     * Set only when a collection locator refused. It travels with the error so
+     * the failed event can say which half of the locator could not answer,
+     * with the count the resolver observed rather than one invented here.
+     */
+    public readonly collectionFailure?: CollectionDrillOpenFailureDetail
   ) {
     super(message);
     this.name = "LibraryAlbumPhaseError";
@@ -375,8 +309,7 @@ export class LibraryAlbumService {
   private readonly requestTombstoneLimit: number;
   private readonly now: () => number;
   private readonly randomId: () => string;
-  private readonly fallbackResolver?: LibraryAlbumFallbackResolverPort;
-  private readonly versionInventory?: LibraryAlbumVersionInventoryPort;
+  private readonly collectionResolver: LibraryAlbumCollectionResolverPort;
 
   private readonly operations = new Map<string, LibraryAlbumOperation>();
   private readonly requests = new Map<string, LibraryAlbumOperation>();
@@ -387,8 +320,6 @@ export class LibraryAlbumService {
 
   public constructor(
     private readonly coordinator: LibraryAlbumCoordinatorPort,
-    private readonly catalog: LibraryAlbumCatalogPort,
-    private readonly resolver: LibraryAlbumResolverPort,
     private readonly logger: Logger,
     options: LibraryAlbumServiceOptions = {}
   ) {
@@ -398,8 +329,8 @@ export class LibraryAlbumService {
       options.requestTombstoneLimit ?? DEFAULT_REQUEST_TOMBSTONE_LIMIT;
     this.now = options.now ?? Date.now;
     this.randomId = options.randomId ?? (() => randomUUID());
-    this.fallbackResolver = options.fallbackResolver;
-    this.versionInventory = options.versionInventory;
+    this.collectionResolver =
+      options.collectionResolver ?? new LibraryAlbumCollectionResolver();
     this.validateOptions();
   }
 
@@ -480,15 +411,12 @@ export class LibraryAlbumService {
       started: false,
       closed: false,
       resolutionInFlight: false,
+      liveStage: "idle",
       timer: null,
       detailTimer: null,
       albumSignature: null,
       authority: null,
-      discography: null,
-      sessionAtDetail: false,
       versions: new Map(),
-      inventoryVersions: new Map(),
-      publicVersionCount: 0,
       selectedVersionId: null,
       selectionSerial: 0,
       detailChain: Promise.resolve(),
@@ -577,17 +505,12 @@ export class LibraryAlbumService {
     }
     const authority = operation.authority;
     const version = operation.versions.get(input.versionId);
-    if (
-      !authority ||
-      authority.kind !== "public" ||
-      !version ||
-      version.kind !== "public" ||
-      !version.cached?.actionsAvailable ||
-      !version.detailDigest ||
-      !operation.albumSignature
-    ) {
-      return null;
-    }
+    if (!authority || !version || !operation.albumSignature) return null;
+    // A collection page's lease carries the locator rather than a live key.
+    // The read that built the page is long finished and its session gone, so
+    // the action re-walks the drill for itself; what is granted here is the
+    // right to do that, against exactly the track list this page published.
+    if (!version.cached.actionsAvailable) return null;
     try {
       this.assertReadAuthority(operation);
     } catch {
@@ -601,12 +524,13 @@ export class LibraryAlbumService {
       tabId: operation.request.tabId,
       generation: operation.request.generation,
       albumSignature: operation.albumSignature,
-      retainedItemKey: version.itemKey,
+      retainedItemKey: "",
       source: Object.freeze({
-        album: authority.album,
-        artist: authority.artist,
-        detailDigest: version.detailDigest,
-        versionCount: operation.publicVersionCount,
+        kind: "collection" as const,
+        source: Object.freeze({
+          locator: authority.locator,
+          detailDigest: version.detailDigest,
+        }),
       }),
     });
   }
@@ -628,13 +552,13 @@ export class LibraryAlbumService {
       return false;
     }
     const version = operation.versions.get(authority.versionId);
+    if (!version) return false;
+    // No retained key to compare, because a collection page holds none. What
+    // is compared instead is the track list the lease was granted against and
+    // the locator, which travels in `albumSignature` and was checked above.
     if (
-      !version ||
-      version.kind !== "public" ||
-      version.itemKey !== authority.retainedItemKey ||
-      version.detailDigest !== authority.source.detailDigest ||
-      operation.publicVersionCount !== authority.source.versionCount ||
-      !version.cached?.actionsAvailable
+      version.detailDigest !== authority.source.source.detailDigest ||
+      !version.cached.actionsAvailable
     ) {
       return false;
     }
@@ -704,68 +628,24 @@ export class LibraryAlbumService {
 
   private async openPage(operation: LibraryAlbumOperation): Promise<void> {
     try {
-      const bound = this.currentAlbum(
-        operation.origin.coreId,
-        operation.request.albumLocalId
-      );
-      if (!bound) {
-        throw new LibraryAlbumPhaseError(
-          "ALBUM_NOT_FOUND",
-          "The album is not currently available"
-        );
-      }
+      const bound = {
+        kind: "collection" as const,
+        locator: operation.request.target.locator,
+      };
       operation.authority = bound;
       operation.albumSignature = this.readAuthoritySignature(bound);
       this.assertReadAuthority(operation);
-
-      if (bound.kind === "extended") {
-        const inventory = await this.loadVersionInventory(operation, bound.album);
-        if (inventory.length > 0) {
-          for (const value of inventory) {
-            operation.inventoryVersions.set(value.stableKey, value);
-            const version = this.buildInventoryVersion(value);
-            operation.versions.set(version.versionId, version);
-          }
-        } else {
-          const version = this.buildExtendedVersion(bound.album);
-          operation.versions.set(version.versionId, version);
-        }
-        this.publishVersions(operation, bound.album);
-        return;
-      }
-
-      operation.resolutionInFlight = true;
-      const discography = await this.coordinator.runAction(
-        operation.access,
-        async (session) =>
-          this.resolver.observe(
-            this.guardedSession(operation, session),
-            bound.artist
-          )
-      );
-      operation.resolutionInFlight = false;
-      if (operation.closed || operation.phase !== "opening") return;
-      if (this.now() > operation.resolvingDeadlineAt) {
-        this.expireOpening(operation);
-        return;
-      }
-      this.assertReadAuthority(operation);
-      operation.discography = discography;
-      const publicVersions = this.buildPublicVersions(bound.album, discography);
-      operation.publicVersionCount = publicVersions.length;
-      for (const version of publicVersions) {
-        operation.versions.set(version.versionId, version);
-      }
-      await this.mergeVersionInventory(operation, bound.album, publicVersions);
-      if (operation.closed || operation.phase !== "opening") return;
-      this.assertReadAuthority(operation);
-      this.publishVersions(operation, bound.album);
+      await this.openCollectionPage(operation, bound.locator);
     } catch (error) {
       operation.resolutionInFlight = false;
       if (operation.closed || operation.phase !== "opening") return;
       if (error instanceof RoonTimeoutError) {
         this.close(operation, true);
-        this.emitFailure(operation, "RESOLUTION_TIMEOUT", "Album page opening timed out");
+        this.emitFailure(
+          operation,
+          "RESOLUTION_TIMEOUT",
+          "Album page opening timed out"
+        );
         return;
       }
       if (
@@ -778,15 +658,159 @@ export class LibraryAlbumService {
       }
       const failure = this.resolutionFailure(error);
       this.close(operation, false);
-      this.emitFailure(operation, failure.code, failure.message);
+      this.emitFailure(
+        operation,
+        failure.code,
+        failure.message,
+        failure.collectionFailure
+      );
     }
+  }
+
+  /**
+   * The heading a collection-opened page carries: the drill row's own text.
+   *
+   * The title is what the row rendered. The artist is the row's credit line
+   * when it rendered one, and ABSENT when it did not — not the genre, not the
+   * composer, not a catalog lookup on the title. Both fields come from the row
+   * this page was opened from, so nothing here compares one surface's text to
+   * another's.
+   */
+  private headingOfCollectionRow(
+    rendering: CollectionDrillAlbumRendering
+  ): LibraryAlbumPageHeading {
+    return {
+      title: rendering.exactTitle,
+      ...(rendering.exactCredit === ""
+        ? {}
+        : { artist: rendering.exactCredit }),
+    };
+  }
+
+  /**
+   * Opens a genre or composer drill row as an album page, in ONE session.
+   *
+   * The locator is resolved and the album's detail is read inside a single
+   * coordinator action, deliberately: the item key the resolver lands on is
+   * bound to that Roon browse session, so it cannot be carried out and used
+   * later. The resolved event is therefore built here and cached on the one
+   * version this page has, and the later select finds it already answered.
+   *
+   * Every await below is a landing spot. The resolver is handed `assertCurrent`
+   * so a page that closed or was superseded mid-walk stops rather than
+   * finishing a drain nobody is waiting for, and the fulfillment re-checks the
+   * phase and the deadline before it publishes anything.
+   */
+  private async openCollectionPage(
+    operation: LibraryAlbumOperation,
+    locator: Readonly<CollectionDrillOpenLocator>
+  ): Promise<void> {
+    operation.resolutionInFlight = true;
+    operation.liveStage = "live-read";
+    const opened = await this.coordinator.runAction(
+      operation.access,
+      async (session) => {
+        const guarded = this.guardedSession(operation, session);
+        const resolution = await this.collectionResolver.resolve(
+          guarded,
+          locator,
+          { assertCurrent: () => this.assertCollectionReadCurrent(operation) }
+        );
+        if (resolution.kind !== "resolved") return resolution;
+        const orderedTrackTitles = await this.collectionResolver.readDetailRows(
+          guarded,
+          resolution.hierarchy,
+          resolution.itemKey,
+          resolution.rendering.exactTitle
+        );
+        return { kind: "resolved" as const, resolution, orderedTrackTitles };
+      }
+    );
+    operation.resolutionInFlight = false;
+    if (operation.closed || operation.phase !== "opening") return;
+    if (this.now() >= operation.resolvingDeadlineAt) {
+      this.expireOpening(operation);
+      return;
+    }
+    this.assertReadAuthority(operation);
+
+    if (opened.kind !== "resolved") {
+      // The locator could not be resolved. This is a real answer about the
+      // library — the collection is gone or carried twice, or the album left
+      // it or is one of two rows that read exactly alike — so it is reported
+      // with its stage and the count the resolver actually observed, and never
+      // broken by picking one of the rows. It travels as a phase error so the
+      // one failure path in `openPage` closes and emits it, exactly as every
+      // other refusal is closed and emitted.
+      throw new LibraryAlbumPhaseError(
+        opened.kind === "ambiguous" ? "ALBUM_AMBIGUOUS" : "ALBUM_NOT_FOUND",
+        opened.stage === "collection"
+          ? opened.kind === "ambiguous"
+            ? "The library carries more than one collection of that name"
+            : "The library no longer carries that collection"
+          : opened.kind === "ambiguous"
+            ? "That collection carries more than one album that reads alike"
+            : "That album is no longer in that collection",
+        {
+          kind: opened.kind,
+          stage: opened.stage,
+          matchCount: opened.matchCount,
+        }
+      );
+    }
+
+    const heading = this.headingOfCollectionRow(opened.resolution.rendering);
+    const versionId = this.uniqueOpaqueId();
+    const summary: LibraryAlbumVersionSummary = Object.freeze({
+      versionId,
+      // The drill supplied no edition text and this shape does not invent one:
+      // `CollectionDrillAlbumRendering` carries a title and a credit because
+      // those are the only two things a drill row renders.
+      editionText: "",
+      trackCount: opened.orderedTrackTitles.length,
+      ...(opened.resolution.imageKeyHint === undefined
+        ? {}
+        : { imageKeyHint: opened.resolution.imageKeyHint }),
+    });
+    const resolved = this.buildResolvedEvent(
+      operation,
+      versionId,
+      heading,
+      // Titles and nothing else. The drill level supplied no track numbers,
+      // no durations and no availability, and a page that filled those in
+      // would be inventing them.
+      opened.orderedTrackTitles.map((title) => ({ title })),
+      // Actions ARE available: the resolver can re-walk this drill and read
+      // the album's own Play/Queue paths inside the hierarchy the row came
+      // from. What it cannot do is anything artist-scoped, and the page offers
+      // none of that — every affordance here is one the drill itself carries.
+      true,
+      summary
+    );
+    operation.versions.set(versionId, {
+      kind: "collection",
+      versionId,
+      summary,
+      detailDigest: createAlbumVersionDetailDigest(
+        heading.title,
+        // The credit as the row rendered it, empty included. The digest is a
+        // fingerprint, not a name, and an absent credit is part of what this
+        // row is.
+        opened.resolution.rendering.exactCredit,
+        opened.orderedTrackTitles
+      ),
+      cached: resolved,
+    });
+    this.publishVersions(operation, heading);
   }
 
   private publishVersions(
     operation: LibraryAlbumOperation,
-    album: Readonly<AlbumRef>
+    heading: LibraryAlbumPageHeading,
+    degraded = false
   ): void {
-    if (operation.closed || operation.phase !== "opening") return;
+    if (operation.closed) return;
+    if (operation.phase !== "opening" && operation.phase !== "degrading") return;
     if (operation.versions.size < 1) {
       throw new LibraryAlbumPhaseError(
         "ALBUM_NOT_FOUND",
@@ -799,11 +823,12 @@ export class LibraryAlbumService {
       requestId: operation.request.requestId,
       operationId: operation.operationId,
       generation: operation.request.generation,
-      artist: album.exactArtist,
-      title: album.exactTitle,
+      ...(heading.artist === undefined ? {} : { artist: heading.artist }),
+      title: heading.title,
       versions: Object.freeze(
         [...operation.versions.values()].map((version) => version.summary)
       ),
+      ...(degraded ? { degraded: true as const } : {}),
     });
     try {
       operation.sink.versions(event);
@@ -813,241 +838,6 @@ export class LibraryAlbumService {
         "Library album versions sink failed"
       );
     }
-  }
-
-  private buildPublicVersions(
-    album: Readonly<AlbumRef>,
-    discography: ObservedDiscography
-  ): PublicVersionAuthority[] {
-    const candidates = this.resolver.observeCandidates(discography, album);
-    if (
-      candidates.length < 1 ||
-      candidates.length > LIBRARY_ALBUM_MAX_VERSIONS
-    ) {
-      throw new LibraryAlbumPhaseError(
-        candidates.length === 0 ? "ALBUM_NOT_FOUND" : "DETAIL_INCOMPLETE",
-        candidates.length === 0
-          ? "No live versions of this album were found"
-          : "The album has more versions than this page can safely retain"
-      );
-    }
-    const seenItemKeys = new Set<string>();
-    return candidates.map((candidate) => {
-      const observed = discography.observation.albums[candidate.observationIndex];
-      const liveRows = discography.liveAlbums.filter(
-        (row) => row.observationIndex === candidate.observationIndex
-      );
-      if (
-        !observed ||
-        liveRows.length !== 1 ||
-        seenItemKeys.has(liveRows[0].itemKey) ||
-        normalizeCatalogText(candidate.title) !== album.normalizedTitle ||
-        normalizeCatalogText(candidate.artist) !== album.normalizedArtist ||
-        !this.validOptionalDisplayText(candidate.editionText)
-      ) {
-        throw new LibraryAlbumPhaseError(
-          "DETAIL_INCOMPLETE",
-          "The live album version list was incomplete"
-        );
-      }
-      seenItemKeys.add(liveRows[0].itemKey);
-      const versionId = this.uniqueOpaqueId();
-      const summary: LibraryAlbumVersionSummary = Object.freeze({
-        versionId,
-        editionText: candidate.editionText,
-        ...(observed.imageKeyHint
-          ? { imageKeyHint: observed.imageKeyHint }
-          : {}),
-      });
-      return {
-        kind: "public",
-        versionId,
-        itemKey: liveRows[0].itemKey,
-        publicSummary: summary,
-        summary,
-      };
-    });
-  }
-
-  private buildExtendedVersion(album: Readonly<AlbumRef>): ExtendedVersionAuthority {
-    const versionId = this.uniqueOpaqueId();
-    const summary: LibraryAlbumVersionSummary = Object.freeze({
-      versionId,
-      editionText: album.editionText,
-      ...(album.imageKeyHint ? { imageKeyHint: album.imageKeyHint } : {}),
-    });
-    return { kind: "extended", versionId, summary };
-  }
-
-  private async loadVersionInventory(
-    operation: LibraryAlbumOperation,
-    album: Readonly<AlbumRef>
-  ): Promise<readonly LibraryAlbumInventoryVersion[]> {
-    const inventory = this.versionInventory;
-    if (!inventory) return [];
-    try {
-      const values = await inventory.list(operation.origin.coreId, {
-        title: album.exactTitle,
-        artist: album.exactArtist,
-      });
-      if (
-        !values ||
-        values.length < 1 ||
-        values.length > LIBRARY_ALBUM_MAX_VERSIONS
-      ) {
-        return [];
-      }
-      const seen = new Set<string>();
-      for (const value of values) {
-        if (
-          !value ||
-          typeof value !== "object" ||
-          !this.validOpaqueId(value.stableKey) ||
-          seen.has(value.stableKey) ||
-          normalizeCatalogText(value.title) !== album.normalizedTitle ||
-          normalizeCatalogText(value.artist) !== album.normalizedArtist ||
-          !normalizeLibraryAlbumVersionSummary(
-            this.inventorySummary("inventory", value)
-          )
-        ) {
-          this.logger.warn(
-            { operationId: operation.operationId },
-            "Album version inventory returned an invalid or conflicting group; ignoring its enhancement"
-          );
-          return [];
-        }
-        seen.add(value.stableKey);
-      }
-      return values;
-    } catch (error) {
-      this.logger.debug(
-        { err: error, operationId: operation.operationId },
-        "Album version inventory unavailable; retaining the public page"
-      );
-      return [];
-    }
-  }
-
-  private async mergeVersionInventory(
-    operation: LibraryAlbumOperation,
-    album: Readonly<AlbumRef>,
-    publicVersions: readonly PublicVersionAuthority[]
-  ): Promise<void> {
-    const inventory = await this.loadVersionInventory(operation, album);
-    if (operation.closed || inventory.length === 0) return;
-    for (const value of inventory) {
-      operation.inventoryVersions.set(value.stableKey, value);
-    }
-
-    const publicByEdition = new Map<string, PublicVersionAuthority[]>();
-    for (const version of publicVersions) {
-      const key = normalizeCatalogText(version.publicSummary.editionText);
-      const group = publicByEdition.get(key) ?? [];
-      group.push(version);
-      publicByEdition.set(key, group);
-    }
-    const inventoryByEdition = new Map<string, LibraryAlbumInventoryVersion[]>();
-    for (const value of inventory) {
-      const key = normalizeCatalogText(value.editionText);
-      const group = inventoryByEdition.get(key) ?? [];
-      group.push(value);
-      inventoryByEdition.set(key, group);
-    }
-
-    const matchedKeys = new Set<string>();
-    for (const [key, pageValues] of publicByEdition) {
-      const inventoryValues = inventoryByEdition.get(key) ?? [];
-      const blankSingleton =
-        key === "" && publicVersions.length === 1 && inventory.length === 1;
-      if (
-        pageValues.length !== 1 ||
-        inventoryValues.length !== 1 ||
-        (key === "" && !blankSingleton)
-      ) {
-        continue;
-      }
-      const version = pageValues[0];
-      const value = inventoryValues[0];
-      version.stableKey = value.stableKey;
-      version.summary = this.inventorySummary(
-        version.versionId,
-        value,
-        version.publicSummary
-      );
-      matchedKeys.add(value.stableKey);
-    }
-
-    // An unmatched richer row is provably distinct only when every public row
-    // carries a non-empty unique edition discriminator. Blank public labels may
-    // still describe any richer row, so those rows stay hidden until a complete
-    // selected-detail fingerprint proves a one-to-one match.
-    const publicEditionKeys = publicVersions.map((version) =>
-      normalizeCatalogText(version.publicSummary.editionText)
-    );
-    const canExposeUnmatched =
-      publicEditionKeys.every((key) => key !== "") &&
-      new Set(publicEditionKeys).size === publicEditionKeys.length;
-    const unmatched = canExposeUnmatched
-      ? inventory.filter((value) => !matchedKeys.has(value.stableKey))
-      : [];
-    if (operation.versions.size + unmatched.length > LIBRARY_ALBUM_MAX_VERSIONS) {
-      return;
-    }
-    for (const value of unmatched) {
-      const version = this.buildInventoryVersion(value);
-      operation.versions.set(version.versionId, version);
-    }
-  }
-
-  private buildInventoryVersion(
-    value: LibraryAlbumInventoryVersion
-  ): InventoryVersionAuthority {
-    const versionId = this.uniqueOpaqueId();
-    return {
-      kind: "inventory",
-      versionId,
-      stableKey: value.stableKey,
-      summary: this.inventorySummary(versionId, value),
-    };
-  }
-
-  private inventorySummary(
-    versionId: string,
-    value: LibraryAlbumInventoryVersion,
-    base?: LibraryAlbumVersionSummary,
-    detail?: LibraryAlbumInventoryDetail
-  ): LibraryAlbumVersionSummary {
-    const durationValues = detail?.tracks.map((track) => track.lengthSeconds) ?? [];
-    const durationKnown =
-      durationValues.length > 0 && durationValues.every((length) => length !== null);
-    return Object.freeze({
-      versionId,
-      editionText: value.editionText || base?.editionText || "",
-      ...(base?.imageKeyHint ? { imageKeyHint: base.imageKeyHint } : {}),
-      ...(value.sourceLabel ? { sourceLabel: value.sourceLabel } : {}),
-      ...(value.releaseDate ? { releaseDate: value.releaseDate } : {}),
-      ...(detail ? { trackCount: detail.tracks.length } : {}),
-      ...(durationKnown
-        ? {
-            durationSeconds: durationValues.reduce(
-              (sum, length) => sum + length,
-              0
-            ),
-          }
-        : {}),
-      ...(detail
-        ? { available: detail.tracks.every((track) => track.available) }
-        : {}),
-      ...(value.playCount !== undefined ? { playCount: value.playCount } : {}),
-      ...(value.lastPlayedAt ? { lastPlayedAt: value.lastPlayedAt } : {}),
-      ...(value.isFavorite !== undefined
-        ? { isFavorite: value.isFavorite }
-        : {}),
-      ...(value.isListenLater !== undefined
-        ? { isListenLater: value.isListenLater }
-        : {}),
-      ...(value.isBanned !== undefined ? { isBanned: value.isBanned } : {}),
-    });
   }
 
   private scheduleSelection(
@@ -1066,109 +856,38 @@ export class LibraryAlbumService {
         Math.max(0, resolvingDeadlineAt - this.now())
       )
     );
-    operation.detailChain = operation.detailChain.then(() =>
-      this.resolveSelection(operation, serial, version, resolvingDeadlineAt)
-    );
+    operation.detailChain = operation.detailChain.then(() => {
+      this.resolveSelection(operation, serial, version, resolvingDeadlineAt);
+    });
   }
 
-  private async resolveSelection(
+  /**
+   * Publish the resolved event for one selected version.
+   *
+   * Every version this service holds is a collection version, and a collection
+   * version is built with its resolved event already cached — the detail was
+   * read in the same session that resolved the drill row, because the item key
+   * could not outlive it. So there is no live read here and nothing to await.
+   *
+   * The uncached branch is unreachable by construction and says so out loud
+   * rather than silently doing nothing: the alternative would be re-reading a
+   * drill whose session is long gone.
+   */
+  private resolveSelection(
     operation: LibraryAlbumOperation,
     serial: number,
     version: LibraryAlbumVersionAuthority,
     resolvingDeadlineAt: number
-  ): Promise<void> {
+  ): void {
     if (!this.selectionCurrent(operation, serial)) return;
     if (this.now() >= resolvingDeadlineAt) {
       this.expireSelection(operation, serial, version, resolvingDeadlineAt);
       return;
     }
-    if (version.cached) {
-      this.finishSelection(operation, serial);
-      operation.selectedVersionId = version.versionId;
-      this.emitResolved(operation, version.cached);
-      return;
-    }
-
     try {
       this.assertReadAuthority(operation);
-      let event: LibraryAlbumResolvedEvent;
-      if (version.kind === "inventory") {
-        event = await this.resolveInventorySelection(operation, version);
-      } else if (version.kind === "extended") {
-        event = await this.resolveExtendedSelection(operation, version);
-      } else {
-        operation.resolutionInFlight = true;
-        const resolution = await this.coordinator.runAction(
-          operation.access,
-          (session) => this.resolvePublicSelection(operation, version, session)
-        );
-        operation.resolutionInFlight = false;
-        this.assertReadAuthority(operation);
-        const album = operation.authority?.album;
-        if (!album) {
-          throw new LibraryAlbumPhaseError(
-            "ALBUM_NOT_FOUND",
-            "The album page authority was lost"
-          );
-        }
-        const detailDigest = createAlbumVersionDetailDigest(
-          album.exactTitle,
-          album.exactArtist,
-          resolution.orderedTrackTitles
-        );
-        const enriched = await this.enrichPublicDetail(
-          operation,
-          version,
-          resolution.orderedTrackTitles
-        );
-        event = this.buildResolvedEvent(
-          operation,
-          version.versionId,
-          album,
-          enriched.tracks,
-          true,
-          enriched.summary
-        );
-        version.detailDigest = detailDigest;
-      }
-      version.cached = event;
-      if (!this.selectionCurrent(operation, serial)) return;
-      if (this.now() > resolvingDeadlineAt) {
-        this.expireSelection(operation, serial, version, resolvingDeadlineAt);
-        return;
-      }
-      this.finishSelection(operation, serial);
-      operation.selectedVersionId = version.versionId;
-      this.emitResolved(operation, event);
     } catch (error) {
-      operation.resolutionInFlight = false;
-      if (!this.selectionCurrent(operation, serial)) return;
       this.finishSelection(operation, serial);
-      if (error instanceof RoonTimeoutError) {
-        this.close(operation, true);
-        this.emitVersionFailure(
-          operation,
-          version.versionId,
-          resolvingDeadlineAt,
-          "RESOLUTION_TIMEOUT",
-          "This album version timed out"
-        );
-        return;
-      }
-      if (
-        error instanceof BrowseSessionCoordinatorError &&
-        error.code === "SESSION_LOST"
-      ) {
-        this.close(operation, true);
-        this.emitVersionFailure(
-          operation,
-          version.versionId,
-          resolvingDeadlineAt,
-          "SESSION_LOST",
-          "The album page session was lost"
-        );
-        return;
-      }
       const failure = this.resolutionFailure(error);
       this.emitVersionFailure(
         operation,
@@ -1177,263 +896,18 @@ export class LibraryAlbumService {
         failure.code,
         failure.message
       );
+      return;
     }
-  }
-
-  private async resolveExtendedSelection(
-    operation: LibraryAlbumOperation,
-    version: ExtendedVersionAuthority
-  ): Promise<LibraryAlbumResolvedEvent> {
-    const fallbackResolver = this.fallbackResolver;
-    const album = operation.authority?.album;
-    if (!fallbackResolver || !album) {
-      throw new LibraryAlbumPhaseError(
-        "ALBUM_NOT_FOUND",
-        "This album version is not currently readable"
-      );
-    }
-    let resolution: LibraryAlbumFallbackResolution;
-    try {
-      resolution = await fallbackResolver.resolve(operation.origin.coreId, album);
-    } catch (error) {
-      this.assertReadAuthority(operation);
-      if (error instanceof LibraryAlbumFallbackError) {
-        throw new LibraryAlbumPhaseError(error.code, error.message);
-      }
-      throw new LibraryAlbumPhaseError(
-        "DETAIL_INCOMPLETE",
-        "The album's full track list could not be read"
-      );
-    }
-    this.assertReadAuthority(operation);
-    return this.buildResolvedEvent(
-      operation,
-      version.versionId,
-      album,
-      resolution.orderedTrackTitles.map((title) => ({ title })),
-      false,
-      version.summary
-    );
-  }
-
-  private async resolveInventorySelection(
-    operation: LibraryAlbumOperation,
-    version: InventoryVersionAuthority
-  ): Promise<LibraryAlbumResolvedEvent> {
-    const album = operation.authority?.album;
-    const value = operation.inventoryVersions.get(version.stableKey);
-    if (!album || !value) {
-      throw new LibraryAlbumPhaseError(
-        "ALBUM_NOT_FOUND",
-        "This album version is not currently readable"
-      );
-    }
-    const details = await this.readInventoryDetails(operation, [version.stableKey]);
-    const detail = details.find((candidate) => candidate.stableKey === version.stableKey);
-    if (!detail) {
-      throw new LibraryAlbumPhaseError(
-        "DETAIL_INCOMPLETE",
-        "The album's full track list could not be read"
-      );
-    }
-    version.summary = this.inventorySummary(
-      version.versionId,
-      value,
-      version.summary,
-      detail
-    );
-    return this.buildResolvedEvent(
-      operation,
-      version.versionId,
-      album,
-      detail.tracks,
-      false,
-      version.summary
-    );
-  }
-
-  private async enrichPublicDetail(
-    operation: LibraryAlbumOperation,
-    version: PublicVersionAuthority,
-    publicTitles: readonly string[]
-  ): Promise<{
-    readonly summary: LibraryAlbumVersionSummary;
-    readonly tracks: readonly LibraryAlbumDetailTrack[];
-  }> {
-    const publicTracks = publicTitles.map((title) => ({ title }));
-    if (!this.versionInventory || operation.inventoryVersions.size === 0) {
-      return { summary: version.publicSummary, tracks: publicTracks };
-    }
-    const usedKeys = new Set<string>();
-    for (const candidate of operation.versions.values()) {
-      if (candidate === version) continue;
-      if (candidate.kind === "inventory") usedKeys.add(candidate.stableKey);
-      if (candidate.kind === "public" && candidate.stableKey) {
-        usedKeys.add(candidate.stableKey);
-      }
-    }
-    const availableKeys = [...operation.inventoryVersions.keys()].filter(
-      (stableKey) => !usedKeys.has(stableKey)
-    );
-    const details = await this.readInventoryDetails(operation, availableKeys);
-    const normalizedPublicTitles = publicTitles.map(normalizeCatalogTrackTitle);
-    const matches = details.filter(
-      (detail) =>
-        detail.tracks.length === normalizedPublicTitles.length &&
-        detail.tracks.every(
-          (track, index) =>
-            normalizeCatalogTrackTitle(track.title) === normalizedPublicTitles[index]
-        )
-    );
-    if (matches.length !== 1) {
-      version.stableKey = undefined;
-      version.summary = version.publicSummary;
-      return { summary: version.publicSummary, tracks: publicTracks };
-    }
-    const detail = matches[0];
-    const value = operation.inventoryVersions.get(detail.stableKey);
-    if (!value) {
-      return { summary: version.publicSummary, tracks: publicTracks };
-    }
-    version.stableKey = detail.stableKey;
-    version.summary = this.inventorySummary(
-      version.versionId,
-      value,
-      version.publicSummary,
-      detail
-    );
-    return {
-      summary: version.summary,
-      tracks: publicTitles.map((title, index) => ({
-        title,
-        trackNumber: detail.tracks[index].trackNumber,
-        mediaNumber: detail.tracks[index].mediaNumber,
-        lengthSeconds: detail.tracks[index].lengthSeconds,
-        available: detail.tracks[index].available,
-      })),
-    };
-  }
-
-  private async readInventoryDetails(
-    operation: LibraryAlbumOperation,
-    stableKeys: readonly string[]
-  ): Promise<readonly LibraryAlbumInventoryDetail[]> {
-    const inventory = this.versionInventory;
-    if (!inventory || stableKeys.length === 0) return [];
-    try {
-      const values = await inventory.read(operation.origin.coreId, stableKeys);
-      if (!values || values.length > stableKeys.length) return [];
-      const requested = new Set(stableKeys);
-      const seen = new Set<string>();
-      for (const value of values) {
-        if (
-          !value ||
-          !requested.has(value.stableKey) ||
-          seen.has(value.stableKey) ||
-          !Array.isArray(value.tracks) ||
-          value.tracks.length < 1 ||
-          value.tracks.length > LIBRARY_ALBUM_MAX_TRACKS ||
-          value.tracks.some((track) => !this.validInventoryTrack(track))
-        ) {
-          return [];
-        }
-        seen.add(value.stableKey);
-      }
-      return values;
-    } catch (error) {
-      this.logger.debug(
-        { err: error, operationId: operation.operationId },
-        "Album version detail enhancement unavailable; retaining public details"
-      );
-      return [];
-    }
-  }
-
-  private validInventoryTrack(value: LibraryAlbumInventoryTrack): boolean {
-    return (
-      Boolean(value) &&
-      this.validDisplayText(value.title) &&
-      Number.isSafeInteger(value.trackNumber) &&
-      value.trackNumber >= 0 &&
-      Number.isSafeInteger(value.mediaNumber) &&
-      value.mediaNumber >= 0 &&
-      (value.lengthSeconds === null ||
-        (Number.isFinite(value.lengthSeconds) && value.lengthSeconds >= 0)) &&
-      typeof value.available === "boolean"
-    );
-  }
-
-  private async resolvePublicSelection(
-    operation: LibraryAlbumOperation,
-    version: PublicVersionAuthority,
-    session: CoordinatedBrowseSession
-  ): Promise<LibraryAlbumResolution> {
-    const authority = operation.authority;
-    if (!authority || authority.kind !== "public") {
-      throw new LibraryAlbumPhaseError(
-        "SESSION_LOST",
-        "The public album page authority was lost"
-      );
-    }
-    const guarded = this.guardedSession(operation, session);
-    let current = operation.discography;
-    if (!current) {
-      throw new LibraryAlbumPhaseError(
-        "SESSION_LOST",
-        "The retained album version list was lost"
-      );
-    }
-    if (operation.sessionAtDetail) {
-      const parent = await guarded.pop({
-        hierarchy: "artists",
-        levels: 1,
-        refresh: false,
-        pageSize: 100,
-      });
-      operation.sessionAtDetail = false;
-      current = await this.resolver.observeCurrent(
-        guarded,
-        authority.artist,
-        parent
-      );
-      operation.discography = current;
-    }
-    const liveRows = current.liveAlbums.filter(
-      (row) => row.itemKey === version.itemKey
-    );
-    if (liveRows.length !== 1) {
-      throw new LibraryAlbumPhaseError(
-        "ALBUM_NOT_FOUND",
-        "This album version is no longer present on the page"
-      );
-    }
-    const observationIndex = liveRows[0].observationIndex;
-    const observed = current.observation.albums[observationIndex];
-    if (
-      !observed ||
-      normalizeCatalogText(observed.exactTitle) !== authority.album.normalizedTitle ||
-      normalizeCatalogText(observed.exactArtist) !== authority.album.normalizedArtist
-    ) {
-      throw new LibraryAlbumPhaseError(
-        "DETAIL_MISMATCH",
-        "This album version no longer matches the page"
-      );
-    }
-    operation.sessionAtDetail = true;
-    return this.resolver.resolveObservedCandidate(
-      guarded,
-      authority.artist,
-      authority.album,
-      current,
-      observationIndex
-    );
+    this.finishSelection(operation, serial);
+    operation.selectedVersionId = version.versionId;
+    this.emitResolved(operation, version.cached);
   }
 
   private buildResolvedEvent(
     operation: LibraryAlbumOperation,
     versionId: string,
-    album: Readonly<AlbumRef>,
-    orderedTracks: readonly LibraryAlbumDetailTrack[],
+    heading: LibraryAlbumPageHeading,
+    orderedTracks: readonly Omit<LibraryAlbumTrack, "index">[],
     actionsAvailable: boolean,
     versionSummary: LibraryAlbumVersionSummary
   ): LibraryAlbumResolvedEvent {
@@ -1441,8 +915,12 @@ export class LibraryAlbumService {
       orderedTracks.length === 0 ||
       orderedTracks.length > LIBRARY_ALBUM_MAX_TRACKS ||
       orderedTracks.some((track) => !this.validDisplayText(track.title)) ||
-      !this.validDisplayText(album.exactArtist) ||
-      !this.validDisplayText(album.exactTitle) ||
+      // An absent artist is legal; an artist that is present must be real
+      // display text. The empty string fails `validDisplayText`, which is the
+      // point: a page with no artist omits the field rather than sending a
+      // blank one.
+      (heading.artist !== undefined && !this.validDisplayText(heading.artist)) ||
+      !this.validDisplayText(heading.title) ||
       !normalizeLibraryAlbumVersionSummary(versionSummary) ||
       versionSummary.versionId !== versionId
     ) {
@@ -1456,51 +934,14 @@ export class LibraryAlbumService {
       operationId: operation.operationId,
       generation: operation.request.generation,
       versionId,
-      artist: album.exactArtist,
-      title: album.exactTitle,
+      ...(heading.artist === undefined ? {} : { artist: heading.artist }),
+      title: heading.title,
       actionsAvailable,
       versionSummary,
       orderedTracks: Object.freeze(
         orderedTracks.map((track, index) => Object.freeze({ index, ...track }))
       ),
     });
-  }
-
-  private currentAlbum(
-    coreId: string,
-    albumLocalId: string
-  ): LibraryAlbumReadAuthority | null {
-    const snapshot = this.catalog.getSnapshot(coreId);
-    if (!snapshot || snapshot.coreId !== coreId) return null;
-    const albums = snapshot.albums.filter(
-      (album) => album.localId === albumLocalId && album.coreId === coreId
-    );
-    if (albums.length !== 1) return null;
-    const selectedAlbum = albums[0];
-    if (
-      selectedAlbum.artistLocalId &&
-      (selectedAlbum.resolutionStatus === "resolved" ||
-        selectedAlbum.resolutionStatus === "ambiguous")
-    ) {
-      const artists = snapshot.artists.filter(
-        (candidate) =>
-          candidate.localId === selectedAlbum.artistLocalId &&
-          candidate.coreId === coreId &&
-          candidate.resolutionStatus === "resolved"
-      );
-      if (artists.length === 1) {
-        return { kind: "public", album: selectedAlbum, artist: artists[0] };
-      }
-    }
-    if (
-      selectedAlbum.resolutionStatus === "unresolved" &&
-      selectedAlbum.extendedAlbumId !== undefined &&
-      selectedAlbum.extendedAlbumId.length > 0 &&
-      this.fallbackResolver
-    ) {
-      return { kind: "extended", album: selectedAlbum };
-    }
-    return null;
   }
 
   private selectedActionSourceMatches(
@@ -1551,85 +992,99 @@ export class LibraryAlbumService {
     return result;
   }
 
+  /**
+   * The landing spot every await in a collection walk shares.
+   *
+   * The authority check plus the phase: a page that was closed, superseded or
+   * degraded while a drill was draining must stop, rather than finish a read
+   * nobody is waiting for. Handed to the resolver as `assertCurrent`, which
+   * calls it after every browse and between every page of a level.
+   */
+  private assertCollectionReadCurrent(operation: LibraryAlbumOperation): void {
+    this.assertReadAuthority(operation);
+    if (operation.phase !== "opening") {
+      throw new LibraryAlbumPhaseError(
+        "CANCELED",
+        "The album page stopped reading before its drill finished"
+      );
+    }
+  }
+
+  /**
+   * The one signature a collection page's authority ever has.
+   *
+   * The locator arrived in the request and is frozen there. Nothing in the
+   * catalog can change it, and nothing in the catalog is consulted for it, so
+   * unlike a catalog authority there is no republished snapshot underneath
+   * that could quietly turn this page into a different album. The signature
+   * exists so the same equality check works for all three arms.
+   */
+  private collectionAuthoritySignature(
+    locator: Readonly<CollectionDrillOpenLocator>
+  ): string {
+    return [
+      "collection",
+      locator.hierarchy,
+      locator.collectionExactName,
+      locator.rendering.exactTitle,
+      locator.rendering.exactCredit,
+    ].join(" ");
+  }
+
   private assertReadAuthority(operation: LibraryAlbumOperation): void {
-    const bound = this.currentAlbum(
-      operation.origin.coreId,
-      operation.request.albumLocalId
-    );
-    if (!bound || !operation.albumSignature) {
+    // Nothing stored to re-check against: the locator is request data, and
+    // nothing can move it. What this asserts instead is that the page still
+    // exists and still holds the identity it opened with.
+    //
+    // The PHASE is deliberately not checked here, because this same assertion
+    // runs long after the read, when an action lease is claimed against a page
+    // that has been `ready` for minutes. `assertCollectionReadCurrent` is the
+    // one that adds the phase, and it is what the walk lands on after every
+    // await.
+    if (operation.closed) {
+      throw new LibraryAlbumPhaseError("CANCELED", "The album page was closed");
+    }
+    if (
+      !operation.authority ||
+      operation.albumSignature !==
+        this.collectionAuthoritySignature(operation.request.target.locator)
+    ) {
       throw new LibraryAlbumPhaseError(
         "ALBUM_NOT_FOUND",
         "The album identity changed during the page session"
       );
     }
-    const signature = this.readAuthoritySignature(bound);
-    if (signature === operation.albumSignature) {
-      // A benign publish (revision, resolution status, timestamps, artwork
-      // hints) leaves the signature untouched; re-pin so continuations act
-      // on the fresh snapshot state, never on stale metadata.
-      operation.authority = bound;
-      return;
-    }
-    // A kind transition is benign metadata only in the validated direction
-    // — extended → public on an auxiliary resolution (q10-3) — and only
-    // when every album identity field survived it, including the native
-    // identity the extended authority is keyed by (q10-2). Anything else
-    // is a genuine identity change.
-    if (
-      operation.authority &&
-      operation.authority.kind === "extended" &&
-      bound.kind === "public" &&
-      this.albumIdentitySignature(bound.album) ===
-        this.albumIdentitySignature(operation.authority.album) &&
-      (bound.album.extendedAlbumId ?? "") ===
-        (operation.authority.album.extendedAlbumId ?? "")
-    ) {
-      operation.authority = bound;
-      operation.albumSignature = signature;
-      return;
-    }
-    throw new LibraryAlbumPhaseError(
-      "ALBUM_NOT_FOUND",
-      "The album identity changed during the page session"
-    );
-  }
-
-  /**
-   * The fields that decide WHICH catalog album the page is reading: the same
-   * release by the same artist in the same edition with the same track set.
-   * Revision, resolution status, timestamps, and artwork hints are publish
-   * metadata and never appear here.
-   */
-  private albumIdentitySignature(
-    album: LibraryAlbumReadAuthority["album"]
-  ): string {
-    return JSON.stringify([
-      album.coreId,
-      album.localId,
-      album.exactTitle,
-      album.exactArtist,
-      album.normalizedTitle,
-      album.normalizedArtist,
-      album.editionText,
-      album.trackTitleFingerprint ?? "",
-    ]);
   }
 
   private readAuthoritySignature(bound: LibraryAlbumReadAuthority): string {
-    const albumIdentity = this.albumIdentitySignature(bound.album);
-    return JSON.stringify(
-      bound.kind === "public"
-        ? [albumIdentity, "public", bound.artist.localId]
-        : [albumIdentity, "extended", bound.album.extendedAlbumId ?? ""]
-    );
+    return this.collectionAuthoritySignature(bound.locator);
   }
 
   private resolutionFailure(error: unknown): {
     code: LibraryAlbumFailureCode;
     message: string;
+    collectionFailure?: CollectionDrillOpenFailureDetail;
   } {
     if (error instanceof LibraryAlbumPhaseError) {
-      return { code: error.code, message: error.message };
+      return {
+        code: error.code,
+        message: error.message,
+        ...(error.collectionFailure
+          ? { collectionFailure: error.collectionFailure }
+          : {}),
+      };
+    }
+    if (error instanceof CollectionDrillResolverError) {
+      // A malformed or oversized drill read is news about the read, not about
+      // the album: the reader is told the page could not be built, never that
+      // the album is missing from a list the resolver only partly saw.
+      return {
+        code:
+          error.code === "COLLECTION_ALBUMS_PATH_NOT_UNIQUE"
+            ? "ALBUM_AMBIGUOUS"
+            : "DETAIL_INCOMPLETE",
+        message: "That collection's album list could not be read completely",
+      };
     }
     if (error instanceof AlbumDetailResolverError) {
       return {
@@ -1640,15 +1095,6 @@ export class LibraryAlbumService {
           DETAIL_INCOMPLETE: "This album version's detail was incomplete",
           DETAIL_MISMATCH: "This album version changed while it was read",
         }[error.code],
-      };
-    }
-    if (error instanceof DiscographyResolverError) {
-      return {
-        code:
-          error.code === "DISCOGRAPHY_PATH_NOT_UNIQUE"
-            ? "ALBUM_AMBIGUOUS"
-            : "DETAIL_INCOMPLETE",
-        message: "The album artist could not be re-observed exactly",
       };
     }
     return { code: "INTERNAL_ERROR", message: "Library album resolution failed" };
@@ -1698,7 +1144,11 @@ export class LibraryAlbumService {
       return;
     }
     this.close(operation, operation.resolutionInFlight);
-    this.emitFailure(operation, "RESOLUTION_TIMEOUT", "Album page opening timed out");
+    this.emitFailure(
+      operation,
+      "RESOLUTION_TIMEOUT",
+      "Album page opening timed out"
+    );
   }
 
   private expireSelection(
@@ -1803,7 +1253,8 @@ export class LibraryAlbumService {
   private emitFailure(
     operation: LibraryAlbumOperation,
     code: LibraryAlbumFailureCode,
-    error: string
+    error: string,
+    collectionFailure?: CollectionDrillOpenFailureDetail
   ): void {
     const event: LibraryAlbumFailedEvent = Object.freeze({
       requestId: operation.request.requestId,
@@ -1812,6 +1263,7 @@ export class LibraryAlbumService {
       resolvingDeadlineAt: operation.resolvingDeadlineAt,
       error,
       code,
+      ...(collectionFailure ? { collectionFailure } : {}),
     });
     try {
       operation.sink.failed(event);

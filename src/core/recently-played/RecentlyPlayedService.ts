@@ -163,6 +163,30 @@ export class RecentlyPlayedService extends EventEmitter {
     return this.startPromise;
   }
 
+  /**
+   * Resolves once the in-flight startup is over — WITHOUT starting one.
+   *
+   * For readers that must not act on the empty list this service holds before
+   * its disk read lands, but that have no business deciding whether the
+   * service runs at all. The pre-binding sweep is the one that needed it
+   * (finding b6c-1): Roon discovery starts before this load finishes, so a
+   * Core that pairs fast can have the sweep ranking on an empty list while the
+   * owner's real listening history is still on disk.
+   *
+   * Never rejects, because `start()` never does: every failure mode is
+   * swallowed into an empty list or degraded mode, and both are answers a
+   * caller can act on. Resolving immediately when nothing is starting is also
+   * an answer, and the honest one — a service nobody started has no load to
+   * wait for, and a stopped one has no load left to finish.
+   *
+   * Deliberately not `start()`: calling that from a reader would start a
+   * service the host had stopped, re-attaching a now-playing listener during
+   * shutdown.
+   */
+  public whenStarted(): Promise<void> {
+    return this.startPromise ?? Promise.resolve();
+  }
+
   private async doStart(): Promise<void> {
     const myToken = ++this.startToken;
     // Optimistically clear degraded so a stop()+start() cycle can

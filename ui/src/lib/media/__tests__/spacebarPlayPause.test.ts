@@ -94,6 +94,16 @@ describe('startSpacebarPlayPause', () => {
 		expect(event.defaultPrevented).toBe(false);
 	});
 
+	it('treats a focused range slider as not editable, so Space still toggles playback (issue #16)', () => {
+		const slider = mount(document.createElement('input'));
+		slider.type = 'range';
+
+		const event = pressSpace(slider);
+
+		expect(playPauseCalls()).toEqual([['transport:play-pause', { zone_id: 'zone-1' }]]);
+		expect(event.defaultPrevented).toBe(true);
+	});
+
 	it('ignores Space typed into a contenteditable surface', () => {
 		const editable = mount(document.createElement('div'));
 		editable.setAttribute('contenteditable', 'true');

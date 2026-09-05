@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Seek bar fixture</title>
+		<style>
+			body {
+				margin: 0;
+				background: #000;
+			}
+			/* Stands in for the play-bar footer only as a positioning context:
+			   the seek strip is `position: absolute; inset: auto 0 0`, so it
+			   needs a positioned ancestor with a width to resolve against. The
+			   real footer's padding is NOT copied here — the interactive
+			   height comes from `--seek-hit-height`, which the footer declares
+			   beside the padding it derives from, and this page sets it
+			   explicitly per case so both densities can be measured. */
+			#transport-host {
+				position: relative;
+				width: 600px;
+				height: 60px;
+				--seek-hit-height: 10px;
+			}
+			#overlay-host {
+				width: 400px;
+				padding: 20px;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="transport-host"></div>
+		<div id="overlay-host"></div>
+		<script type="module" src="/fixtures/seek-bar.svelte.ts"></script>
+	</body>
+</html>

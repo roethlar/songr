@@ -16,21 +16,14 @@ import {
   type SongActionResolverPort,
 } from "../../core/roon/SongActionResolver";
 import {
-  LibraryFeatureError,
-  type SongRelationshipFeaturePort,
-} from "../libraryFeatures";
-import {
   UNIFIED_SONG_SEARCH_RESULT_MAX,
   normalizeUnifiedSearchClearRequest,
   normalizeUnifiedSongActionRequest,
-  normalizeUnifiedSongRelationshipRequest,
   normalizeUnifiedSongSearchRequest,
   type UnifiedSearchClearAck,
   type UnifiedSearchErrorCode,
   type UnifiedSongActionAck,
   type UnifiedSongActionErrorCode,
-  type UnifiedSongRelationshipAck,
-  type UnifiedSongRelationshipErrorCode,
   type UnifiedSongSearchAck,
 } from "../../shared/unifiedSearchContracts";
 import type { Zone } from "../../shared/types";
@@ -39,7 +32,6 @@ const USED_ACTION_REQUEST_LIMIT = 256;
 
 type SearchAck = (value: UnifiedSongSearchAck) => void;
 type ActionAck = (value: UnifiedSongActionAck) => void;
-type RelationshipAck = (value: UnifiedSongRelationshipAck) => void;
 type ClearAck = (value: UnifiedSearchClearAck) => void;
 
 export interface UnifiedSearchZonePort {
@@ -51,7 +43,6 @@ export interface UnifiedSearchSocketDependencies {
   readonly browseService: BrowseService;
   readonly zones: UnifiedSearchZonePort;
   readonly songActionResolver?: SongActionResolverPort;
-  readonly songRelationships: SongRelationshipFeaturePort;
   readonly getCoreId: () => string | null;
   readonly logger: Logger;
 }
@@ -64,17 +55,6 @@ class SongActionPhaseError extends Error {
     super(message);
     this.name = "SongActionPhaseError";
     Object.setPrototypeOf(this, SongActionPhaseError.prototype);
-  }
-}
-
-class SongRelationshipPhaseError extends Error {
-  public constructor(
-    public readonly code: UnifiedSongRelationshipErrorCode,
-    message: string
-  ) {
-    super(message);
-    this.name = "SongRelationshipPhaseError";
-    Object.setPrototypeOf(this, SongRelationshipPhaseError.prototype);
   }
 }
 
@@ -144,17 +124,6 @@ function actionFailure(
   };
 }
 
-function relationshipFailure(
-  code: UnifiedSongRelationshipErrorCode,
-  error: string
-): UnifiedSongRelationshipAck {
-  return {
-    success: false,
-    code,
-    error: error.slice(0, 1_024) || "Song relationships are unavailable",
-  };
-}
-
 function actionErrorCode(error: unknown): UnifiedSongActionErrorCode {
   if (error instanceof SongActionPhaseError) return error.code;
   if (error instanceof SongActionResolutionError) {
@@ -169,24 +138,6 @@ function actionErrorCode(error: unknown): UnifiedSongActionErrorCode {
     return "STALE_RESULT";
   }
   return "PRE_ISSUE_FAILED";
-}
-
-function relationshipErrorCode(
-  error: unknown
-): UnifiedSongRelationshipErrorCode {
-  if (error instanceof SongRelationshipPhaseError) return error.code;
-  // Any failure the library feature layer raises — including the one it
-  // raises when the feature is not part of this build — reads to the client
-  // as "relationships are unavailable", never as a broken feature.
-  if (error instanceof LibraryFeatureError) {
-    return "RELATIONSHIP_UNAVAILABLE";
-  }
-  if (error instanceof BrowseSessionCoordinatorError) {
-    if (error.code === "OWNER_MISMATCH") return "OWNER_MISMATCH";
-    if (error.code === "SESSION_LOST") return "SESSION_LOST";
-    return "STALE_RESULT";
-  }
-  return "INTERNAL_ERROR";
 }
 
 function zoneTopologyFingerprint(
@@ -300,7 +251,6 @@ export function registerUnifiedSearchSocket(
     coordinator,
     browseService,
     zones,
-    songRelationships,
     getCoreId,
     logger,
   } = dependencies;
@@ -391,85 +341,6 @@ export function registerUnifiedSearchSocket(
               : error instanceof Error
                 ? error.message
                 : "Song search failed"
-          )
-        );
-      }
-    }
-  );
-
-  socket.on(
-    "unified-search:relationship",
-    async (value: unknown, ack?: RelationshipAck): Promise<void> => {
-      const request = normalizeUnifiedSongRelationshipRequest(value);
-      if (!request || !ack) {
-        ack?.(
-          relationshipFailure(
-            "INVALID_REQUEST",
-            "Invalid song relationship request"
-          )
-        );
-        return;
-      }
-      const coreId = getCoreId();
-      if (!coreId) {
-        ack(
-          relationshipFailure(
-            "CORE_UNAVAILABLE",
-            "Roon Core is unavailable"
-          )
-        );
-        return;
-      }
-      const access = modeAccess(coreId, socket.id, request);
-      try {
-        const binding = coordinator.resolveClassicPublishedItemBinding(
-          access,
-          "classic-search",
-          request.resultId
-        );
-        const relationship = await songRelationships.resolve(
-          coreId,
-          binding.item.title,
-          binding.item.subtitle ?? null
-        );
-        const current = coordinator.resolveClassicPublishedItemBinding(
-          access,
-          "classic-search",
-          request.resultId
-        );
-        if (!sameBinding(binding, current)) {
-          throw new SongRelationshipPhaseError(
-            "STALE_RESULT",
-            "The song result was replaced"
-          );
-        }
-        ack({
-          success: true,
-          data: {
-            requestId: request.requestId,
-            session: request.session,
-            resultId: request.resultId,
-            songTitle: relationship.songTitle,
-            albums: relationship.albums,
-            composerLabels: relationship.composerLabels,
-          },
-        });
-      } catch (error) {
-        const code = relationshipErrorCode(error);
-        if (code === "INTERNAL_ERROR") {
-          logger.error(
-            { err: error },
-            "Unified song relationship lookup failed"
-          );
-        }
-        ack(
-          relationshipFailure(
-            code,
-            code === "INTERNAL_ERROR"
-              ? "Song relationships are unavailable"
-              : error instanceof Error
-                ? error.message
-                : "Song relationships are unavailable"
           )
         );
       }

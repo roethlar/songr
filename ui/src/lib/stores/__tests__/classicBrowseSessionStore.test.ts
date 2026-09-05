@@ -450,6 +450,103 @@ describe('Classic browse session client', () => {
 		).toHaveLength(2);
 	});
 
+	it('acquires a fresh generation after a server-retired session is invalidated', async () => {
+		const liveSocket = socket();
+		let request = 0;
+		let acquisition = 0;
+		const emit = vi.fn(async (_socket, event, payload) => {
+			if (event === 'classic-session:acquire') {
+				const handleId = `handle-${++acquisition}`;
+				return {
+					success: true,
+					data: { requestId: payload.requestId, session: { handleId, generation: acquisition } }
+				};
+			}
+			return { success: true, data: { requestId: payload.requestId } };
+		});
+		const client = createClassicBrowseSessionClient({
+			getSocket: () => liveSocket as never,
+			getTabId: () => 'tab-1',
+			createRequestId: () => `request-${++request}`,
+			emit: emit as never
+		});
+		const claim = client.claim('unified-mode');
+		const retired = await claim.ready;
+		expect(retired).toEqual({ handleId: 'handle-1', generation: 1 });
+
+		// The socket never dropped; the server retired the lease underneath it
+		// (public issue #11). A second read of the same claim must not replay
+		// the dead generation.
+		client.invalidate(claim, { ...retired, handleId: 'different-handle' });
+		expect(get(client).session).toEqual(retired);
+		client.invalidate(claim, retired);
+		await expect(claim.ready).resolves.toEqual({ handleId: 'handle-2', generation: 2 });
+		expect(
+			emit.mock.calls.filter(([, event]) => event === 'classic-session:acquire')
+		).toHaveLength(2);
+		// A handle the server has already closed is never released back to it.
+		expect(
+			emit.mock.calls.filter(([, event]) => event === 'classic-session:release')
+		).toHaveLength(0);
+	});
+
+	it('retires only the exact server handle and ignores its late notice after reacquire', async () => {
+		const liveSocket = socket();
+		let request = 0;
+		let acquisition = 0;
+		const emit = vi.fn(async (_socket, event, payload) => {
+			if (event === 'classic-session:acquire') {
+				const generation = ++acquisition;
+				return {
+					success: true,
+					data: {
+						requestId: payload.requestId,
+						session: { handleId: `handle-${generation}`, generation }
+					}
+				};
+			}
+			return {
+				success: true,
+				data: {
+					requestId: payload.requestId,
+					session: payload.session,
+					result: { level: 0, offset: 0, count: 0, items: [] }
+				}
+			};
+		});
+		const client = createClassicBrowseSessionClient({
+			getSocket: () => liveSocket as never,
+			getTabId: () => 'tab-1',
+			createRequestId: () => `request-${++request}`,
+			emit: emit as never
+		});
+		const claim = client.claim('unified-mode');
+		const first = await claim.ready;
+
+		client.retireServerSession({ ...first, generation: first.generation + 1 });
+		expect(get(client).session).toEqual(first);
+		client.retireServerSession(first);
+		const second = await claim.ready;
+		expect(second).toEqual({ handleId: 'handle-2', generation: 2 });
+		const ownerEpoch = get(client).ownerEpoch;
+
+		client.retireServerSession(first);
+		await expect(
+			client.request(claim, 'browse', 'classic-browse', {
+				hierarchy: 'browse',
+				popAll: true
+			})
+		).resolves.toEqual({ level: 0, offset: 0, count: 0, items: [] });
+		expect(get(client)).toMatchObject({
+			phase: 'live',
+			session: second,
+			ownerEpoch
+		});
+		expect(
+			emit.mock.calls.filter(([, event]) => event === 'classic-session:release')
+		).toHaveLength(0);
+	});
+
 	it('rejects a transaction whose callback catches an abandoned request', async () => {
 		const liveSocket = socket();
 		let request = 0;

@@ -1,16 +1,30 @@
 /**
- * The server's one shutdown sequence, extracted so its ordering is
- * testable (ms1-2): optional workspace-session cleanup is asynchronous and
- * MUST settle before the socket server closes underneath it — a
- * fire-and-forget start here let process exit race native cleanup.
+ * The server's one shutdown sequence, extracted so its ordering is testable.
  */
 import type { Logger } from "pino";
 
 export interface ShutdownContext {
   requestShutdown(): void;
-  catalogLifecycle: { shutdown(): void };
+  /**
+   * The post-connect load trial's browse canary, when this run has one. Null
+   * or absent in every ordinary install; stopped first so a shutting-down
+   * process cannot issue one more probe at a Core it is leaving.
+   */
+  browseCanary?: { stop(): void } | null;
+  /**
+   * The background-load gate. Stopped alongside the canary and for the same
+   * reason: its half-open probe is a Core call, and a shutting-down process
+   * must not have one armed behind it.
+   */
+  corePressureBreaker?: { stop(): void } | null;
+  /**
+   * The live library session, when this run has one. Closed before the
+   * Core-scoped services it rides on: its refresh timer is the one thing here
+   * that could still ask a departing process to read a library.
+   */
+  liveLibrary?: { close(): void } | null;
+  coreLifecycle: { shutdown(): void };
   transportService: { shutdown(): void };
-  workspaceFeatures: { shutdown(): Promise<void> };
   socketContext: { io: { close(done?: () => void): unknown } };
   isListening(): boolean;
   httpServer: { close(done: (error?: Error) => void): unknown };
@@ -21,10 +35,10 @@ export function createShutdownHandler(options: {
   logger: Logger;
   /** Injectable for tests; defaults to `process.exit`. */
   exit?: (code: number) => void;
-}): (signal: string) => Promise<void> {
+}): (signal: string) => void {
   const { context, logger } = options;
   const exit = options.exit ?? ((code: number) => process.exit(code));
-  return async (signal: string): Promise<void> => {
+  return (signal: string): void => {
     logger.info({ signal }, "Received shutdown signal");
 
     // Tell startServer to skip the deferred httpServer.listen if
@@ -34,9 +48,30 @@ export function createShutdownHandler(options: {
     context.requestShutdown();
 
     try {
-      context.catalogLifecycle.shutdown();
+      context.browseCanary?.stop();
     } catch (error) {
-      logger.warn({ err: error }, "Error while stopping catalog services");
+      logger.warn({ err: error }, "Error while stopping the browse canary");
+    }
+
+    try {
+      context.corePressureBreaker?.stop();
+    } catch (error) {
+      logger.warn(
+        { err: error },
+        "Error while stopping the core pressure breaker"
+      );
+    }
+
+    try {
+      context.liveLibrary?.close();
+    } catch (error) {
+      logger.warn({ err: error }, "Error while closing the live library");
+    }
+
+    try {
+      context.coreLifecycle.shutdown();
+    } catch (error) {
+      logger.warn({ err: error }, "Error while stopping Core-scoped services");
     }
 
     // Tear down Roon subscriptions before closing transports so the Core
@@ -45,15 +80,6 @@ export function createShutdownHandler(options: {
       context.transportService.shutdown();
     } catch (error) {
       logger.warn({ err: error }, "Error while stopping transport service");
-    }
-
-    // Close every optional workspace session BEFORE the sockets go away,
-    // and wait for it: workspace cleanup retires native connections, and
-    // exiting mid-retire abandons them at the Core (ms1-2).
-    try {
-      await context.workspaceFeatures.shutdown();
-    } catch (error) {
-      logger.warn({ err: error }, "Error while stopping workspace features");
     }
 
     void context.socketContext.io.close(() => {

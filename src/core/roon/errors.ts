@@ -80,6 +80,27 @@ export class RoonTimeoutError extends RoonError {
 /**
  * Error thrown when Roon operation fails
  */
+/**
+ * Roon's browse API refused a call and said why, as a bare string such as
+ * `InvalidItemKey`. The string is the whole answer, so it is carried as
+ * `roonCode` rather than flattened into a message a caller would have to parse.
+ */
+export class RoonBrowseError extends RoonError {
+  public readonly method: string;
+  public readonly roonCode: string;
+
+  constructor(method: string, roonCode: string) {
+    super(`browse.${method} refused by Roon: ${roonCode}`, "BROWSE_REFUSED", 502);
+    this.method = method;
+    this.roonCode = roonCode;
+  }
+
+  /** The key named by the call is not one the current browse session knows. */
+  public get invalidatesItemKeys(): boolean {
+    return this.roonCode === "InvalidItemKey";
+  }
+}
+
 export class RoonOperationError extends RoonError {
   public readonly operation: string;
   public readonly context?: Record<string, unknown>;

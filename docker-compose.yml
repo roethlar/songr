@@ -9,7 +9,7 @@ services:
         #   SOURCE_COMMIT=$(git rev-parse --short HEAD) docker compose build
         # Unset, the build falls back to a unique per-build stamp.
         SOURCE_COMMIT: ${SOURCE_COMMIT:-}
-    image: roon-controller:latest
+    image: ghcr.io/roethlar/songr:latest
     restart: unless-stopped
     env_file:
       # Optional overrides — every variable has a working default baked into

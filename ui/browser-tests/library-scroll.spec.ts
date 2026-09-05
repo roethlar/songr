@@ -42,8 +42,18 @@ test('a scope returns to where you drilled out of it', async ({ page }) => {
 	const drilledFrom = await paneScrollTop(page);
 	expect(drilledFrom).toBeGreaterThan(2000);
 
+	// Which row this is, before anything is clicked. The Artists list is
+	// Roon's own root now (`.agents/plans/library-live-view.md` Slice 2) and a
+	// row opens by the reference Roon put on it; asserting only that "an
+	// artist page appeared" would pass just as well if row 300 opened row 0.
+	const drilledName = (await row.locator('.an').innerText()).trim();
+	expect(drilledName).not.toBe('');
+
 	await row.click();
 	await expect(page.getByTestId('unified-artist-back')).toBeVisible();
+	await expect(page.getByTestId('unified-artist-name')).toHaveText(drilledName);
+	// Roon's own level under that row, not a list assembled from anywhere else.
+	await expect(page.getByTestId('unified-tile').first()).toBeVisible();
 
 	// Leave the scope entirely and come back.
 	await page.getByTestId('unified-scope-albums').click();

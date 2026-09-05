@@ -4,6 +4,8 @@
  */
 
 import { ALBUM_DETAIL_MAX_TRACKS } from "./libraryAlbumContracts";
+import { normalizeLibraryRowReference } from "./libraryOpenContracts";
+import type { LibraryRowReference } from "./libraryRootsContracts";
 
 export const ALBUM_ACTION_MAX_CHOICES = 32;
 export const ALBUM_ACTION_ID_MAX_LENGTH = 128;
@@ -56,17 +58,53 @@ export interface AlbumActionTrackSelector {
   title: string;
 }
 
-export interface AlbumActionBeginRequest {
+interface AlbumActionBeginCommon {
   requestId: string;
+  zoneId: string;
+  tabId: string;
+  generation: number;
+}
+
+/** An action on a retained album page: catalog-opened or collection-opened. */
+export interface AlbumActionPageBeginRequest extends AlbumActionBeginCommon {
   /** Opaque retained album-page operation. */
   pageId: string;
   /** Opaque version selected within that page. */
   versionId: string;
-  zoneId: string;
-  tabId: string;
-  generation: number;
   /** Optional track scope; when present, both fields must identify one track. */
   track?: AlbumActionTrackSelector;
+}
+
+/**
+ * An action on one live library reference.
+ *
+ * `.agents/plans/library-live-view.md` Slice 2. There is no retained page here
+ * and no version to select: the reader clicked a row Roon itself rendered, and
+ * that row's own reference is what the action acts on. Measured against the
+ * owner's Core 2026-09-03 (`.agents/state.md`): an album's `Play Album` row and
+ * a track row each answer with their own four action leaves, and both halves of
+ * a Roon-duplicated pair answer for themselves.
+ *
+ * WHY THERE IS NO `track` FIELD HERE, DELIBERATELY. The page variant carries an
+ * index-and-title selector because it has to find the track again inside a list
+ * it re-read. A reference names the track directly, so a selector alongside it
+ * would be a second and weaker way of saying the same thing — and the only way
+ * the two could ever disagree. The reference is the whole of the identity.
+ */
+export interface AlbumActionReferenceBeginRequest
+  extends AlbumActionBeginCommon {
+  ref: LibraryRowReference;
+}
+
+export type AlbumActionBeginRequest =
+  | AlbumActionPageBeginRequest
+  | AlbumActionReferenceBeginRequest;
+
+/** Which of the two shapes a normalized begin request is. */
+export function isAlbumActionReferenceRequest(
+  request: AlbumActionBeginRequest
+): request is AlbumActionReferenceBeginRequest {
+  return "ref" in request;
 }
 
 export interface AlbumActionBeginAcceptedData {
@@ -222,6 +260,14 @@ const ALBUM_ACTION_BEGIN_KEYS = [
   "generation",
 ] as const;
 
+const ALBUM_ACTION_REFERENCE_BEGIN_KEYS = [
+  "requestId",
+  "ref",
+  "zoneId",
+  "tabId",
+  "generation",
+] as const;
+
 export function normalizeAlbumActionTrackSelector(
   value: unknown
 ): AlbumActionTrackSelector | null {
@@ -246,6 +292,30 @@ export function normalizeAlbumActionBeginRequest(
   try {
     const record = plainDataRecord(value);
     if (!record) return null;
+    // The two shapes are told apart by their exact key sets rather than by a
+    // discriminator field, the same way every other request in this file is
+    // read: a body that is neither is refused whole, and a body carrying both
+    // addressings is not "mostly one of them", it is a request nobody can
+    // reason about.
+    if (hasExactKeys(record, [...ALBUM_ACTION_REFERENCE_BEGIN_KEYS])) {
+      const ref = normalizeLibraryRowReference(record.ref);
+      if (
+        ref === null ||
+        !isOpaqueId(record.requestId) ||
+        !isOpaqueId(record.zoneId) ||
+        !isOpaqueId(record.tabId) ||
+        !isGeneration(record.generation)
+      ) {
+        return null;
+      }
+      return {
+        requestId: record.requestId,
+        ref,
+        zoneId: record.zoneId,
+        tabId: record.tabId,
+        generation: record.generation,
+      };
+    }
     const withTrack = hasExactKeys(record, [...ALBUM_ACTION_BEGIN_KEYS, "track"]);
     if (
       (!withTrack && !hasExactKeys(record, [...ALBUM_ACTION_BEGIN_KEYS])) ||
@@ -258,7 +328,7 @@ export function normalizeAlbumActionBeginRequest(
     ) {
       return null;
     }
-    const request: AlbumActionBeginRequest = {
+    const request: AlbumActionPageBeginRequest = {
       requestId: record.requestId,
       pageId: record.pageId,
       versionId: record.versionId,

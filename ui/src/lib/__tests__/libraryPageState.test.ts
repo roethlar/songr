@@ -14,6 +14,29 @@ import {
 	type BrowseHistorySnapshot,
 	type UnifiedLibrarySnapshot
 } from '$lib/libraryPageState';
+import { COLLECTION_DRILL_SOURCE_CONTRACT } from '@shared/collectionDrillContracts';
+
+const COLLECTION_LOCATOR = {
+	sourceContract: COLLECTION_DRILL_SOURCE_CONTRACT,
+	hierarchy: 'genres' as const,
+	collectionExactName: 'Bright Machinery',
+	rendering: { exactTitle: 'Harbour Lantern', exactCredit: 'The Paper Fleet' }
+};
+
+/** A live address whose last step names an album page. */
+const LIVE_ALBUM_PATH = {
+	origin: 'artists' as const,
+	steps: [
+		{ kind: 'artist' as const, title: 'The Paper Fleet' },
+		{ kind: 'album' as const, title: 'Harbour Lantern', credit: 'The Paper Fleet' }
+	]
+};
+
+/** A live address whose last step names an artist page, not an album. */
+const LIVE_ARTIST_PATH = {
+	origin: 'artists' as const,
+	steps: [{ kind: 'artist' as const, title: 'The Paper Fleet' }]
+};
 
 function browseSnapshot(): BrowseHistorySnapshot {
 	return {
@@ -28,11 +51,20 @@ function browseSnapshot(): BrowseHistorySnapshot {
 	};
 }
 
+/**
+ * The shared current-shape snapshot. It carries NO item target on purpose: the
+ * legacy-promotion tests replay this same body under the v5–v8 version tags,
+ * and the only item targets those tiers could carry were the catalog `artist`
+ * and `album` arms, which Slice 4 deleted. `null` is the one item-target value
+ * legal in every tier, so one fixture still serves them all.
+ *
+ * Tests that need an open album page use `albumPageSnapshot()` below.
+ */
 function unifiedSnapshot(): UnifiedLibrarySnapshot {
 	return {
 		scope: 'genres',
 		collectionDrill: { kind: 'genre', label: 'Ambient' },
-		itemTarget: { kind: 'album', localId: 'album-local-9' },
+		itemTarget: null,
 		itemDetail: null,
 		composition: null,
 		itemOriginName: null,
@@ -40,6 +72,19 @@ function unifiedSnapshot(): UnifiedLibrarySnapshot {
 		surpriseSeed: 42,
 		density: 'compact',
 		browseHistory: browseSnapshot()
+	};
+}
+
+/**
+ * An open album page in the current shape. Since Slice 4 the only album page
+ * named by a durable, re-findable identity is one opened from a collection
+ * drill, so the collection locator is what an "album parent context" now is.
+ */
+function albumPageSnapshot(): UnifiedLibrarySnapshot {
+	return {
+		...unifiedSnapshot(),
+		collectionDrill: { kind: 'genre', label: 'Bright Machinery' },
+		itemTarget: { kind: 'collection', locator: COLLECTION_LOCATOR }
 	};
 }
 
@@ -65,7 +110,10 @@ function legacySnapshot(): Record<string, unknown> {
 		scope: 'genres',
 		drill: { kind: 'genre', label: 'Ambient' },
 		filterText: 'brian',
-		openAlbumLocalId: 'album-local-9',
+		// A v5 payload that named a catalog album is now refused outright, so the
+		// promotable v5 body is the one that named none. The refusal itself is
+		// asserted in 'refuses a v5 catalog drill or open album…' below.
+		openAlbumLocalId: null,
 		surpriseSeed: 42,
 		density: 'compact',
 		browseHistory: browseSnapshot()
@@ -121,7 +169,9 @@ describe('Unified Browse history page state', () => {
 
 describe('Unified Library page state', () => {
 	it('normalizes the exact semantic shape into a defensive copy', () => {
-		const source = unifiedSnapshot();
+		// An open album page, so the item-target copy assertion below has a
+		// non-null object to bite on.
+		const source = albumPageSnapshot();
 		const state = buildUnifiedLibraryPageState(source);
 
 		expect(state).toEqual({
@@ -135,9 +185,9 @@ describe('Unified Library page state', () => {
 		expect(state.snapshot.browseHistory).not.toBe(source.browseHistory);
 	});
 
-	it('normalizes v5 drills forward: item targets split from collection drills', () => {
-		// A genre drill with an open album normalizes into BOTH v6 fields, so
-		// restoring the album entry restores its parent context with it.
+	it('normalizes v5 drills forward: collection drills survive the split', () => {
+		// The v5 single `drill` union splits into the v6 pair; a genre drill
+		// lands in `collectionDrill` and leaves `itemTarget` empty.
 		expect(
 			normalizeLibraryPageState({
 				libraryView: 'unified',
@@ -150,22 +200,6 @@ describe('Unified Library page state', () => {
 			snapshot: unifiedSnapshot()
 		});
 
-		for (const kind of ['artist', 'album'] as const) {
-			expect(
-				normalizeLibraryPageState({
-					libraryView: 'unified',
-					schemaVersion: 5,
-					snapshot: {
-						...legacySnapshot(),
-						drill: { kind, localId: 'local-1' },
-						openAlbumLocalId: null
-					}
-				})?.snapshot
-			).toMatchObject({
-				collectionDrill: null,
-				itemTarget: { kind, localId: 'local-1' }
-			});
-		}
 		expect(
 			normalizeLibraryPageState({
 				libraryView: 'unified',
@@ -180,6 +214,35 @@ describe('Unified Library page state', () => {
 			collectionDrill: { kind: 'composer', label: 'Philip Glass' },
 			itemTarget: null
 		});
+	});
+
+	it('refuses a v5 catalog drill or open album, which name nothing that exists', () => {
+		// v5's artist and album drill arms, and its `openAlbumLocalId`, all named
+		// a saved catalog record by controller-minted local id. The catalog is
+		// gone, so there is nothing such an id could resolve to. These are
+		// REFUSED rather than migrated: the caller then restores the scope the
+		// state belonged to, which beats opening a page for a record that is not
+		// there.
+		for (const kind of ['artist', 'album'] as const) {
+			expect(
+				normalizeLibraryPageState({
+					libraryView: 'unified',
+					schemaVersion: 5,
+					snapshot: {
+						...legacySnapshot(),
+						drill: { kind, localId: 'local-1' },
+						openAlbumLocalId: null
+					}
+				})
+			).toBeNull();
+		}
+		expect(
+			normalizeLibraryPageState({
+				libraryView: 'unified',
+				schemaVersion: 5,
+				snapshot: { ...legacySnapshot(), openAlbumLocalId: 'album-local-9' }
+			})
+		).toBeNull();
 	});
 
 	it('promotes v6 state with no child or composition surface (Slice 8)', () => {
@@ -226,8 +289,72 @@ describe('Unified Library page state', () => {
 		).toBeNull();
 	});
 
+	it('promotes v8 state, which could not carry a collection item target', () => {
+		expect(
+			normalizeLibraryPageState({
+				libraryView: 'unified',
+				schemaVersion: 8,
+				snapshot: unifiedSnapshot()
+			})
+		).toEqual({
+			libraryView: 'unified',
+			schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+			snapshot: unifiedSnapshot()
+		});
+		// A v8 payload carrying a v9 item target is not v8: it was written by
+		// something that did not know the rules of the version it claims, and
+		// restoring it would be restoring a guess.
+		expect(
+			normalizeLibraryPageState({
+				libraryView: 'unified',
+				schemaVersion: 8,
+				snapshot: {
+					...unifiedSnapshot(),
+					itemTarget: { kind: 'collection', locator: COLLECTION_LOCATOR }
+				}
+			})
+		).toBeNull();
+	});
+
+	it('restores an album opened from a genre drill by its own locator (Slice 8d)', () => {
+		const snapshot = {
+			...unifiedSnapshot(),
+			collectionDrill: { kind: 'genre' as const, label: 'Bright Machinery' },
+			itemTarget: { kind: 'collection' as const, locator: COLLECTION_LOCATOR }
+		};
+		const restored = normalizeLibraryPageState({
+			libraryView: 'unified',
+			schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+			snapshot
+		});
+		expect(restored?.snapshot.itemTarget).toEqual({
+			kind: 'collection',
+			locator: COLLECTION_LOCATOR
+		});
+	});
+
+	it('refuses a collection item target whose locator does not hold up', () => {
+		for (const locator of [
+			{ ...COLLECTION_LOCATOR, hierarchy: 'albums' },
+			{ ...COLLECTION_LOCATOR, collectionExactName: '' },
+			{ ...COLLECTION_LOCATOR, rendering: { exactTitle: '' , exactCredit: '' } },
+			{ ...COLLECTION_LOCATOR, extra: true }
+		]) {
+			expect(
+				normalizeLibraryPageState({
+					libraryView: 'unified',
+					schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+					snapshot: {
+						...unifiedSnapshot(),
+						itemTarget: { kind: 'collection', locator }
+					}
+				})
+			).toBeNull();
+		}
+	});
+
 	it('binds the item origin name to its album parent context (issue #6)', () => {
-		const albumContext = { ...unifiedSnapshot(), itemOriginName: 'Brian Eno' };
+		const albumContext = { ...albumPageSnapshot(), itemOriginName: 'Brian Eno' };
 		expect(
 			normalizeLibraryPageState({
 				libraryView: 'unified',
@@ -235,9 +362,16 @@ describe('Unified Library page state', () => {
 				snapshot: albumContext
 			})?.snapshot.itemOriginName
 		).toBe('Brian Eno');
-		// No album parent → the origin label is not a reconstructible back
-		// target: reject.
-		for (const itemTarget of [null, { kind: 'artist', localId: 'a-1' }]) {
+		// No collection-opened album parent → the origin label is not a
+		// reconstructible back target: reject. A live album page is rejected too:
+		// the rule is `collection` strictly, because the origin label describes
+		// the drill a row was reached through, and a live path already carries
+		// its own route back in its steps.
+		for (const itemTarget of [
+			null,
+			{ kind: 'live', path: LIVE_ALBUM_PATH },
+			{ kind: 'live', path: LIVE_ARTIST_PATH }
+		]) {
 			expect(
 				normalizeLibraryPageState({
 					libraryView: 'unified',
@@ -246,7 +380,8 @@ describe('Unified Library page state', () => {
 				})
 			).toBeNull();
 		}
-		// Bounds and shape are strict.
+		// Bounds and shape are strict. Built over the album-page snapshot, so a
+		// rejection here is the origin name's own doing and not a missing parent.
 		for (const itemOriginName of [
 			'',
 			'x'.repeat(UNIFIED_ITEM_ORIGIN_NAME_MAX_LENGTH + 1),
@@ -257,28 +392,28 @@ describe('Unified Library page state', () => {
 				normalizeLibraryPageState({
 					libraryView: 'unified',
 					schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
-					snapshot: { ...unifiedSnapshot(), itemOriginName }
+					snapshot: { ...albumPageSnapshot(), itemOriginName }
 				})
 			).toBeNull();
 		}
 	});
 
 	it('accepts an origin name longer than the generic label cap (gh6-1)', () => {
-		// The catalog display-text domain (512) exceeds the generic label cap
-		// (256); a name in between must survive a persisted round-trip.
+		// The display-text domain (512) exceeds the generic label cap (256); a
+		// name in between must survive a persisted round-trip.
 		const longName = 'x'.repeat(UNIFIED_LABEL_MAX_LENGTH + 1);
 		const restored = normalizeLibraryPageState({
 			libraryView: 'unified',
 			schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
-			snapshot: { ...unifiedSnapshot(), itemOriginName: longName }
+			snapshot: { ...albumPageSnapshot(), itemOriginName: longName }
 		});
 		expect(restored?.snapshot.itemOriginName).toBe(longName);
 	});
 
 	it('binds the exact-track child to its album parent context (Slice 8)', () => {
 		const withTrack = {
-			...unifiedSnapshot(),
-			itemDetail: { kind: 'track', trackIndex: 3 }
+			...albumPageSnapshot(),
+			itemDetail: { kind: 'track', title: 'Third movement' }
 		};
 		expect(
 			normalizeLibraryPageState({
@@ -286,9 +421,24 @@ describe('Unified Library page state', () => {
 				schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
 				snapshot: withTrack
 			})?.snapshot.itemDetail
-		).toEqual({ kind: 'track', trackIndex: 3 });
-		// No album parent → the child is not reconstructible: reject.
-		for (const itemTarget of [null, { kind: 'artist', localId: 'a-1' }]) {
+		).toEqual({ kind: 'track', title: 'Third movement' });
+		// A live album page is the other album parent a track child may hang from.
+		expect(
+			normalizeLibraryPageState({
+				libraryView: 'unified',
+				schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+				snapshot: {
+					...unifiedSnapshot(),
+					collectionDrill: null,
+					itemTarget: { kind: 'live', path: LIVE_ALBUM_PATH },
+					itemDetail: { kind: 'track', title: 'Third movement' }
+				}
+			})?.snapshot.itemDetail
+		).toEqual({ kind: 'track', title: 'Third movement' });
+		// No album parent → the child is not reconstructible: reject. A live
+		// path ending on an ARTIST page is not an album parent either, however
+		// live it is.
+		for (const itemTarget of [null, { kind: 'live', path: LIVE_ARTIST_PATH }]) {
 			expect(
 				normalizeLibraryPageState({
 					libraryView: 'unified',
@@ -299,17 +449,18 @@ describe('Unified Library page state', () => {
 		}
 		// Bounds and shape are strict.
 		for (const itemDetail of [
-			{ kind: 'track', trackIndex: -1 },
-			{ kind: 'track', trackIndex: 500 },
-			{ kind: 'track', trackIndex: 1.5 },
-			{ kind: 'track', trackIndex: 1, extra: true },
-			{ kind: 'follow', trackIndex: 1 }
+			{ kind: 'track', title: '' },
+			{ kind: 'track', title: 'x'.repeat(1_025) },
+			{ kind: 'track', title: 1 },
+			{ kind: 'track', title: 'Track', extra: true },
+			{ kind: 'follow', title: 'Track' }
 		]) {
 			expect(
 				normalizeLibraryPageState({
 					libraryView: 'unified',
 					schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
-					snapshot: { ...unifiedSnapshot(), itemDetail }
+					// Album-page parent, so each rejection is the child's own doing.
+					snapshot: { ...albumPageSnapshot(), itemDetail }
 				})
 			).toBeNull();
 		}
@@ -378,16 +529,7 @@ describe('Unified Library page state', () => {
 		expect(buildUnifiedRootPageState('favorites').snapshot.scope).toBe('favorites');
 	});
 
-	it('restores item targets by localId and collection drills by label', () => {
-		for (const kind of ['artist', 'album'] as const) {
-			const state = buildUnifiedLibraryPageState({
-				...unifiedSnapshot(),
-				scope: kind === 'artist' ? 'artists' : 'albums',
-				collectionDrill: null,
-				itemTarget: { kind, localId: 'local-1' }
-			});
-			expect(normalizeLibraryPageState(state)).toEqual(state);
-		}
+	it('restores collection drills by label', () => {
 		for (const kind of ['genre', 'composer'] as const) {
 			const state = buildUnifiedLibraryPageState({
 				...unifiedSnapshot(),
@@ -474,5 +616,78 @@ describe('Unified Library page state', () => {
 			}
 		});
 		expect(normalizeLibraryPageStateEnvelope(hostile)).toBeNull();
+	});
+});
+
+describe('the live view arm (library-live-view Slice 2, v10)', () => {
+	const livePath = {
+		origin: 'artists' as const,
+		steps: [
+			{ kind: 'artist' as const, title: '’Til Tuesday' },
+			{ kind: 'album' as const, title: 'Voices Carry', credit: '’Til Tuesday' }
+		]
+	};
+
+	function unified(itemTarget: unknown) {
+		return {
+			libraryView: 'unified',
+			schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
+			snapshot: { ...unifiedSnapshot(), collectionDrill: null, itemTarget }
+		};
+	}
+
+	it('carries a page address made of renderings, and hands it back unchanged', () => {
+		const restored = normalizeLibraryPageState(unified({ kind: 'live', path: livePath }));
+		expect(restored?.snapshot.itemTarget).toEqual({ kind: 'live', path: livePath });
+	});
+
+	it('refuses an address carrying anything but renderings', () => {
+		// A reference is worth one generation; page state outlives generations.
+		// One written down here would be a dead handle calling itself an address.
+		expect(
+			normalizeLibraryPageState(
+				unified({ kind: 'live', path: livePath, ref: { generation: 'g', token: 't' } })
+			)
+		).toBeNull();
+	});
+
+	it('refuses an address with no steps, an empty title, or an unknown origin', () => {
+		expect(
+			normalizeLibraryPageState(unified({ kind: 'live', path: { origin: 'artists', steps: [] } }))
+		).toBeNull();
+		expect(
+			normalizeLibraryPageState(
+				unified({ kind: 'live', path: { origin: 'artists', steps: [{ kind: 'artist', title: '' }] } })
+			)
+		).toBeNull();
+		expect(
+			normalizeLibraryPageState(
+				unified({
+					kind: 'live',
+					path: { origin: 'playlists', steps: [{ kind: 'artist', title: 'X' }] }
+				})
+			)
+		).toBeNull();
+	});
+
+	it('keeps an empty credit, which is a real thing for Roon to have rendered', () => {
+		const path = { origin: 'albums' as const, steps: [{ kind: 'album' as const, title: 'Untitled', credit: '' }] };
+		const restored = normalizeLibraryPageState(unified({ kind: 'live', path }));
+		expect(restored?.snapshot.itemTarget).toEqual({ kind: 'live', path });
+	});
+
+	it('refuses a live address in a v9 state, which could never have written one', () => {
+		const v9 = { ...unified({ kind: 'live', path: livePath }), schemaVersion: 9 };
+		expect(normalizeLibraryPageState(v9)).toBeNull();
+	});
+
+	it('normalizes a v9 state without a live address forward unchanged', () => {
+		// v9's own item target was the collection locator, which survives; a v9
+		// state carrying one still promotes to the current version untouched.
+		const target = { kind: 'collection', locator: COLLECTION_LOCATOR };
+		const v9 = { ...unified(target), schemaVersion: 9 };
+		const restored = normalizeLibraryPageState(v9);
+		expect(restored?.schemaVersion).toBe(UNIFIED_LIBRARY_PAGE_STATE_VERSION);
+		expect(restored?.snapshot.itemTarget).toEqual(target);
 	});
 });

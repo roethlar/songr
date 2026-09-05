@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { LetterBucket, LibraryAlbumEntry, LibraryArtistEntry } from '$lib/stores/libraryIndexStore';
+import type { LetterBucket, LibraryAlbumEntry, LibraryArtistEntry } from '$lib/libraryEntries';
 import {
 	albumSortMenu,
 	artistDrillSortMenu,
@@ -22,8 +22,7 @@ function artist(name: string, albumCount: number): LibraryArtistEntry {
 		id: `artist:${name}`,
 		name,
 		searchKey: name.toLowerCase(),
-		albumCount,
-		countComplete: true
+		albumCount
 	};
 }
 
@@ -80,35 +79,23 @@ describe('sort menus', () => {
 		expect(menu.every((entry) => entry.id !== 'release-year')).toBe(true);
 	});
 
-	it('mirrors the same availability rule into the artist drill menu', () => {
-		const disabled = artistDrillSortMenu({ available: false });
-		expect(disabled.map((entry) => entry.id)).toEqual(['az', 'za', 'shuffle', 'release-year']);
-		expect(disabled.at(-1)?.disabledReason).toBe(NO_RELEASE_DATES_REASON);
-		const enabled = artistDrillSortMenu({ available: true });
-		expect(enabled.map((entry) => entry.id)).toEqual([
-			'az',
-			'za',
-			'shuffle',
-			'year-asc',
-			'year-desc'
-		]);
-		expect(enabled.every((entry) => entry.disabledReason === undefined)).toBe(true);
+	/**
+	 * Slice 8d: both drill menus lost the release-year slot outright, at every
+	 * gate setting. Their cards carry no date — the artist page renders the
+	 * walk's stored answer and the genre page a live drill — so an entry there
+	 * offered an ordering neither surface could perform. Not disabled, gone: a
+	 * disabled entry says "not right now", and this is not about timing.
+	 */
+	it('offers the artist drill no release-year order at all', () => {
+		expect(artistDrillSortMenu().map((entry) => entry.id)).toEqual(['az', 'za', 'shuffle']);
 	});
 
-	it('keeps the genre drill menu exactly as before when date features are unavailable', () => {
-		expect(genreDrillSortMenu({ available: false }).map((entry) => entry.id)).toEqual([
+	it('offers the genre drill no release-year order at all', () => {
+		expect(genreDrillSortMenu().map((entry) => entry.id)).toEqual([
 			'az',
 			'za',
 			'by-artist',
 			'shuffle'
-		]);
-		expect(genreDrillSortMenu({ available: true }).map((entry) => entry.id)).toEqual([
-			'az',
-			'za',
-			'by-artist',
-			'shuffle',
-			'year-asc',
-			'year-desc'
 		]);
 	});
 

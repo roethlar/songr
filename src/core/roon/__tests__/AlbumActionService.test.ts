@@ -1,9 +1,9 @@
 import { Logger } from "pino";
 
-import { createCatalogTrackTitleFingerprint } from "../../catalog/CatalogReconciliation";
 import {
   AlbumActionCoordinatorPort,
   AlbumActionEventSink,
+  AlbumActionLibraryPort,
   AlbumActionOrigin,
   AlbumActionPageAuthority,
   AlbumActionPagePort,
@@ -12,9 +12,10 @@ import {
 } from "../AlbumActionService";
 import {
   AlbumActionBrowseHierarchy,
+  AlbumActionCollectionSource,
+  AlbumActionReferenceSource,
   AlbumActionResolutionError,
   AlbumActionResolverPort,
-  AlbumActionVersionSource,
   ResolvedAlbumActions,
 } from "../AlbumActionResolver";
 import {
@@ -22,14 +23,18 @@ import {
   ActionSessionHandle,
   BrowseSessionCoordinatorError,
   CoordinatedBrowseSession,
+  LibraryActionAnchor,
 } from "../BrowseSessionCoordinator";
+import type { LibraryActionSubject } from "../../library/LibrarySource";
+import type { LibraryRowReference } from "../../../shared/libraryRootsContracts";
 import { RoonTimeoutError } from "../errors";
 import {
   AlbumActionBeginRequest,
   AlbumActionFailedEvent,
+  AlbumActionReferenceBeginRequest,
   AlbumActionResolvedEvent,
 } from "../../../shared/albumActionContracts";
-import { AlbumRef, ArtistRef } from "../../../shared/catalogContracts";
+import { COLLECTION_DRILL_SOURCE_CONTRACT } from "../../../shared/collectionDrillContracts";
 import { BrowseOptions, BrowseResult, Zone } from "../../../shared/types";
 
 interface Deferred<T> {
@@ -56,37 +61,6 @@ async function flush(): Promise<void> {
 
 function browseResult(): BrowseResult {
   return { level: 0, offset: 0, count: 0, items: [] };
-}
-
-function album(patch: Partial<AlbumRef> = {}): AlbumRef {
-  const tracks = ["1. First", "2. Second"];
-  return {
-    localId: "018f0f64-3f31-7a9b-8c2d-8f572cb18a12",
-    coreId: "core-1",
-    artistLocalId: "018f0f64-3f31-7a9b-8c2d-8f572cb18a13",
-    exactTitle: "Album",
-    exactArtist: "Artist",
-    normalizedTitle: "album",
-    normalizedArtist: "artist",
-    editionText: "",
-    trackTitleFingerprint: createCatalogTrackTitleFingerprint(tracks),
-    firstSeenAt: "2026-07-14T00:00:00.000Z",
-    lastSeenAt: "2026-07-14T00:00:00.000Z",
-    resolutionStatus: "resolved",
-    ...patch,
-  } as AlbumRef;
-}
-
-function artist(): ArtistRef {
-  return {
-    localId: "018f0f64-3f31-7a9b-8c2d-8f572cb18a13",
-    coreId: "core-1",
-    exactName: "Artist",
-    normalizedName: "artist",
-    firstSeenAt: "2026-07-14T00:00:00.000Z",
-    lastSeenAt: "2026-07-14T00:00:00.000Z",
-    resolutionStatus: "resolved",
-  };
 }
 
 function zone(outputIds = ["output-a"]): Zone {
@@ -146,12 +120,23 @@ function request(patch: Partial<AlbumActionBeginRequest> = {}): AlbumActionBegin
   };
 }
 
-function versionSource(): AlbumActionVersionSource {
+/**
+ * The one page source an action lease can still be granted to: a locator that
+ * re-walks its own drill, and the digest of the track list the page published.
+ * Nothing here names a stored record, because there is no stored record.
+ */
+function collectionSource(): AlbumActionCollectionSource {
   return {
-    album: album(),
-    artist: artist(),
+    locator: {
+      sourceContract: COLLECTION_DRILL_SOURCE_CONTRACT,
+      hierarchy: "genres",
+      collectionExactName: "Bright Machinery",
+      rendering: {
+        exactTitle: "Harbour Lantern",
+        exactCredit: "The Paper Fleet",
+      },
+    },
     detailDigest: "detail-digest",
-    versionCount: 2,
   };
 }
 
@@ -168,8 +153,11 @@ class FakePages implements AlbumActionPagePort {
     tabId: "tab-1",
     generation: 7,
     albumSignature: "album-signature",
-    retainedItemKey: "retained-version-row",
-    source: versionSource(),
+    // A collection page holds no live key: the session that resolved its row
+    // was released when the read finished, so the lease carries the locator
+    // and the real page issues an empty string here.
+    retainedItemKey: "",
+    source: { kind: "collection" as const, source: collectionSource() },
   };
 
   public claimSelectedVersionAction(
@@ -222,6 +210,19 @@ class FakeCoordinator implements AlbumActionCoordinatorPort {
       multiSessionKey?: never;
     };
   }> = [];
+  public libraryRunCalls: Array<{
+    access: ActionSessionAccess;
+    anchor: LibraryActionAnchor;
+  }> = [];
+  public libraryExecuteCalls: Array<{
+    access: ActionSessionAccess;
+    anchor: LibraryActionAnchor;
+    options: Omit<BrowseOptions, "multiSessionKey"> & {
+      multiSessionKey?: never;
+    };
+  }> = [];
+  public libraryRunError?: Error;
+  public libraryExecuteError?: Error;
   public releaseCalls = 0;
   public quarantineCalls = 0;
   public acquireError?: Error;
@@ -262,6 +263,22 @@ class FakeCoordinator implements AlbumActionCoordinatorPort {
     return work(session);
   }
 
+  public runLibraryAction<T>(
+    access: ActionSessionAccess,
+    anchor: LibraryActionAnchor,
+    work: (session: CoordinatedBrowseSession) => Promise<T>
+  ): Promise<T> {
+    this.libraryRunCalls.push({ access, anchor });
+    if (this.libraryRunError) return Promise.reject(this.libraryRunError);
+    const session: CoordinatedBrowseSession = {
+      sessionScope: anchor.sessionScope,
+      browse: () => this.browseImpl(),
+      load: () => this.browseImpl(),
+      pop: () => this.browseImpl(),
+    };
+    return work(session);
+  }
+
   public claimActionExecute(access: ActionSessionAccess): boolean {
     this.claimCalls += 1;
     this.claimAccesses.push(access);
@@ -287,6 +304,22 @@ class FakeCoordinator implements AlbumActionCoordinatorPort {
     return Promise.resolve(browseResult());
   }
 
+  public executeLibraryAction(
+    access: ActionSessionAccess,
+    anchor: LibraryActionAnchor,
+    options: Omit<BrowseOptions, "multiSessionKey"> & {
+      multiSessionKey?: never;
+    },
+    onIssued: () => void
+  ): Promise<BrowseResult> {
+    this.libraryExecuteCalls.push({ access, anchor, options });
+    if (this.libraryExecuteError) {
+      return Promise.reject(this.libraryExecuteError);
+    }
+    onIssued();
+    return Promise.resolve(browseResult());
+  }
+
   public releaseAction(): Promise<void> {
     this.releaseCalls += 1;
     if (this.releaseError) return Promise.reject(this.releaseError);
@@ -298,17 +331,68 @@ class FakeCoordinator implements AlbumActionCoordinatorPort {
   }
 }
 
+/**
+ * The live library, as the action service sees it.
+ *
+ * `retired` is what a re-read of the roots does to every outstanding reference
+ * at once: `resolveActionSubject` starts refusing, and a subject resolved
+ * before the re-read stops being current. Both are separate switches here
+ * because the two matter at different moments — one at begin, one between the
+ * claim and the dispatch.
+ */
+class FakeLibrary implements AlbumActionLibraryPort {
+  public retired = false;
+  public resolveCalls: LibraryRowReference[] = [];
+  public currentChecks = 0;
+  public hierarchy: LibraryActionSubject["hierarchy"] = "albums";
+  public readonly anchor: LibraryActionAnchor = {
+    sessionScope: "catalog-session-1",
+    authorityGeneration: 4,
+  };
+
+  public resolveActionSubject(
+    ref: Readonly<LibraryRowReference>
+  ): Readonly<LibraryActionSubject> {
+    this.resolveCalls.push({ ...ref });
+    if (this.retired) {
+      throw new BrowseSessionCoordinatorError(
+        "STALE_GENERATION",
+        "The library snapshot that published this reference has been retired"
+      );
+    }
+    return Object.freeze({
+      anchor: this.anchor,
+      generation: ref.generation,
+      hierarchy: this.hierarchy,
+      itemKey: `roon-key-for-${ref.token}`,
+      title: "3 Feet High and Rising",
+      kind: "action" as const,
+    });
+  }
+
+  public isActionSubjectCurrent(): boolean {
+    this.currentChecks += 1;
+    return !this.retired;
+  }
+}
+
 describe("AlbumActionService", () => {
   let coordinator: FakeCoordinator;
   let pages: FakePages;
+  let library: FakeLibrary;
+  let referenceCalls: Array<{
+    source: Readonly<AlbumActionReferenceSource>;
+    zoneId: string;
+    sessionScope: string;
+  }>;
   let currentZone: Zone | undefined;
   let resolverImpl: (
     session: CoordinatedBrowseSession,
-    source: Readonly<AlbumActionVersionSource>,
+    source: Readonly<AlbumActionCollectionSource>,
     zoneId: string
   ) => Promise<ResolvedAlbumActions>;
   let resolverCalls: Array<{
-    source: Readonly<AlbumActionVersionSource>;
+    source: Readonly<AlbumActionCollectionSource>;
     zoneId: string;
   }>;
   let service: AlbumActionService;
@@ -323,16 +407,23 @@ describe("AlbumActionService", () => {
     jest.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
     coordinator = new FakeCoordinator();
     pages = new FakePages();
+    library = new FakeLibrary();
     currentZone = zone();
     resolverCalls = [];
+    referenceCalls = [];
     resolverImpl = () => Promise.resolve(resolvedActions());
     const resolver: AlbumActionResolverPort = {
-      resolve: () => {
-        throw new Error("Legacy catalog resolution must not be used");
-      },
-      resolveSelectedVersion: (session, source, zoneId) => {
+      resolveCollectionVersion: (session, source, zoneId) => {
         resolverCalls.push({ source, zoneId });
         return resolverImpl(session, source, zoneId);
+      },
+      resolveReference: (session, source, zoneId) => {
+        referenceCalls.push({
+          source,
+          zoneId,
+          sessionScope: session.sessionScope,
+        });
+        return Promise.resolve(resolvedActions(source.hierarchy));
       },
     };
     const zones: AlbumActionZonePort = { getZone: () => currentZone };
@@ -354,6 +445,7 @@ describe("AlbumActionService", () => {
         debug: jest.fn(),
         error: loggerError,
       } as unknown as Logger,
+      library,
       {
         resolvingTtlMs: 1_000,
         choosingTtlMs: 1_000,
@@ -431,7 +523,11 @@ describe("AlbumActionService", () => {
 
   it("rejects invalid, missing-zone, conflicting, and backpressured begins without extra leases", () => {
     const invalid = service.begin(origin, { bad: true }, sink);
-    expect(invalid.ack).toMatchObject({ success: false, code: "INVALID_REQUEST" });
+    expect(invalid.ack).toEqual({
+      success: false,
+      code: "INVALID_REQUEST",
+      error: "Invalid album action request",
+    });
     expect(coordinator.acquireCalls).toBe(0);
 
     currentZone = undefined;
@@ -465,6 +561,28 @@ describe("AlbumActionService", () => {
     expect(resolvedEvents).toHaveLength(0);
     expect(failedEvents).toHaveLength(0);
   });
+
+  it.each(["STALE_GENERATION", "SESSION_LOST"] as const)(
+    "reports %s mode authority as a lost session",
+    (code) => {
+      coordinator.acquireError = new BrowseSessionCoordinatorError(
+        code,
+        "retired"
+      );
+
+      const reservation = service.begin(origin, request(), sink);
+
+      expect(reservation.ack).toEqual({
+        success: false,
+        code: "SESSION_LOST",
+        error: "The browse session is no longer current",
+      });
+      expect(reservation.start).toBeUndefined();
+      expect(coordinator.acquireCalls).toBe(1);
+      expect(resolvedEvents).toHaveLength(0);
+      expect(failedEvents).toHaveLength(0);
+    }
+  );
 
   it("retains a bounded request tombstone after cancellation", () => {
     const accepted = service.begin(origin, request(), sink);
@@ -1049,5 +1167,153 @@ describe("AlbumActionService", () => {
     await expect(
       service.execute(origin, { actionId: choosingEvent.actions[0].actionId })
     ).resolves.toEqual({ success: true, data: { claimed: false } });
+  });
+
+  // `.agents/plans/library-live-view.md` Slice 2. A live album page acts on the
+  // row Roon rendered, so the request carries a reference instead of a page and
+  // a version — and the whole of the two-phase machine still applies to it.
+  describe("live library references", () => {
+    function referenceRequest(
+      patch: Partial<AlbumActionReferenceBeginRequest> = {}
+    ): AlbumActionBeginRequest {
+      return {
+        requestId: "request-1",
+        ref: { generation: "gen-live-1", token: "token-play-album" },
+        zoneId: "zone-1",
+        tabId: "tab-1",
+        generation: 7,
+        ...patch,
+      };
+    }
+
+    it("resolves on the library channel the reference was published on", async () => {
+      const event = await resolveRequest(referenceRequest());
+
+      // The page port is never consulted: there is no page.
+      expect(pages.claimCalls).toBe(0);
+      expect(coordinator.runCalls).toBe(0);
+      expect(coordinator.libraryRunCalls).toHaveLength(1);
+      expect(coordinator.libraryRunCalls[0].anchor).toEqual({
+        sessionScope: "catalog-session-1",
+        authorityGeneration: 4,
+      });
+      expect(referenceCalls).toEqual([
+        {
+          source: {
+            itemKey: "roon-key-for-token-play-album",
+            hierarchy: "albums",
+            title: "3 Feet High and Rising",
+          },
+          zoneId: "zone-1",
+          sessionScope: "catalog-session-1",
+        },
+      ]);
+      // Nothing keyed reaches the reader, exactly as on the page path.
+      expect(JSON.stringify(event)).not.toContain("roon-key-for");
+    });
+
+    it("dispatches execution back onto the same anchored library channel", async () => {
+      const event = await resolveRequest(referenceRequest());
+
+      await expect(
+        service.execute(origin, { actionId: event.actions[0].actionId })
+      ).resolves.toEqual({
+        success: true,
+        data: { claimed: true, outcome: "executed" },
+      });
+
+      // The claim is still taken on the lease, and the dispatch still goes to
+      // the channel that found the leaf — never the action lease's own.
+      expect(coordinator.claimCalls).toBe(1);
+      expect(coordinator.executeCalls).toHaveLength(0);
+      expect(coordinator.libraryExecuteCalls).toHaveLength(1);
+      expect(coordinator.libraryExecuteCalls[0].anchor).toEqual({
+        sessionScope: "catalog-session-1",
+        authorityGeneration: 4,
+      });
+      expect(coordinator.libraryExecuteCalls[0].options).toEqual({
+        hierarchy: "albums",
+        zoneId: "zone-1",
+        itemKey: "raw-play",
+      });
+    });
+
+    it("refuses a retired reference at begin, and says so", async () => {
+      library.retired = true;
+
+      const reservation = service.begin(origin, referenceRequest(), sink);
+
+      // Reported, never a silent no-op and never somebody else's album.
+      expect(reservation.ack).toEqual({
+        success: false,
+        code: "SESSION_LOST",
+        error: "That row is no longer part of the current library",
+      });
+      expect(reservation.start).toBeUndefined();
+      expect(coordinator.acquireCalls).toBe(0);
+      expect(coordinator.libraryRunCalls).toHaveLength(0);
+    });
+
+    it.each(["STALE_GENERATION", "SESSION_LOST"] as const)(
+      "reports %s library authority during resolution as a lost session",
+      async (code) => {
+        coordinator.libraryRunError = new BrowseSessionCoordinatorError(
+          code,
+          "retired"
+        );
+        const reservation = service.begin(origin, referenceRequest(), sink);
+        expect(reservation.ack.success).toBe(true);
+
+        reservation.start?.();
+        await flush();
+
+        expect(resolvedEvents).toHaveLength(0);
+        expect(failedEvents).toHaveLength(1);
+        expect(failedEvents[0]).toMatchObject({
+          code: "SESSION_LOST",
+          error: "The album action session was lost",
+        });
+        expect(coordinator.quarantineCalls).toBe(1);
+      }
+    );
+
+    it("refuses to execute a reference whose snapshot was retired mid-choice", async () => {
+      const event = await resolveRequest(referenceRequest());
+      library.retired = true;
+
+      await expect(
+        service.execute(origin, { actionId: event.actions[0].actionId })
+      ).resolves.toEqual({
+        success: true,
+        data: {
+          claimed: true,
+          outcome: "rejected",
+          code: "ALBUM_UNRESOLVED",
+          error: "The selected album version is no longer current",
+        },
+      });
+      // Refused before the claim and before any dispatch: nothing played.
+      expect(coordinator.libraryExecuteCalls).toHaveLength(0);
+      expect(coordinator.claimCalls).toBe(0);
+    });
+
+    it("refuses leaves that surfaced on a hierarchy the reference does not live on", async () => {
+      library.hierarchy = "artists";
+      const resolver = (
+        service as unknown as { resolver: AlbumActionResolverPort }
+      ).resolver;
+      jest
+        .spyOn(resolver, "resolveReference")
+        .mockResolvedValue(resolvedActions("search"));
+
+      const reservation = service.begin(origin, referenceRequest(), sink);
+      reservation.start?.();
+      await flush();
+
+      expect(resolvedEvents).toHaveLength(0);
+      expect(failedEvents[failedEvents.length - 1]).toMatchObject({
+        code: "NO_SUPPORTED_ACTIONS",
+      });
+    });
   });
 });

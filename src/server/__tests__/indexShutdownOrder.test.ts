@@ -25,25 +25,24 @@ function buildContext(options: {
   workspaceDelayTicks?: number;
   workspaceRejects?: boolean;
   listening?: boolean;
+  withBrowseCanary?: boolean;
+  browseCanaryThrows?: boolean;
 }): ShutdownContext {
   const { order } = options;
   return {
     requestShutdown: () => order.push("requestShutdown"),
-    catalogLifecycle: { shutdown: () => order.push("catalog") },
+    ...(options.withBrowseCanary
+      ? {
+          browseCanary: {
+            stop: () => {
+              order.push("canary");
+              if (options.browseCanaryThrows) throw new Error("canary stop failed");
+            },
+          },
+        }
+      : {}),
+    coreLifecycle: { shutdown: () => order.push("core-lifecycle") },
     transportService: { shutdown: () => order.push("transport") },
-    workspaceFeatures: {
-      shutdown: async () => {
-        order.push("workspace:start");
-        for (let tick = 0; tick < (options.workspaceDelayTicks ?? 2); tick += 1) {
-          await Promise.resolve();
-        }
-        if (options.workspaceRejects) {
-          order.push("workspace:reject");
-          throw new Error("cleanup failed");
-        }
-        order.push("workspace:done");
-      },
-    },
     socketContext: {
       io: {
         close: (done?: () => void) => {
@@ -63,7 +62,7 @@ function buildContext(options: {
 }
 
 describe("the shutdown sequence", () => {
-  it("settles workspace cleanup before closing the socket server", async () => {
+  it("closes the socket server before the http server", async () => {
     const order: string[] = [];
     const exit = jest.fn();
     const shutdown = createShutdownHandler({
@@ -71,25 +70,43 @@ describe("the shutdown sequence", () => {
       logger: testLogger(),
       exit,
     });
-    await shutdown("SIGTERM");
-    expect(order.indexOf("workspace:done")).toBeGreaterThan(-1);
-    expect(order.indexOf("workspace:done")).toBeLessThan(order.indexOf("io.close"));
+    shutdown("SIGTERM");
     expect(order.indexOf("io.close")).toBeLessThan(order.indexOf("http.close"));
     expect(exit).toHaveBeenCalledWith(0);
   });
 
-  it("still shuts down when workspace cleanup fails", async () => {
+  it("stops the post-connect load trial's canary before anything else", async () => {
+    const order: string[] = [];
+    const shutdown = createShutdownHandler({
+      context: buildContext({ order, withBrowseCanary: true }),
+      logger: testLogger(),
+      exit: jest.fn(),
+    });
+    shutdown("SIGTERM");
+    // Before the Core-scoped services, because the canary issues browse calls
+    // and a shutting-down process should not put one more question to a Core
+    // it is leaving.
+    expect(order.indexOf("canary")).toBeGreaterThan(-1);
+    expect(order.indexOf("canary")).toBeLessThan(
+      order.indexOf("core-lifecycle")
+    );
+  });
+
+  it("shuts down anyway when stopping the canary fails", async () => {
     const order: string[] = [];
     const exit = jest.fn();
     const logger = testLogger();
     const shutdown = createShutdownHandler({
-      context: buildContext({ order, workspaceRejects: true }),
+      context: buildContext({
+        order,
+        withBrowseCanary: true,
+        browseCanaryThrows: true,
+      }),
       logger,
       exit,
     });
-    await shutdown("SIGTERM");
-    expect(order.indexOf("workspace:reject")).toBeLessThan(order.indexOf("io.close"));
-    expect((logger.warn as jest.Mock).mock.calls.length).toBeGreaterThan(0);
+    shutdown("SIGTERM");
+    expect(order).toContain("http.close");
     expect(exit).toHaveBeenCalledWith(0);
   });
 
@@ -101,9 +118,8 @@ describe("the shutdown sequence", () => {
       logger: testLogger(),
       exit,
     });
-    await shutdown("SIGINT");
+    shutdown("SIGINT");
     expect(order).not.toContain("http.close");
-    expect(order.indexOf("workspace:done")).toBeLessThan(order.indexOf("io.close"));
     expect(exit).toHaveBeenCalledWith(0);
   });
 });

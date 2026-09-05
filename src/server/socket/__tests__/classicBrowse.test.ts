@@ -53,6 +53,7 @@ describe("Classic browse socket adapter", () => {
   let socket: FakeSocket;
   let coordinator: {
     acquireMode: jest.Mock;
+    onModeRetired: jest.Mock;
     releaseMode: jest.Mock;
     runMode: jest.Mock;
     resolveClassicItemKey: jest.Mock;
@@ -60,6 +61,21 @@ describe("Classic browse socket adapter", () => {
   };
   let browseService: { searchCoordinated: jest.Mock };
   let sessionBrowse: jest.Mock;
+  let modeRetiredListener:
+    | ((event: {
+        coreId: string;
+        socketId: string;
+        tabId: string;
+        session: {
+          kind: "mode";
+          mode: "classic";
+          handleId: string;
+          generation: number;
+        };
+        reason: "SESSION_LOST";
+      }) => void)
+    | undefined;
+  let unsubscribeModeRetired: jest.Mock;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -71,7 +87,14 @@ describe("Classic browse socket adapter", () => {
       count: 0,
       items: [],
     });
+    unsubscribeModeRetired = jest.fn(() => {
+      modeRetiredListener = undefined;
+    });
     coordinator = {
+      onModeRetired: jest.fn((listener) => {
+        modeRetiredListener = listener;
+        return unsubscribeModeRetired;
+      }),
       acquireMode: jest.fn(() => ({
         kind: "mode",
         mode: "classic",
@@ -96,6 +119,41 @@ describe("Classic browse socket adapter", () => {
       getCoreId: () => "core-1",
       logger: logger as never,
     });
+  });
+
+  it("emits only this socket's exact unsolicited retirement and tears down once", () => {
+    const event = {
+      coreId: "core-1",
+      socketId: "socket-2",
+      tabId: "tab-1",
+      session: {
+        kind: "mode" as const,
+        mode: "classic" as const,
+        handleId: "handle-1",
+        generation: 1,
+      },
+      reason: "SESSION_LOST" as const,
+    };
+
+    modeRetiredListener?.(event);
+    expect(socket.emitted).toEqual([]);
+
+    modeRetiredListener?.({ ...event, socketId: "socket-1" });
+    expect(socket.emitted).toEqual([
+      [
+        "classic-session:retired",
+        {
+          contract: "classic-session-retired-v1",
+          tabId: "tab-1",
+          session: { handleId: "handle-1", generation: 1 },
+          reason: "SESSION_LOST",
+        },
+      ],
+    ]);
+
+    socket.trigger("disconnect");
+    socket.trigger("disconnect");
+    expect(unsubscribeModeRetired).toHaveBeenCalledTimes(1);
   });
 
   it("acquires a fresh socket/tab-owned Classic generation without exposing its role", () => {

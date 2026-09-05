@@ -8,7 +8,6 @@
  * - Frontend (SvelteKit)
  */
 
-import type { CatalogStatus } from './catalogContracts';
 
 // ========================================
 // Transport Types (A.2 - Claude)
@@ -701,12 +700,10 @@ export interface QueueResponse {
 }
 
 /**
- * /api/health per-subsystem diagnostics. `recently_played` and
- * `favorites` report critical degraded persistence (unreadable/unwritable
- * state files), while `catalog` is a non-critical diagnostic: the Library
- * serves through browse fallback while the catalog is still building.
- * The endpoint answers 503 with this same body when a critical
- * subsystem is degraded, so clients must read the payload on both 200 and 503.
+ * /api/health per-subsystem diagnostics. `recently_played` and `favorites`
+ * report critical degraded persistence (unreadable/unwritable state files).
+ * The endpoint answers 503 with this same body when a critical subsystem is
+ * degraded, so clients must read the payload on both 200 and 503.
  */
 export interface RecentlyPlayedHealth {
   ready: boolean;
@@ -723,13 +720,6 @@ export interface FavoritesHealth {
   entry_count: number;
 }
 
-export interface CatalogHealth {
-  readonly critical: false;
-  readonly ready: boolean;
-  readonly degraded: boolean;
-  readonly status: CatalogStatus;
-}
-
 export interface HealthResponse {
   status: "ok" | "degraded";
   ready: boolean;
@@ -737,7 +727,6 @@ export interface HealthResponse {
   subsystems: {
     recently_played?: RecentlyPlayedHealth;
     favorites?: FavoritesHealth;
-    catalog?: CatalogHealth;
   };
 }
 

@@ -333,9 +333,10 @@ RoonApi.prototype.init_services = function(o) {
 		    if (this.extension_opts.core_paired) this.extension_opts.core_paired(core);
 	    },
 	    lost_core: core => {
-		if (core.core_id == this.paired_core_id)
+		if (core.core_id == this.paired_core_id) {
                     this.is_paired = false;
 		    if (this.extension_opts.core_unpaired) this.extension_opts.core_unpaired(core);
+                }
 	    },
 	};
 	o.provided_services.push(this.pairing_service_1);

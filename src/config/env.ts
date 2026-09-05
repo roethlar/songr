@@ -13,7 +13,38 @@ export interface AppConfig {
   readonly recentlyPlayedPath: string;
   readonly recentlyPlayedCap: number;
   readonly favoritesPath: string;
-  readonly catalogPath: string;
+  /**
+   * Where an earlier install's saved catalog store sits, so it can be removed
+   * at start (`src/server/removeRetiredCatalogStore.ts`). Nothing reads or
+   * writes a library model here any more; the key survives only so an operator
+   * who moved the store with CATALOG_PATH still gets it cleaned up.
+   */
+  readonly retiredCatalogPath: string;
+  /**
+   * Whether the browse canary runs (post-connect load trial, plan
+   * `.agents/plans/core-wedge-postconnect.md` §A0).
+   *
+   * ON unless explicitly switched off. It began as trial instrumentation and
+   * shipped off for that reason — the canary is real traffic against the Core,
+   * one root-level classic-browse request every 30 s, and a default-on probe
+   * would have changed what every install did to its Core, which was the thing
+   * the trial existed to measure. It is now a health authority the mitigations
+   * depend on: it is what pauses a bootstrapping sweep against a Core that is
+   * already wedged, and the only thing that can license a latency baseline.
+   * `ROON_BROWSE_CANARY=0` is the emergency valve.
+   */
+  readonly browseCanaryEnabled: boolean;
+  /**
+   * The baseline p95 browse latency, in milliseconds, the canary's wedge rule
+   * compares against (plan §A3: a slot exceeds at 3× this value).
+   *
+   * Never null: `DEFAULT_BROWSE_CANARY_BASELINE_P95_MS` (500 ms, so the rule
+   * fires at 1.5 s) applies when nothing is configured — see that constant for
+   * why a shipped line is sized to catch a wedge and not to police tens of
+   * milliseconds. Measuring a real value on a quiet, healthy Core is what
+   * catches degradation short of a wedge.
+   */
+  readonly browseCanaryBaselineP95Ms: number;
 }
 
 export type LogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
@@ -37,6 +68,36 @@ const VALID_LOG_LEVELS: LogLevel[] = [
 
 const coerceString = (value: string | undefined): string | undefined =>
   value?.trim() ? value.trim() : undefined;
+
+const FLAG_ON = new Set(["1", "true", "yes", "on"]);
+const FLAG_OFF = new Set(["", "0", "false", "no", "off"]);
+
+/**
+ * The one canonical reading of an on/off environment switch.
+ *
+ * Deliberately NOT "any value at all means on". `SWITCH=0` reads as off in
+ * every shell an operator has ever used, and a switch that turned itself on
+ * for it would silently invert the intent behind a trial run whose whole
+ * purpose is knowing which workloads were active. An unrecognized value is a
+ * configuration error rather than a guess, for the same reason.
+ */
+const parseEnvFlag = (
+  value: string | undefined,
+  name: string,
+  whenUnset = false
+): boolean => {
+  const raw = value?.trim().toLowerCase() ?? "";
+  // Unset is answered by the caller's default rather than by the OFF set.
+  // A kill switch that ships off and a feature that ships on both spell
+  // "nobody configured this" the same way, and only the caller knows which
+  // of the two it is.
+  if (raw === "") return whenUnset;
+  if (FLAG_ON.has(raw)) return true;
+  if (FLAG_OFF.has(raw)) return false;
+  throw new ConfigError(
+    `${name} must be one of: 1, true, yes, on, 0, false, no, off`
+  );
+};
 
 const parseHost = (value: string | undefined): string => {
   const host = coerceString(value) ?? "0.0.0.0";
@@ -103,13 +164,8 @@ const parseBaseDir = (
   return path.resolve(rawPath);
 };
 
-/**
- * The one canonical resolution of `DATA_DIR`. Layers that parse their own
- * configuration (and so cannot take the resolved value from `AppConfig`)
- * call this instead of re-deriving the default, keeping "DATA_DIR relocates
- * the whole footprint" true for every write location.
- */
-export const resolveDataDir = (): string =>
+/** The one canonical resolution of `DATA_DIR`. */
+const resolveDataDir = (): string =>
   parseBaseDir(process.env.DATA_DIR, DEFAULT_DATA_DIR, "DATA_DIR");
 
 const parseTokenPath = (
@@ -182,6 +238,57 @@ const parseRecentlyPlayedCap = (value: string | undefined): number => {
   return parsed;
 };
 
+/**
+ * The healthy-speed reference the canary, the breaker and the sweep governor
+ * all measure against, when the operator has not measured their own.
+ *
+ * WHAT IT IS FOR. Every rule built on it fires at 3x this number, so the
+ * shipped default draws one line: 1.5 s for a single root-level browse. Its
+ * job is to catch a WEDGE — the recorded failure mode is a Core that takes a
+ * request and never answers it, presenting as multi-second stalls and 15 s
+ * budget timeouts — not to police tens of milliseconds.
+ *
+ * WHY 500 AND NOT LESS. The owner's own Core answers this probe at a p95 of
+ * 21 ms, so the default leaves roughly 24x headroom: a Core twenty times
+ * slower than the reference install still reads as healthy. A root-level
+ * browse that takes over a second and a half is not a healthy Core by any
+ * reading, on any LAN.
+ *
+ * WHY 500 AND NOT MORE. The rule has to be able to speak before the 15 s call
+ * budget does, and the observed wedge precursor included a 3.4 s stall. At
+ * 1.5 s both are caught with room to spare.
+ *
+ * THE ASYMMETRY THAT SETTLES IT. Erring high costs only sensitivity: the rule
+ * stays quiet and the breaker falls back to hard signals, which is the
+ * behavior every install had before this default existed. Erring low actively
+ * harms — it sheds background work on a Core that was fine. So the default
+ * sits high enough that the direction it can be wrong in is the harmless one,
+ * and every consumer's false-trip cost is cheap and self-healing anyway (one
+ * exceeding probe pauses a bootstrapping sweep until the next probe 30 s
+ * later; a breaker trip needs three consecutive, and backs off).
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO. Cell-4 protection — refusing to learn a
+ * baseline from a Core that has been degraded since startup — is relative to
+ * that Core's own healthy speed. The A2 precursor sat at 383 ms, well inside
+ * this line. Catching degradation at that grade needs a MEASURED value, which
+ * is what `ROON_BROWSE_CANARY_BASELINE_P95_MS` is for. The shipped default
+ * still catches the wedge itself, because a wedged Core times its probes out
+ * and a timeout is a hard signal that needs no threshold at all.
+ */
+export const DEFAULT_BROWSE_CANARY_BASELINE_P95_MS = 500;
+
+const parseBrowseCanaryBaselineP95Ms = (value: string | undefined): number => {
+  const raw = coerceString(value);
+  if (!raw) return DEFAULT_BROWSE_CANARY_BASELINE_P95_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new ConfigError(
+      "ROON_BROWSE_CANARY_BASELINE_P95_MS must be a positive number of milliseconds"
+    );
+  }
+  return parsed;
+};
+
 export const loadConfig = (): AppConfig => {
   const host = parseHost(process.env.HOST);
   const port = parsePort(process.env.PORT);
@@ -208,9 +315,23 @@ export const loadConfig = (): AppConfig => {
   const favoritesPath = parseFavoritesPath(process.env.FAVORITES_PATH, dataDir);
   // CATALOG_PATH is the key; TIMELINE_CATALOG_PATH is honored as a fallback
   // because deployed .env files predate Timeline's removal (2026-08-09).
-  const catalogPath = parseCatalogPath(
+  const retiredCatalogPath = parseCatalogPath(
     process.env.CATALOG_PATH ?? process.env.TIMELINE_CATALOG_PATH,
     dataDir
+  );
+  // On by default since the B6b follow-up. The sweep governor will not freeze
+  // a latency baseline without an authority outside its own samples calling
+  // the Core healthy, so a build that shipped the canary off shipped a
+  // governor that could never ramp past one. The variable stays as the
+  // emergency valve, per the campaign rule that kill switches are valves and
+  // features are on.
+  const browseCanaryEnabled = parseEnvFlag(
+    process.env.ROON_BROWSE_CANARY,
+    "ROON_BROWSE_CANARY",
+    true
+  );
+  const browseCanaryBaselineP95Ms = parseBrowseCanaryBaselineP95Ms(
+    process.env.ROON_BROWSE_CANARY_BASELINE_P95_MS
   );
   return {
     host,
@@ -222,6 +343,8 @@ export const loadConfig = (): AppConfig => {
     recentlyPlayedPath,
     recentlyPlayedCap,
     favoritesPath,
-    catalogPath,
+    retiredCatalogPath,
+    browseCanaryEnabled,
+    browseCanaryBaselineP95Ms,
   };
 };

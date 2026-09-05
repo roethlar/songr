@@ -186,7 +186,8 @@ describe('AlbumActionController', () => {
 			pageId: PAGE_ID,
 			versionId: VERSION_ID,
 			operationId: 'operation-1',
-			resolvingDeadlineAt: 50_000
+			resolvingDeadlineAt: 50_000,
+			executionAttempted: false
 		});
 
 		for (const stale of [
@@ -494,7 +495,8 @@ describe('AlbumActionController', () => {
 		expect(controller.snapshot()).toMatchObject({
 			phase: 'executing',
 			selectedActionId: 'action-play',
-			actions: []
+			actions: [],
+			executionAttempted: true
 		});
 		expect(controller.execute('action-play')).toBe(false);
 		expect(controller.execute('action-queue')).toBe(false);
@@ -505,7 +507,11 @@ describe('AlbumActionController', () => {
 			success: true,
 			data: { claimed: true, outcome: 'executed' }
 		});
-		expect(controller.snapshot()).toMatchObject({ phase: 'executed', actions: [] });
+		expect(controller.snapshot()).toMatchObject({
+			phase: 'executed',
+			actions: [],
+			executionAttempted: true
+		});
 		expect(socket.listenerCount('album-action:resolved')).toBe(0);
 		expect(vi.getTimerCount()).toBe(0);
 	});
@@ -520,11 +526,16 @@ describe('AlbumActionController', () => {
 		expect(controller.snapshot()).toMatchObject({
 			phase: 'outcome-unknown',
 			code: 'MALFORMED_EXECUTE_ACK',
-			actions: []
+			actions: [],
+			executionAttempted: true
 		});
 		expect(controller.execute('action-play')).toBe(false);
 
 		controller.begin(beginInput());
+		expect(controller.snapshot()).toMatchObject({
+			phase: 'resolving',
+			executionAttempted: false
+		});
 		socket.emission('album-action:begin', 1).ack(accepted('request-2', 'operation-2'));
 		socket.serverEmit('album-action:resolved', resolved('request-2', 'operation-2'));
 		controller.execute('action-queue');
@@ -532,7 +543,8 @@ describe('AlbumActionController', () => {
 		expect(controller.snapshot()).toMatchObject({
 			phase: 'outcome-unknown',
 			code: 'EXECUTE_TIMEOUT',
-			actions: []
+			actions: [],
+			executionAttempted: true
 		});
 		expect(controller.execute('action-queue')).toBe(false);
 		expect(socket.count('album-action:execute')).toBe(2);

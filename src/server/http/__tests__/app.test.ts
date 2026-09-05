@@ -9,7 +9,6 @@ import { TransportService } from '../../../core/roon/TransportService';
 import { ImageService } from '../../../core/roon/ImageService';
 import { RecentlyPlayedService } from '../../../core/recently-played/RecentlyPlayedService';
 import { FavoritesService } from '../../../core/favorites/FavoritesService';
-import type { CatalogHttpService } from '../routes/catalog';
 
 const stubLogger: any = {
   info: jest.fn(),
@@ -46,14 +45,7 @@ async function startApp() {
     images,
     recentlyPlayed,
     favorites,
-    stubLogger,
-    {
-      // No catalog method should run while the Roon stub is unpaired. The
-      // app-level assertion below proves that the router is mounted before
-      // the generic /api 404 without inventing client-owned Core authority.
-      catalogService: {} as CatalogHttpService,
-      getDiagnosticCoreId: () => null,
-    }
+    stubLogger
   );
   return new Promise<{
     url: string;
@@ -134,13 +126,14 @@ describe('HTTP app routing', () => {
     expect(stubRoon.getBrowse).not.toHaveBeenCalled();
   });
 
-  it('mounts catalog routes before the generic /api 404', async () => {
+  it('answers a retired /api/catalog address with the generic /api 404', async () => {
+    // The saved catalog model and its whole `/api/catalog/*` surface are gone
+    // (`.agents/plans/library-live-view.md` Slice 4). An old client asking for
+    // it gets the API's own JSON 404, never the SPA's HTML.
     const res = await fetch(`${app.url}/api/catalog/status`);
-    expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({
-      error: 'Roon core not paired',
-      details: 'CORE_UNPAIRED',
-    });
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-type')).toMatch(/application\/json/);
+    expect(await res.json()).toEqual({ error: 'Not Found' });
   });
 
   it('answers /api/health with status ok + per-subsystem diagnostics', async () => {

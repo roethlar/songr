@@ -19,14 +19,13 @@
 	 * links to composer drills only — never a composition page: the
 	 * observed public track action authority supplied no such target.
 	 */
-	interface ZoneOption {
-		readonly zoneId: string;
-		readonly name: string;
-	}
-
 	interface Props {
 		readonly song: PaletteSearchRow;
-		readonly zones: readonly ZoneOption[];
+		/**
+		 * The zone every action on this page targets: the one the user has
+		 * selected. `null` disables them (public issue #12).
+		 */
+		readonly zoneId: string | null;
 		readonly busy?: boolean;
 		readonly error?: string | null;
 		readonly relationshipPhase?: 'idle' | 'loading' | 'ready' | 'unavailable';
@@ -45,7 +44,7 @@
 
 	let {
 		song,
-		zones,
+		zoneId,
 		busy = false,
 		error = null,
 		relationshipPhase = 'idle',
@@ -62,10 +61,9 @@
 		onOpenComposer
 	}: Props = $props();
 
-	let pendingSemantic = $state<UnifiedSongActionSemantic | null>(null);
 	let albumChooserOpen = $state(false);
 
-	const actionEnabled = $derived(Boolean(onAction) && zones.length > 0 && !busy);
+	const actionEnabled = $derived(Boolean(onAction) && zoneId !== null && !busy);
 	const relationshipAlbums = $derived(relationship?.albums ?? []);
 	const relationshipArtists = $derived.by(() => {
 		const artists = new Map<string, string>();
@@ -92,26 +90,9 @@
 		};
 	}
 
-	function semanticLabel(semantic: UnifiedSongActionSemantic): string {
-		if (semantic === 'play-now') return 'Play Now';
-		if (semantic === 'add-next') return 'Add Next';
-		return 'Queue';
-	}
-
 	function beginAction(semantic: UnifiedSongActionSemantic): void {
-		if (!actionEnabled || !onAction) return;
-		if (zones.length === 1) {
-			onAction(semantic, zones[0].zoneId);
-			pendingSemantic = null;
-			return;
-		}
-		pendingSemantic = semantic;
-	}
-
-	function chooseZone(zoneId: string): void {
-		if (!pendingSemantic || !onAction || busy) return;
-		onAction(pendingSemantic, zoneId);
-		pendingSemantic = null;
+		if (!actionEnabled || !onAction || zoneId === null) return;
+		onAction(semantic, zoneId);
 	}
 
 	function beginAlbumNavigation(): void {
@@ -194,37 +175,34 @@
 				>
 					Favorite
 				</button>
-				<button
-					type="button"
-					data-testid="unified-song-album-link"
-					disabled={!onOpenAlbum || relationshipAlbums.length === 0}
-					onclick={beginAlbumNavigation}
-				>
-					Go to Album
-				</button>
-				<button
-					type="button"
-					data-testid="unified-song-artist-link"
-					disabled={!onOpenArtist || relationshipArtists.length !== 1}
-					onclick={openOnlyArtist}
-				>
-					{relationshipArtists.length > 1 ? 'Choose Artist' : 'Go to Artist'}
-				</button>
+				<!-- A destination the host cannot open is not offered at all. A
+				     permanently disabled button is a navigable item that does not
+				     work, which is the one thing this surface may never show. -->
+				{#if onOpenAlbum}
+					<button
+						type="button"
+						data-testid="unified-song-album-link"
+						disabled={relationshipAlbums.length === 0}
+						onclick={beginAlbumNavigation}
+					>
+						Go to Album
+					</button>
+				{/if}
+				{#if onOpenArtist}
+					<button
+						type="button"
+						data-testid="unified-song-artist-link"
+						disabled={relationshipArtists.length !== 1}
+						onclick={openOnlyArtist}
+					>
+						{relationshipArtists.length > 1 ? 'Choose Artist' : 'Go to Artist'}
+					</button>
+				{/if}
 			</div>
 		</div>
 
 		<div class="pright">
 			<div class="pa song-subtitle" data-testid="unified-song-subtitle">{song.subtitle}</div>
-
-			{#if pendingSemantic && zones.length > 1}
-				<div class="zone-picker" data-testid="unified-song-zone-picker">
-					<span class="zone-label">{semanticLabel(pendingSemantic)} on</span>
-					{#each zones as zone (zone.zoneId)}
-						<button type="button" onclick={() => chooseZone(zone.zoneId)}>{zone.name}</button>
-					{/each}
-					<button type="button" class="ghost" onclick={() => (pendingSemantic = null)}>Cancel</button>
-				</div>
-			{/if}
 
 			{#if busy}
 				<p class="status" data-testid="unified-song-action-busy">Working…</p>
@@ -354,17 +332,6 @@
 		opacity: 1;
 		color: var(--error, #e66);
 	}
-	.zone-picker {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 7px;
-		margin-top: 18px;
-		padding: 10px;
-		border: 1px solid var(--line);
-		border-radius: 7px;
-		background: var(--songr-surface-11);
-	}
 	.relationship-options {
 		display: flex;
 		flex-wrap: wrap;
@@ -399,27 +366,6 @@
 		border-color: var(--accent);
 	}
 	.relationship-options small {
-		color: var(--dim);
-	}
-	.zone-label {
-		width: 100%;
-		color: var(--soft);
-		font-size: 12px;
-	}
-	.zone-picker button {
-		padding: 7px 10px;
-		border: 1px solid var(--line);
-		border-radius: 6px;
-		background: var(--hover-subtle);
-		color: var(--songr-copy);
-		font: inherit;
-		font-size: 12px;
-		cursor: pointer;
-	}
-	.zone-picker button:hover {
-		border-color: var(--accent);
-	}
-	.zone-picker .ghost {
 		color: var(--dim);
 	}
 	.song-relationship-status {

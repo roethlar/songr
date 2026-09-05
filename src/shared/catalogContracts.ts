@@ -33,6 +33,25 @@ export interface ArtistRef {
   localId: string;
   coreId: string;
   exactName: string;
+  /**
+   * The Artists-root row's own subtitle, exactly as Roon drew it, or the empty
+   * string when the row carried none.
+   *
+   * The rest of the row's rendering, recorded for one purpose: telling two
+   * rows apart that render the same name. A library can hold two artist
+   * entities called the same thing, and Roon draws them as two rows differing
+   * only here, so without this neither row can be matched to the discography
+   * the walk stored for it — and both then show no albums at all.
+   *
+   * It is text, never a number. "51 Albums" is what this row drew; it must
+   * never be parsed for a count, because the count already has one source and
+   * a second would be free to disagree with it.
+   *
+   * Optional only for a snapshot persisted before this was recorded. Every
+   * scan writes it, empty string included; absent means "never read", which is
+   * a different claim from "read as empty" and is treated as one.
+   */
+  exactSubtitle?: string;
   normalizedName: string;
   imageKeyHint?: string;
   firstSeenAt: string;
@@ -291,7 +310,7 @@ const ARTIST_REQUIRED_KEYS = [
   "lastSeenAt",
   "resolutionStatus",
 ] as const;
-const ARTIST_OPTIONAL_KEYS = ["imageKeyHint"] as const;
+const ARTIST_OPTIONAL_KEYS = ["imageKeyHint", "exactSubtitle"] as const;
 
 const ALBUM_REQUIRED_KEYS = [
   "localId",
@@ -544,11 +563,20 @@ export function normalizeArtistRef(value: unknown): ArtistRef | null {
     if (hasOwn(record, "imageKeyHint") && !isBoundedOpaqueText(record.imageKeyHint)) {
       return null;
     }
+    if (
+      hasOwn(record, "exactSubtitle") &&
+      !isCanonicalDisplayText(record.exactSubtitle, true)
+    ) {
+      return null;
+    }
 
     const artist: ArtistRef = {
       localId: record.localId,
       coreId: record.coreId,
       exactName: record.exactName,
+      ...(typeof record.exactSubtitle === "string"
+        ? { exactSubtitle: record.exactSubtitle }
+        : {}),
       normalizedName: record.normalizedName,
       firstSeenAt: record.firstSeenAt,
       lastSeenAt: record.lastSeenAt,

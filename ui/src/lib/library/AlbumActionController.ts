@@ -1,4 +1,6 @@
+import type { LibraryRowReference } from '@shared/libraryRootsContracts';
 import {
+	isAlbumActionReferenceRequest,
 	normalizeAlbumActionBeginAck,
 	normalizeAlbumActionBeginRequest,
 	normalizeAlbumActionCancelAck,
@@ -40,20 +42,18 @@ export interface AlbumActionState {
 	readonly choosingDeadlineAt: number | null;
 	readonly actions: readonly AlbumActionChoice[];
 	readonly selectedActionId: string | null;
+	/** True once execute has been claimed locally; replay is no longer safe. */
+	readonly executionAttempted: boolean;
 	readonly code: string | null;
 	readonly error: string | null;
 	readonly transitionedAt: number;
 }
 
-export interface AlbumActionBeginInput {
-	readonly pageId: string;
-	readonly versionId: string;
+interface AlbumActionBeginCommonInput {
 	readonly zoneId: string;
 	readonly tabId: string;
 	/** Generation from the current live browse session. */
 	readonly generation: number;
-	/** Optional track scope; the server verifies index and title together. */
-	readonly track?: AlbumActionTrackSelector;
 	/**
 	 * Optional client-only intent. It is never sent as server authority; the
 	 * controller waits for the server's opaque choices and executes only one
@@ -61,6 +61,30 @@ export interface AlbumActionBeginInput {
 	 */
 	readonly desiredSemantic?: AlbumActionSemantic;
 }
+
+/** An action on a retained album page: catalog-opened or collection-opened. */
+export interface AlbumActionPageBeginInput extends AlbumActionBeginCommonInput {
+	readonly pageId: string;
+	readonly versionId: string;
+	/** Optional track scope; the server verifies index and title together. */
+	readonly track?: AlbumActionTrackSelector;
+}
+
+/**
+ * An action on one live library reference.
+ *
+ * `.agents/plans/library-live-view.md` Slice 2. The reader clicked a row Roon
+ * rendered and the page holds that row's own reference, so there is no page id,
+ * no version and no track selector to send: the reference names the subject
+ * exactly, including for two albums Roon renders under the same title.
+ */
+export interface AlbumActionReferenceBeginInput extends AlbumActionBeginCommonInput {
+	readonly ref: LibraryRowReference;
+}
+
+export type AlbumActionBeginInput =
+	| AlbumActionPageBeginInput
+	| AlbumActionReferenceBeginInput;
 
 export type AlbumActionBeginResult =
 	| { readonly started: true; readonly requestId: string }
@@ -235,8 +259,10 @@ export class AlbumActionController {
 		this.#attachListeners(attempt);
 		this.#publish({
 			phase: 'resolving',
-			pageId: request.pageId,
-			versionId: request.versionId,
+			// A live reference addresses no page and no version, so the state
+			// says so rather than inventing an identifier for one.
+			pageId: isAlbumActionReferenceRequest(request) ? null : request.pageId,
+			versionId: isAlbumActionReferenceRequest(request) ? null : request.versionId,
 			zoneId: request.zoneId,
 			generation: request.generation,
 			requestId: request.requestId,
@@ -245,6 +271,7 @@ export class AlbumActionController {
 			choosingDeadlineAt: null,
 			actions: Object.freeze([]),
 			selectedActionId: null,
+			executionAttempted: false,
 			code: null,
 			error: null
 		});
@@ -290,6 +317,7 @@ export class AlbumActionController {
 			phase: 'executing',
 			actions: Object.freeze([]),
 			selectedActionId: choice.actionId,
+			executionAttempted: true,
 			code: null,
 			error: null
 		});
@@ -587,6 +615,7 @@ export class AlbumActionController {
 			choosingDeadlineAt: null,
 			actions: Object.freeze([]),
 			selectedActionId,
+			executionAttempted: false,
 			code,
 			error
 		});
@@ -639,6 +668,7 @@ export class AlbumActionController {
 			choosingDeadlineAt: null,
 			actions: Object.freeze([]),
 			selectedActionId: null,
+			executionAttempted: false,
 			code: null,
 			error: null,
 			transitionedAt: this.#now()

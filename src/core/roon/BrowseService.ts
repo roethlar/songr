@@ -11,7 +11,7 @@ import {
   SearchResult,
 } from "../../shared/types";
 import { RoonClient } from "./RoonClient";
-import { CoreUnpairedError } from "./errors";
+import { CoreUnpairedError, RoonBrowseError } from "./errors";
 import { RoonLateSettlementObserver, withRoonTimeout } from "./timeout";
 import {
   CLASSIC_SEARCH_EXPANSION_DEADLINE_MS,
@@ -593,10 +593,14 @@ export class BrowseService {
           service[method](params, (error: unknown, response: any) => {
             if (error) {
               this.logger.error({ err: error, method }, "Roon browse call failed");
+              // Roon reports a refusal as a bare string ("InvalidItemKey");
+              // keep it, because whether the key is dead is the whole question.
               reject(
                 error instanceof Error
                   ? error
-                  : new Error(`[BrowseService] ${method} failed`)
+                  : typeof error === "string" && error.length > 0
+                    ? new RoonBrowseError(method, error)
+                    : new Error(`[BrowseService] ${method} failed`)
               );
               return;
             }

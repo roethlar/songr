@@ -473,6 +473,12 @@ export type UnifiedBrowseActionSource =
 export interface UnifiedBrowseActionState {
 	readonly phase: 'idle' | 'loading' | 'ready' | 'executing' | 'success' | 'error';
 	readonly source: UnifiedBrowseActionSource | null;
+	/**
+	 * The zone `available` was probed under, so a caller can tell whether the
+	 * answer on screen still describes the zone the buttons would act on.
+	 * `null` while idle, and when the sheet opened with no zone at all.
+	 */
+	readonly zoneId: string | null;
 	readonly available: Readonly<Record<UnifiedSongActionSemantic, boolean>>;
 	readonly error: string | null;
 }
@@ -621,6 +627,7 @@ export function createUnifiedBrowseActionController(
 	let state: UnifiedBrowseActionState = {
 		phase: 'idle',
 		source: null,
+		zoneId: null,
 		available: emptyAvailability(),
 		error: null
 	};
@@ -638,9 +645,22 @@ export function createUnifiedBrowseActionController(
 		const source = keylessSource(rawSource);
 		fence += 1;
 		const token = fence;
-		publish({ phase: 'loading', source, available: emptyAvailability(), error: null });
+		const probedZoneId = zoneId ?? null;
+		publish({
+			phase: 'loading',
+			source,
+			zoneId: probedZoneId,
+			available: emptyAvailability(),
+			error: null
+		});
 		if (!zoneId) {
-			publish({ phase: 'ready', source, available: emptyAvailability(), error: null });
+			publish({
+				phase: 'ready',
+				source,
+				zoneId: probedZoneId,
+				available: emptyAvailability(),
+				error: null
+			});
 			return true;
 		}
 		try {
@@ -664,13 +684,14 @@ export function createUnifiedBrowseActionController(
 				) as Record<UnifiedSongActionSemantic, boolean>;
 			});
 			if (token !== fence || !isClaimCurrent(claim)) return false;
-			publish({ phase: 'ready', source, available, error: null });
+			publish({ phase: 'ready', source, zoneId: probedZoneId, available, error: null });
 			return true;
 		} catch (error) {
 			if (token !== fence) return false;
 			publish({
 				phase: error instanceof ClassicBrowseSupersededError ? 'idle' : 'error',
 				source: error instanceof ClassicBrowseSupersededError ? null : source,
+				zoneId: error instanceof ClassicBrowseSupersededError ? null : probedZoneId,
 				available: emptyAvailability(),
 				error:
 					error instanceof ClassicBrowseSupersededError
@@ -742,6 +763,7 @@ export function createUnifiedBrowseActionController(
 		publish({
 			phase: 'idle',
 			source: null,
+			zoneId: null,
 			available: emptyAvailability(),
 			error: null
 		});

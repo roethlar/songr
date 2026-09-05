@@ -25,7 +25,11 @@
   cursor: pointer;
 }
 .unified-surface :where(button:disabled) {
-  cursor: default;
+	cursor: default;
+}
+.unified-surface :where(a.arow, a.tile, a.gcard) {
+	color: inherit;
+	text-decoration: none;
 }
 /* Adaptation: .sortc is a <button>; the .smenu popup is its sibling inside
    this positioned wrapper (buttons cannot contain interactive content). */
