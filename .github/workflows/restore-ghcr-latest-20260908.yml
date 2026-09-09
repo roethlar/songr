@@ -1,0 +1,63 @@
+name: restore interrupted Songr container latest
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head:
+        description: Exact temporary workflow commit expected for this rollback
+        required: true
+permissions:
+  contents: read
+  packages: write
+jobs:
+  restore-latest:
+    if: github.repository == 'roethlar/songr'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Restore exact verified 1.3.0 latest manifest
+        env:
+          REGISTRY_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_head }}
+        run: |
+          python3 - <<'PY'
+          import urllib.request,urllib.error,json,hashlib,pathlib,subprocess,base64,datetime,sys,os
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'songr-ghcr-rollback';out.mkdir(exist_ok=True)
+          assert os.environ['GITHUB_SHA']==os.environ['EXPECTED_WORKFLOW_SHA'],'workflow head differs from dispatched pin'
+          old='sha256:dc5d04574612f7bf7d300b3fdbf5a32327550b92565f77719f72346430f7b2b4'
+          ours='sha256:0c6b21ef03594bea27f13dae22316911ce8ec51ecffb465eea23b8d7357beb70'
+          base='https://ghcr.io/v2/roethlar/songr/'
+          try:
+           token=os.environ['REGISTRY_GITHUB_TOKEN']
+           auth_header='Basic '+base64.b64encode((os.environ['GITHUB_ACTOR']+':'+token).encode()).decode()
+           request=urllib.request.Request('https://ghcr.io/token?service=ghcr.io&scope=repository:roethlar/songr:pull,push',headers={'Authorization':auth_header})
+           with urllib.request.urlopen(request) as response:auth=json.load(response)['token']
+           del token,auth_header,request
+           headers={'Authorization':'Bearer '+auth,'Accept':'application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json'}
+           def read(tag):
+            with urllib.request.urlopen(urllib.request.Request(base+'manifests/'+tag,headers=headers)) as response:
+             raw=response.read();digest=response.headers['Docker-Content-Digest'];media=response.headers['Content-Type']
+             assert 'sha256:'+hashlib.sha256(raw).hexdigest()==digest
+             return raw,digest,media
+           original,original_digest,media=read('v1.3.0');candidate,candidate_digest,_=read('v1.4.0');current,current_digest,_=read('latest')
+           assert original_digest==old,('unexpectedv1.3.0',original_digest)
+           assert candidate_digest==ours,('unexpectedv1.4.0',candidate_digest)
+           assert current_digest==ours,('latest changed externally',current_digest)
+           (out/'ghcr-1.3.0-manifest.json').write_bytes(original)
+           before={'v1.3.0':original_digest,'v1.4.0':candidate_digest,'latest':current_digest}
+           (out/'ghcr-containment-preflight.json').write_text(json.dumps(before,indent=2)+'\n')
+           print(json.dumps({'preflight':before,'action':'restore latest only using exact prior manifest bytes'}),flush=True)
+           # Check again immediately before the authorized write; no other tag is modified.
+           assert read('latest')[1]==ours,'latest changed externally beforewrite'
+           put_headers={**headers,'Content-Type':media,'If-Match':ours}
+           with urllib.request.urlopen(urllib.request.Request(base+'manifests/latest',data=original,method='PUT',headers=put_headers)) as response:
+            status=response.status;published=response.headers.get('Docker-Content-Digest')
+           assert status in (200,201,202),(status,published)
+           assert published==old,published
+           after={tag:read(tag)[1] for tag in ['latest','v1.3.0','v1.4.0']}
+           assert after=={'latest':old,'v1.3.0':old,'v1.4.0':ours},after
+           receipt={'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'before':before,'after':after,'status':status,'exact_manifest_bytes_preserved':True,'only_tag_written':'latest','objects_or_tags_deleted':False}
+           (out/'ghcr-containment.json').write_text(json.dumps(receipt,indent=2)+'\n')
+           print(json.dumps(receipt,indent=2))
+          except urllib.error.HTTPError as error:
+           print(json.dumps({'error':'registry HTTP request failed','status':error.code,'reason':error.reason}),file=sys.stderr);sys.exit(1)
+          PY
