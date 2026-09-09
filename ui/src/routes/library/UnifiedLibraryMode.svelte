@@ -1,6 +1,13 @@
 <script lang="ts">
+	import RetainedLibraryPanel from './RetainedLibraryPanel.svelte';
 	import { getContext, onMount, tick, untrack } from 'svelte';
 	import { get } from 'svelte/store';
+	import { measureLibraryChrome } from '$lib/libraryListChrome';
+	import UnifiedAlbumArtistList from './UnifiedAlbumArtistList.svelte';
+	import {
+		albumCreditKey, albumCreditLabel, albumCreditMatches, groupAlbumArtists, sortAlbumArtistGroups,
+		type AlbumArtistGroup, type AlbumCreditSelector, type ArtistView
+	} from '$lib/albumArtistGroups';
 	import {
 		LIBRARY_MODE_ACTIVATION_CONTEXT,
 		type CommittedLibraryModeActivation,
@@ -31,7 +38,7 @@
 		type LibraryRouteBrowseStep
 	} from '$lib/libraryRoute';
 	import { browseBreadcrumbFor } from '$lib/library/browseSemantics';
-	import { libraryParentPageState, libraryRouteFromPageState } from '$lib/libraryRouteState';
+	import { libraryPageStateFromRoute, libraryParentPageState, libraryRouteFromPageState } from '$lib/libraryRouteState';
 	import {
 	classicBrowseSessionClient,
 	type ClassicBrowseSessionClaim
@@ -39,6 +46,7 @@
 import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	import {
 		bucketLetterFor,
+		computeBuckets,
 		compareLibrarySearchKeys,
 		librarySortKey,
 		type LetterBucket,
@@ -46,13 +54,16 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		type LibraryArtistEntry
 	} from '$lib/libraryEntries';
 	import { libraryRootsStore, loadLibraryRoots } from '$lib/stores/libraryRootsStore';
-	import { fetchCoreStatus, openLibraryReference, openLibraryRoot } from '$lib/api/client';
+	import { fetchCoreStatus, openLibraryReference, openLibraryRoot, previewLibrarySection } from '$lib/api/client';
+	import { GenrePreviewController, type GenrePreviewOwner } from '$lib/library/GenrePreviewController';
+	import type { LibraryPreviewItemKind } from '@shared/libraryPreviewContracts';
 	import {
 		LiveLibraryPageController,
 		type LiveLibraryPageOpenInput
 	} from '$lib/library/LiveLibraryPageController';
 	import {
 		libraryAlbumStep,
+		libraryChildPath,
 		type LibraryPathTarget,
 		type LibraryRenderingPath
 	} from '$lib/library/liveLibraryPath';
@@ -309,6 +320,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	);
 	const connectedGood = $derived($socketStatusStore === 'connected' && $isCorePaired);
 	let shuffleSeed = $state(Math.floor(Date.now() / 60_000));
+	let albumShuffleSeed = $state(Math.floor(Date.now() / 60_000));
+	let surpriseSeed = $state(Math.floor(Date.now() / 60_000));
 
 	let {
 		sessionClient = classicBrowseSessionClient,
@@ -328,6 +341,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		loadRoots = loadLibraryRoots,
 		openLiveRef = openLibraryReference,
 		openLiveRoot = openLibraryRoot,
+		previewLiveSection = previewLibrarySection,
 		fetchCoreStatusData = fetchCoreStatus,
 		corePairedStore = isCorePaired,
 		fetchFn = fetch,
@@ -358,6 +372,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		loadRoots?: typeof loadLibraryRoots;
 		openLiveRef?: typeof openLibraryReference;
 		openLiveRoot?: typeof openLibraryRoot;
+		previewLiveSection?: typeof previewLibrarySection;
 		fetchCoreStatusData?: typeof fetchCoreStatus;
 		/** Pairing readiness, injected so tests can drive the retry. */
 		corePairedStore?: typeof isCorePaired;
@@ -395,6 +410,12 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		openRoot: (root) => openLiveRoot(fetchFn, root),
 		heldGeneration: () => untrack(() => $rootsStore).generation
 	});
+	const genrePreviewController = new GenrePreviewController({
+		read: (ref, limit) => previewLiveSection(fetchFn, ref, limit),
+		isCurrent: owner => untrack(() => isGenrePreviewOwnerCurrent(owner)),
+		canRetry: () => Boolean(getSocketClient()?.connected),
+		onStale: owner => recoverGenrePreviews(owner)
+	});
 	// Item-page coordination (rich-item plan §5.2): its retirement hook is
 	// the single place a replaced or closed page's read/action authority is
 	// cancelled.
@@ -418,6 +439,10 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	);
 
 	let scope = $state<UnifiedLibraryScope>('artists');
+	let artistView = $state<ArtistView>('all-artists');
+	let albumCredit = $state<AlbumCreditSelector | null>(null);
+	let creditEntryRelationship: EntryRelationship = 'transient';
+	let creditReturnScrollTop = 0;
 	let railTarget = $state<LetterBucket | null>(null);
 	/** Genre/composer album-list context (collection navigation). */
 	type EntryRelationship = 'owned' | 'restored' | 'transient';
@@ -472,6 +497,15 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	let favoriteMutationBusy = $state(false);
 	let favoritesStatus = $state<string | null>(null);
 	let returnToPalette = $state(false);
+	/** List ownership is separate from the normalized transient item state. */
+	interface PaletteArtistListReturnContext {
+		readonly artistView: ArtistView;
+		readonly albumCredit: AlbumCreditSelector | null;
+		readonly creditEntryRelationship: EntryRelationship;
+		readonly creditReturnScrollTop: number;
+		readonly scrollTop: number;
+	}
+	let paletteArtistListReturnContext: PaletteArtistListReturnContext | null = null;
 	let classicSearchOwnerGeneration = 0;
 	let paletteSearchHandoff: Promise<void> = Promise.resolve();
 	let songRelationship = $state<SongRelationshipViewState>({
@@ -511,7 +545,11 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	 * Where each scope was left. One pane scrolls every scope, so without this
 	 * a tab switch is indistinguishable from starting over.
 	 */
-	const scopeScrollTops = new Map<UnifiedLibraryScope, number>();
+	const scopeScrollTops = new Map<string, number>();
+	function listScrollKey(nextScope = scope, nextView = artistView, credit = albumCredit): string {
+		return nextScope !== 'artists' ? nextScope : credit !== null
+			? `album-credit:${albumCreditKey(credit)}` : `artists:${nextView}`;
+	}
 	/** Supersedes an in-flight `restorePaneScrollTop` retry loop. */
 	let paneScrollRestoreToken = 0;
 	let albumReadSession: ClassicBrowseSessionRef | null = null;
@@ -598,6 +636,16 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	const listAlbums = $derived(roots.albums);
 	const listArtistBuckets = $derived(roots.artistBuckets);
 	const listAlbumBuckets = $derived(roots.albumBuckets);
+	const emptyCreditAlbums: readonly LibraryAlbumEntry[] = [];
+	const creditSnapshot = $derived(roots.phase === 'ready' ? roots.albums : emptyCreditAlbums);
+	const albumArtistGroups = $derived(groupAlbumArtists(creditSnapshot));
+	const orderedCreditGroups = $derived(sortAlbumArtistGroups(albumArtistGroups, prefs.sorts.artists));
+	const creditGroupActive = $derived(scope === 'artists' && artistView === 'album-artists' && albumCredit !== null);
+	const selectedCreditGroup = $derived(albumCredit === null ? null :
+		albumArtistGroups.find(group => group.key === albumCreditKey(albumCredit!)) ?? null);
+	const creditAlbumSort = $derived(resolveAlbumOrder(prefs.sorts.artist));
+	const creditAlbums = $derived(selectedCreditGroup?.albums ?? []);
+	const creditViewSorts = $derived({ ...prefs.sorts, albums: creditAlbumSort });
 	const surfacePhase = $derived.by((): 'loading' | 'error' | 'ready' | 'idle' => {
 		// A live item page owns its own opening/error/ready state. Do not let
 		// either backing list gate hide it while its route is being restored.
@@ -628,10 +676,11 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		return isChronologicalAlbumSort(sort) ? 'az' : sort;
 	}
 	const sortMenu = $derived(
-		scope === 'albums' ? liveAlbumSortMenu() : (SORT_MENUS[scope] ?? null)
+		creditGroupActive ? artistDrillSortMenu() :
+			scope === 'albums' ? liveAlbumSortMenu() : (SORT_MENUS[scope] ?? null)
 	);
 	const sortValue = $derived(
-		sortMenu ? resolveAlbumOrder(prefs.sorts[scope as SortableUnifiedScope]) : null
+		creditGroupActive ? creditAlbumSort : sortMenu ? resolveAlbumOrder(prefs.sorts[scope as SortableUnifiedScope]) : null
 	);
 	const viewSorts = $derived({
 		...prefs.sorts,
@@ -645,6 +694,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	const scopeSummary = $derived.by(() => {
 		switch (scope) {
 			case 'artists':
+				if (creditGroupActive) return selectedCreditGroup ? `${creditAlbums.length.toLocaleString()} ALBUMS` : '';
+				if (artistView === 'album-artists') return `${albumArtistGroups.length.toLocaleString()} GROUPS`;
 				return `${listArtists.length.toLocaleString()} TOTAL`;
 			case 'albums':
 				return `${listAlbums.length.toLocaleString()} TOTAL`;
@@ -665,6 +716,11 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		// produced that list — not on the catalog, which the live scopes no
 		// longer read.
 		if (surfacePhase !== 'ready') return [];
+		if (creditGroupActive) return computeBuckets(sortAlbums(creditAlbums, creditAlbumSort, shuffleSeed)
+			.map(album => album.searchKey));
+		if (scope === 'artists' && artistView === 'album-artists') {
+			return computeBuckets(orderedCreditGroups.map(group => group.searchKey));
+		}
 		if (scope === 'albums' && sortValue === 'by-artist') {
 			const buckets: LetterBucket[] = [];
 			for (const [position, album] of sortAlbums(listAlbums, 'by-artist', shuffleSeed).entries()) {
@@ -695,7 +751,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		return reverseBuckets(base, total);
 	});
 	const railItemCount = $derived(
-		scope === 'artists'
+		creditGroupActive ? creditAlbums.length : scope === 'artists' && artistView === 'album-artists'
+			? albumArtistGroups.length : scope === 'artists'
 				? listArtists.length
 			: scope === 'albums'
 				? listAlbums.length
@@ -757,6 +814,11 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	// identifier, or compares a name against another surface.
 
 	const livePage = $derived($livePageController);
+	const genrePreviews = $derived($genrePreviewController);
+	$effect(() => {
+		const page = livePage, generation = roots.generation, lifecycle = lifecycleGeneration;
+		untrack(() => genrePreviewController.setPage(page, generation, lifecycle));
+	});
 	/**
 	 * What the OPEN ADDRESS says this page is — the reader's own question,
 	 * answered without waiting for a read. Roon's answer arrives with the
@@ -873,11 +935,54 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 
 	function liveChildPath(row: LibraryLevelRow): LibraryRenderingPath | null {
 		if (itemTarget?.kind !== 'live') return null;
-		const step =
-			row.kind === 'album'
-				? libraryAlbumStep(row.title, row.subtitle ?? '')
-				: { kind: row.kind, title: row.title };
-		return { origin: itemTarget.path.origin, steps: [...itemTarget.path.steps, step] };
+		return libraryChildPath(itemTarget.path, row);
+	}
+
+	function isGenrePreviewOwnerCurrent(owner: GenrePreviewOwner): boolean {
+		return resumed && lifecycleGeneration === owner.lifecycle && roots.generation === owner.rootGeneration &&
+			livePageController.snapshot() === owner.page && itemTarget?.kind === 'live';
+	}
+
+	function genrePreviewRowIsCurrent(source: LibraryRenderingPath, row: LibraryLevelRow): boolean {
+		const state = genrePreviewController.snapshot(), owner = state.owner;
+		if (!owner || state.stale || !isGenrePreviewOwnerCurrent(owner) || row.ref.generation !== owner.rootGeneration) return false;
+		if (source === owner.page.path) return owner.page.level?.rows.includes(row) ?? false;
+		return [state.artist, state.album].some(section => source === section.sourcePath && section.preview?.rows.includes(row));
+	}
+
+	function hrefForGenrePreviewRow(source: LibraryRenderingPath, row: LibraryLevelRow): string | null {
+		if (!genrePreviewRowIsCurrent(source, row)) return null;
+		try {
+			const candidate = itemDestinationPageState({ kind: 'live', path: libraryChildPath(source, row) });
+			const route = libraryRouteFromPageState(candidate);
+			return route === null ? null : encodeLibraryRoute(route);
+		} catch { return null; }
+	}
+
+	function openGenrePreviewRow(source: LibraryRenderingPath, row: LibraryLevelRow): void {
+		if (!getSocketClient()?.connected || !genrePreviewRowIsCurrent(source, row)) return;
+		const path = libraryChildPath(source, row);
+		openLiveRow(path, { liveRef: row.ref, title: row.title,
+			...(row.subtitle === undefined ? {} : { subtitle: row.subtitle }),
+			...(row.imageKey === undefined ? {} : { imageKey: row.imageKey }) });
+	}
+
+	function recoverGenrePreviews(owner: GenrePreviewOwner, explicit = false): void {
+		if (!isGenrePreviewOwnerCurrent(owner) || (!explicit && liveStaleAskedUnder === owner.rootGeneration)) return;
+		liveStaleAskedUnder = owner.rootGeneration;
+		void reloadLiveRoots().then(() => {
+			// A replacement generation already re-resolves through the host's
+			// normal effect. Unchanged roots still need fresh section references
+			// when only this page's retained tokens were evicted.
+			if (isGenrePreviewOwnerCurrent(owner) && roots.phase === 'ready') livePageController.retry();
+		}, () => undefined);
+	}
+
+	function retryGenrePreview(kind: LibraryPreviewItemKind): void {
+		if (!getSocketClient()?.connected) return;
+		const state = genrePreviewController.snapshot();
+		if (state.stale && state.owner) recoverGenrePreviews(state.owner, true);
+		else genrePreviewController.retry(kind);
 	}
 
 	function openLiveStructuralRow(row: LibraryLevelRow, recordHistory: boolean): void {
@@ -976,10 +1081,10 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	 * replacement when it did. This is the plan's scope-activation trigger and
 	 * the first half of recovering a page whose snapshot was retired.
 	 */
-	function reloadLiveRoots(): void {
+	function reloadLiveRoots(): Promise<void> {
 		const coreId = untrack(() => roots.coreId) ?? untrack(() => $coreStore.core?.id) ?? null;
-		if (coreId === null) return;
-		void loadRoots(fetchFn, { coreId });
+		if (coreId === null) return Promise.resolve();
+		return loadRoots(fetchFn, { coreId });
 	}
 
 	/**
@@ -1109,6 +1214,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	 */
 	const itemBackLabel = $derived.by(() => {
 		if (returnToPalette) return 'Search results';
+		if (albumCredit !== null) return albumCreditLabel(albumCredit);
 		// An album opened from its artist's page names the artist, since
 		// that is the actual back target — not the current scope or
 		// collection drill (issue #6).
@@ -1152,9 +1258,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		if (!pane) return;
 		// The pane sets `scroll-behavior: smooth`; a restore must be instant or
 		// it animates from wherever the rebuild left it.
-		pane.style.scrollBehavior = 'auto';
-		pane.scrollTop = top;
-		pane.style.removeProperty('scroll-behavior');
+		pane.scrollTo({ top, behavior: 'instant' });
 	}
 
 	/**
@@ -1206,6 +1310,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 				: (get(albumController).orderedTracks[editorialTrackIndex]?.title ?? null);
 		return buildUnifiedLibraryPageState({
 			scope,
+			artistView,
+			albumCredit,
 			collectionDrill: null,
 			itemTarget,
 			// The exact-track child is reconstructible product semantics
@@ -1226,15 +1332,20 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			// reload/popstate restore instead of falling back to the scope.
 			itemOriginName: itemTarget?.kind === 'collection' ? itemOriginName : null,
 			filterText,
-			surpriseSeed: scope === 'surprise' ? shuffleSeed : null,
+			surpriseSeed: scope === 'surprise' ? surpriseSeed : null,
 			density,
-			browseHistory: browseState.snapshot
+			...(artistView === 'album-artists' ? {} : { browseHistory: browseState.snapshot })
 		});
 	}
 
 	function itemDestinationPageState(target: UnifiedItemTarget): UnifiedLibraryPageState {
+		const keepsCredit = !returnToPalette && albumCredit !== null && target.kind === 'live' &&
+			target.path.origin === 'albums' && target.path.steps.length === 1 &&
+			target.path.steps[0].kind === 'album' && albumCreditMatches(albumCredit, target.path.steps[0].credit);
 		return buildUnifiedLibraryPageState({
 			...unifiedSemanticState().snapshot,
+			artistView: keepsCredit ? 'album-artists' : 'all-artists',
+			albumCredit: keepsCredit ? albumCredit : null,
 			itemTarget: target,
 			itemDetail: null
 		});
@@ -1261,8 +1372,22 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			: { origin: 'composers', steps: [{ kind: 'composer', title: target.label }] };
 	}
 
+	function hrefForRootAlbum(entry: LibraryAlbumEntry): string {
+		return encodeLibraryRoute({ kind: 'album', album: routeAlbum(entry) });
+	}
+
+	function hrefForCreditAlbum(entry: LibraryAlbumEntry): string | null {
+		if (albumCredit === null) return null;
+		try { return encodeLibraryRoute({ kind: 'credit-album', selector: albumCredit, album: routeAlbum(entry) }); }
+		catch { return null; }
+	}
+
 	function hrefForAlbum(entry: LibraryAlbumEntry): string | null {
 		const album = routeAlbum(entry);
+		if (albumCredit !== null && itemTarget === null && !returnToPalette) {
+			try { return encodeLibraryRoute({ kind: 'credit-album', selector: albumCredit, album }); }
+			catch { return null; }
+		}
 		const livePath = liveAlbumChildPath(entry);
 		if (livePath !== null) {
 			const route = libraryRouteFromPageState(
@@ -1322,6 +1447,10 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	function routeWithTrack(route: LibraryRoute, track: string | undefined): LibraryRoute {
 		if (track === undefined) return route;
 		switch (route.kind) {
+			case 'credit-album':
+				return { ...route, kind: 'credit-album-track', track };
+			case 'credit-album-track':
+				return { ...route, track };
 			case 'artist-album':
 				return { ...route, kind: 'artist-album-track', track };
 			case 'artist-album-track':
@@ -1365,11 +1494,15 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		state: UnifiedLibraryPageState,
 		routeOverride?: LibraryRoute
 	): LibraryPageStateWriteResult {
-		return pushLibraryRoute(state, routeOverride ?? durableRouteForState(state));
+		const result = pushLibraryRoute(state, routeOverride ?? durableRouteForState(state));
+		if (result !== 'refused') discardPaletteArtistListReturnContext();
+		return result;
 	}
 
 	function replaceLibraryPageState(state: UnifiedLibraryPageState): LibraryPageStateWriteResult {
-		return replaceLibraryRoute(state, durableRouteForState(state));
+		const result = replaceLibraryRoute(state, durableRouteForState(state));
+		if (result !== 'refused') discardPaletteArtistListReturnContext();
+		return result;
 	}
 
 	function preflightLibraryPageState(
@@ -1447,7 +1580,24 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	): Promise<void> {
 		const candidateState = itemDestinationPageState(target);
 		if (!preflightLibraryPageState(candidateState, albumOptions?.route)) return;
+		// Restore an already-committed address even before the realtime socket
+		// connects. The live reader retains it until current HTTP roots arrive.
+		if (!restoredEntry && candidateState.snapshot.albumCredit !== null && !getSocketClient()?.connected) return;
+		// Own the URL before mutating the visible page or its authority. A
+		// refused write must leave the credit group and its preference intact.
+		const writeResult = recordHistory ? pushLibraryPageState(candidateState, albumOptions?.route) : null;
+		if (writeResult === 'refused') return;
+		if (returnToPalette && !recordHistory && !restoredEntry &&
+			paletteArtistListReturnContext === null && scope === 'artists' &&
+			itemTarget === null && !filterText) {
+			paletteArtistListReturnContext = {
+				artistView, albumCredit, creditEntryRelationship, creditReturnScrollTop,
+				scrollTop: pane?.scrollTop ?? 0
+			};
+		}
 		const previousEntryRelationship = itemEntryRelationship;
+		artistView = candidateState.snapshot.artistView;
+		albumCredit = candidateState.snapshot.albumCredit;
 		railTarget = null;
 		trackChildOwnsEntry = false;
 		// Captured for every open: an in-place close (no history entry)
@@ -1481,7 +1631,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			// The live page is its own reader; the item-page controller still
 			// owns retirement of whatever it displaced.
 			itemPageController.open(target);
-			const writeResult = recordHistory ? pushLibraryPageState(unifiedSemanticState()) : null;
+			clearTrackChildAnchor();
 			itemEntryRelationship = entryRelationshipAfterWrite(
 				writeResult,
 				previousEntryRelationship,
@@ -1496,9 +1646,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		itemTarget = target;
 		const pageGeneration = itemPageController.open(target);
 		clearTrackChildAnchor();
-		const writeResult = recordHistory
-			? pushLibraryPageState(unifiedSemanticState(), albumOptions?.route)
-			: null;
 		itemEntryRelationship = entryRelationshipAfterWrite(
 			writeResult,
 			previousEntryRelationship,
@@ -1582,6 +1729,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 
 	/** Cancels the live page's read and action authority. */
 	function retireItemPageAuthority(): void {
+		genrePreviewController.reset();
 		albumController.cancel();
 		albumController.reset();
 		sheetActionController.cancel();
@@ -1628,11 +1776,98 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		});
 	}
 
+	function discardPaletteArtistListReturnContext(): void {
+		paletteArtistListReturnContext = null;
+	}
+
+	/** Restore selectors against current roots, never a saved copy of the rows. */
+	function restorePaletteArtistListReturnContext(): void {
+		const origin = paletteArtistListReturnContext;
+		if (origin === null) return;
+		paletteArtistListReturnContext = null;
+		artistView = origin.artistView;
+		albumCredit = origin.albumCredit;
+		creditEntryRelationship = origin.creditEntryRelationship;
+		creditReturnScrollTop = origin.creditReturnScrollTop;
+		restorePaneScrollTop(origin.scrollTop);
+	}
+
 	/** Resets both navigation layers (scope switches, suspend). */
 	function resetDrill(): void {
+		discardPaletteArtistListReturnContext();
 		const resetPane = itemTarget === null;
 		resetItemPage(false);
+		albumCredit = null;
+		artistView = 'all-artists';
+		creditEntryRelationship = 'transient';
 		if (resetPane) resetPaneAfterRender();
+	}
+
+	function artistViewPageState(view: ArtistView, selector: AlbumCreditSelector | null = null): UnifiedLibraryPageState {
+		const route: LibraryRoute = selector !== null ? { kind: 'credit-group', selector } :
+			view === 'album-artists' ? { kind: 'album-artists-root' } : { kind: 'root', scope: 'artists' };
+		return buildUnifiedLibraryPageState({ ...libraryPageStateFromRoute(route).snapshot, density: prefs.density });
+	}
+
+	function changeArtistView(next: ArtistView): void {
+		if (next === artistView && albumCredit === null) return;
+		const candidate = artistViewPageState(next);
+		if (!preflightLibraryPageState(candidate) || pushLibraryPageState(candidate) === 'refused') return;
+		scopeScrollTops.set(listScrollKey(), pane?.scrollTop ?? 0);
+		resetDrill();
+		scope = 'artists';
+		artistView = next;
+		filterText = '';
+		railTarget = null;
+		sortOpen = false;
+		drillNotice = prefsStore.setArtistView(next) ? null : 'This browser could not save your artist-view preference.';
+		restorePaneScrollTop(scopeScrollTops.get(listScrollKey()) ?? 0);
+	}
+
+	function hrefForCreditGroup(group: AlbumArtistGroup): string | null {
+		try { return encodeLibraryRoute({ kind: 'credit-group', selector: group.selector }); }
+		catch { return null; }
+	}
+
+	function openCreditGroup(group: AlbumArtistGroup): void {
+		if (!getSocketClient()?.connected || roots.phase !== 'ready' || !albumArtistGroups.includes(group)) return;
+		const candidate = artistViewPageState('album-artists', group.selector);
+		if (!preflightLibraryPageState(candidate)) return;
+		const result = pushLibraryPageState(candidate);
+		if (result === 'refused') return;
+		creditReturnScrollTop = pane?.scrollTop ?? 0;
+		scopeScrollTops.set(listScrollKey(), creditReturnScrollTop);
+		resetDrill();
+		scope = 'artists';
+		artistView = 'album-artists';
+		albumCredit = group.selector;
+		creditEntryRelationship = result === 'pushed' ? 'owned' : 'restored';
+		railTarget = null;
+		sortOpen = false;
+		drillNotice = null;
+		restorePaneScrollTop(scopeScrollTops.get(listScrollKey()) ?? 0);
+	}
+
+	function openCreditAlbum(entry: LibraryAlbumEntry): void {
+		if (roots.phase !== 'ready' || !getSocketClient()?.connected ||
+			!selectedCreditGroup?.albums.includes(entry) || entry.liveRef?.generation !== roots.generation) return;
+		openLiveAlbum(entry);
+	}
+
+	function backFromCreditGroup(): void {
+		scopeScrollTops.set(listScrollKey(), pane?.scrollTop ?? 0);
+		if (creditEntryRelationship === 'owned') {
+			pendingPopReturnScrollTop = creditReturnScrollTop;
+			window.history.back();
+			return;
+		}
+		const parent = artistViewPageState('album-artists');
+		if (replaceLibraryPageState(parent) === 'refused') return;
+		albumCredit = null;
+		creditEntryRelationship = 'transient';
+		railTarget = null;
+		sortOpen = false;
+		restorePaneScrollTop(scopeScrollTops.get(listScrollKey()) ?? 0);
 	}
 
 	function replaceRestoredItemWithParent(): boolean {
@@ -1652,6 +1887,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		const shouldReturnToPalette = returnToPalette;
 		if (shouldReturnToPalette) {
 			resetItemPage(false);
+			restorePaletteArtistListReturnContext();
 			returnToPalette = false;
 			selectedSong = null;
 			resetSongRelationship();
@@ -1997,13 +2233,24 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	}
 
 	function setScope(next: UnifiedLibraryScope): void {
+		const nextArtistView = next === 'artists' ? prefs.artistView : 'all-artists';
+		const destination = buildUnifiedLibraryPageState({
+			scope: next, artistView: nextArtistView, albumCredit: null,
+			collectionDrill: null, itemTarget: null, filterText: '', density: prefs.density,
+			surpriseSeed: next === 'surprise' ? surpriseSeed + 1 : null,
+			...(nextArtistView === 'album-artists' ? {} : { browseHistory: browseState.snapshot })
+		});
+		if (!preflightLibraryPageState(destination)) return;
+		if (next !== 'browse' && pushLibraryPageState(destination) === 'refused') return;
 		browseActionController.reset();
 		browseActionFromPalette = false;
 		browseFavoriteStatus = null;
 		favoritesStatus = null;
-		if (next === 'surprise' || (next === 'albums' && prefs.sorts.albums === 'shuffle')) {
-			shuffleSeed += 1;
-		}
+		if (next === 'surprise') surpriseSeed += 1;
+		// Re-selecting the active Shuffle chip explicitly requests a new order.
+		// Returning from another scope or item page keeps the prepared order.
+		if (next === 'albums' && scope === next && itemTarget === null && !creditGroupActive &&
+			prefs.sorts.albums === 'shuffle') albumShuffleSeed += 1;
 		if (returnToPalette) {
 			returnToPalette = false;
 			paletteQuery = '';
@@ -2022,13 +2269,14 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		// itself is necessarily made from the top — honestly nothing to restore.
 		if (!filterText) {
 			const leavingTop = itemTarget !== null ? itemReturnScrollTop : (pane?.scrollTop ?? 0);
-			scopeScrollTops.set(scope, leavingTop);
+			scopeScrollTops.set(listScrollKey(), leavingTop);
 		}
-		const restoreTop = scopeScrollTops.get(next) ?? 0;
+		const restoreTop = scopeScrollTops.get(listScrollKey(next, nextArtistView, null)) ?? 0;
 		scope = next;
 		railTarget = null;
 		filterText = '';
 		resetDrill();
+		artistView = nextArtistView;
 		// Opening a live scope re-reads its root: the plan's scope-activation
 		// trigger (`.agents/plans/library-live-view.md`, refresh contract). It is
 		// the cheap confirm when nothing moved, and it is how a reader who came
@@ -2049,7 +2297,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			);
 			return;
 		}
-		pushUnifiedSemanticState();
 	}
 
 	function activateFavorite(favorite: FavoriteEntry): void {
@@ -2139,6 +2386,10 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 
 	function openPalette(seedText = ''): void {
 		if (!resumed) return;
+		if (paletteArtistListReturnContext !== null) {
+			resetItemPage(false);
+			restorePaletteArtistListReturnContext();
+		}
 		browseActionController.reset();
 		browseActionFromPalette = false;
 		browseFavoriteStatus = null;
@@ -2676,7 +2927,11 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		if (!sortMenu) return;
 		// A persisted rail target indexes the previous ordering; drop it.
 		railTarget = null;
-		prefsStore.setSort(scope as SortableUnifiedScope, value);
+		if (value === 'shuffle') {
+			if (scope === 'albums' && !creditGroupActive) albumShuffleSeed += 1;
+			else shuffleSeed += 1;
+		}
+		prefsStore.setSort(creditGroupActive ? 'artist' : scope as SortableUnifiedScope, value);
 	}
 
 	function setLiveCollectionAlbumSort(value: string): void {
@@ -2859,6 +3114,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	});
 
 	function resumeUnified(activation: CommittedLibraryModeActivation | null = null): void {
+		discardPaletteArtistListReturnContext();
 		lifecycleGeneration += 1;
 		activationGeneration = lifecycleGeneration;
 		const pageState = activation?.pageState;
@@ -2868,11 +3124,14 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		let restoredOriginName: string | null = null;
 		if (pageState && pageState.libraryView === 'unified') {
 			scope = pageState.snapshot.scope;
+			artistView = pageState.snapshot.artistView;
+			albumCredit = pageState.snapshot.albumCredit;
+			creditEntryRelationship = albumCredit === null ? 'transient' : 'restored';
 			browseController.reset(pageState.snapshot.browseHistory);
 			restoredItem = pageState.snapshot.itemTarget;
 			restoredDetail = pageState.snapshot.itemDetail;
 			restoredOriginName = pageState.snapshot.itemOriginName;
-			shuffleSeed = pageState.snapshot.surpriseSeed ?? 0;
+			surpriseSeed = pageState.snapshot.surpriseSeed ?? surpriseSeed;
 			const restoredDensity = pageState.snapshot.density;
 			if (restoredDensity !== null && restoredDensity !== prefs.density) {
 				prefsStore.setDensity(restoredDensity);
@@ -2883,6 +3142,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			filterText = pageState.snapshot.filterText;
 		} else {
 			filterText = '';
+			artistView = scope === 'artists' ? prefs.artistView : 'all-artists';
+			albumCredit = null;
 			browseController.reset();
 		}
 		const connectedBeforeClaim = Boolean(getSocketClient()?.connected);
@@ -2939,6 +3200,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	}
 
 	function suspendUnified(): void {
+		discardPaletteArtistListReturnContext();
 		// Synchronous: invalidate generations, drop in-flight index work,
 		// cancel album-action and library-album operations, release the
 		// claim (plan §3.2 slices 4 and 6).
@@ -2961,7 +3223,12 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		composersStore.reset();
 		classicSearchOwnerGeneration += 1;
 		itemPageController.close();
+		livePageController.reset();
+		clearTrackChildAnchor();
 		itemTarget = null;
+		albumCredit = null;
+		artistView = 'all-artists';
+		creditEntryRelationship = 'transient';
 		legacyItemRoute = null;
 		itemOriginName = null;
 		itemEntryRelationship = 'transient';
@@ -3004,6 +3271,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		if (!unregister) resumeUnified(activationContext?.committedActivation?.() ?? null);
 		return () => {
 			suspendUnified();
+			genrePreviewController.dispose();
 			unregister?.();
 			unregisterDensityRequest();
 		};
@@ -3150,6 +3418,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	     pages use for the collection host: Back re-surfaces the exact
 	     prior context, transient state intact. -->
 	<div class="body" hidden={paletteOpen && selectedSong !== null}>
+		<div class="library-index-slot">
 		{#if railVisible}
 			<nav class="rail" aria-label="A to Z index" data-testid="unified-rail">
 				{#each railLetterEntries(railBuckets) as entry (entry.letter)}
@@ -3165,13 +3434,15 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 				{/each}
 			</nav>
 		{/if}
+		</div>
 		<div
 			class="pane u-main"
 			data-testid="unified-pane"
+			data-library-scroll-pane
 			data-scope={scope}
 			bind:this={pane}
 		>
-			<nav class="scopes" aria-label="Library scope">
+			<nav class="scopes" aria-label="Library scope" use:measureLibraryChrome={'scopes'}>
 				{#each scopeChips as chip (chip.id)}
 					<button
 						type="button"
@@ -3280,6 +3551,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 									sorts={viewSorts}
 									randomSeed={shuffleSeed}
 									groupAlbums={false}
+									layoutRevision={prefs.density}
 									railTarget={null}
 									genres={$genresStore}
 									recent={$recentStore}
@@ -3309,15 +3581,24 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 						sorts={liveCollectionSorts}
 						randomSeed={shuffleSeed}
 						onSetAlbumSort={setLiveCollectionAlbumSort}
+						genrePreviews={genrePreviews}
+						density={prefs.density}
+						onPreviewCapacity={capacity => genrePreviewController.setCapacity(capacity)}
+						onRetryPreview={retryGenrePreview}
+						onOpenPreview={openGenrePreviewRow}
+						hrefForPreview={hrefForGenrePreviewRow}
 					/>
 				{/if}
-				<!-- The collection context stays MOUNTED but hidden under an
-				     open item page, so Back returns to the exact invoking
-				     collection with its transient view state (tabs, loaded
-				     data) intact (§4.2). -->
-				<div class="collection-host" hidden={itemTarget !== null}>
+
+
+			{:else}
+				<p class="status">Idle.</p>
+			{/if}
+			{#if resumed && roots.phase === 'ready'}
+				<RetainedLibraryPanel active={itemTarget === null && scope !== 'browse' && scope !== 'favorites'}
+					revision={[roots.generation, prefs.density]} notifyChrome>
 				{#if filterText}
-					<div class="ctx">
+					<div class="ctx library-list-toolbar" use:measureLibraryChrome={'toolbar'}>
 						<button
 							type="button"
 							class="back"
@@ -3365,18 +3646,33 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 							</div>
 						{/if}
 					{/if}
-				{:else}
+				{/if}
+				<RetainedLibraryPanel active={!filterText} revision={[roots.generation, prefs.density]} notifyChrome>
 					{#if drillNotice}
 						<p class="notice" data-testid="unified-drill-notice">{drillNotice}</p>
 					{/if}
-					<div class="ctx">
-						<h2 tabindex="-1">{ALL_SCOPE_CHIPS.find((chip) => chip.id === scope)?.label ?? 'Library'}</h2>
+					<div class="ctx library-list-toolbar" use:measureLibraryChrome={'toolbar'}>
+						{#if creditGroupActive}
+							<button type="button" class="back" data-testid="unified-credit-back" onclick={backFromCreditGroup}>← Album artists</button>
+						{/if}
+						<h2 tabindex="-1" data-testid="unified-list-heading">{creditGroupActive && albumCredit !== null
+							? albumCreditLabel(albumCredit) : ALL_SCOPE_CHIPS.find((chip) => chip.id === scope)?.label ?? 'Library'}</h2>
 						{#if scope !== 'most-played'}
 							<span class="n mono" data-testid="unified-summary">
 								<!-- No truncation notice: Roon's roots are read whole or not at
 								     all, so a partial listing is never published. -->
 								{scopeSummary}
 							</span>
+						{/if}
+						{#if scope === 'artists' && albumCredit === null}
+							<div class="artist-view-switch" role="group" aria-label="Artist list">
+								<button type="button" class:on={artistView === 'album-artists'}
+									aria-pressed={artistView === 'album-artists'} data-testid="unified-artist-view-album-artists"
+									onclick={() => changeArtistView('album-artists')}>Album artists</button>
+								<button type="button" class:on={artistView === 'all-artists'}
+									aria-pressed={artistView === 'all-artists'} data-testid="unified-artist-view-all-artists"
+									onclick={() => changeArtistView('all-artists')}>All artists</button>
+							</div>
 						{/if}
 						{#if sortMenu}
 							<div class="sortc-wrap" bind:this={collectionSortWrap}>
@@ -3415,28 +3711,34 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 							</div>
 						{/if}
 					</div>
-					{#key `${scope}:${shuffleSeed}`}
-						<UnifiedScopeViews
-							{scope}
-							artists={listArtists}
-							albums={listAlbums}
-							sorts={viewSorts}
-							randomSeed={shuffleSeed}
-							{railTarget}
-							genres={$genresStore}
-							recent={$recentStore}
-						onDrill={(target) => void openDrill(target)}
-						onOpenLiveArtist={openLiveArtist}
-						onOpenLiveAlbum={openLiveAlbum}
-						{hrefForArtist}
-						{hrefForAlbum}
-						{hrefForDrill}
-						/>
-					{/key}
-				{/if}
-				</div>
-			{:else}
-				<p class="status">Idle.</p>
+					{#if creditGroupActive && albumCredit?.kind === 'uncredited'}
+						<p class="hint" data-testid="unified-credit-description">Albums without an artist credit</p>
+					{/if}
+					{#if creditGroupActive && selectedCreditGroup === null}
+						<p class="notice" data-testid="unified-credit-missing">No albums currently have this album-artist credit.</p>
+					{/if}
+					<RetainedLibraryPanel active={scope === 'artists' && artistView === 'album-artists' && albumCredit === null}
+						revision={[orderedCreditGroups, prefs.density]}>
+						<UnifiedAlbumArtistList groups={orderedCreditGroups} grouped={prefs.sorts.artists === 'az' || prefs.sorts.artists === 'za'}
+							{railTarget} hrefForGroup={hrefForCreditGroup} onOpen={openCreditGroup} />
+					</RetainedLibraryPanel>
+					<RetainedLibraryPanel active={!creditGroupActive && !(scope === 'artists' && artistView === 'album-artists')}
+						revision={roots.generation}>
+						<UnifiedScopeViews {scope} artists={listArtists} albums={listAlbums}
+							sorts={viewSorts} randomSeed={albumShuffleSeed} {surpriseSeed} {railTarget}
+							genres={$genresStore} recent={$recentStore}
+							onDrill={(target) => void openDrill(target)} onOpenLiveArtist={openLiveArtist}
+							onOpenLiveAlbum={openLiveAlbum} {hrefForArtist} hrefForAlbum={hrefForRootAlbum} {hrefForDrill}
+							retainScopes layoutRevision={prefs.density} />
+					</RetainedLibraryPanel>
+					{#if creditGroupActive && selectedCreditGroup !== null}
+						<UnifiedScopeViews scope="albums" artists={listArtists} albums={creditAlbums}
+							sorts={creditViewSorts} randomSeed={shuffleSeed} {railTarget}
+							genres={$genresStore} recent={$recentStore} onOpenLiveAlbum={openCreditAlbum}
+							hrefForAlbum={hrefForCreditAlbum} layoutRevision={prefs.density} />
+					{/if}
+				</RetainedLibraryPanel>
+				</RetainedLibraryPanel>
 			{/if}
 		</div>
 	</div>

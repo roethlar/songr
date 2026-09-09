@@ -26,6 +26,9 @@ function stubClient(): CoreClientStub {
         displayVersion: "2.0",
       }),
       switchCore,
+      getDiscoveryStatus: () => ({ cores: [{
+        id: "discovered-a", displayName: "Core A", host: "203.0.113.10", phase: "connecting",
+      }] }),
     } as unknown as RoonClient,
     switchCore,
   };
@@ -69,6 +72,15 @@ async function request(
 }
 
 describe("core HTTP routes", () => {
+  it("hydrates pre-authorization discovery independently of paired-Core status", async () => {
+    const { client } = stubClient();
+    const { response, body } = await request(client, "/discovery");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(body).toEqual({ cores: [{
+      id: "discovered-a", displayName: "Core A", host: "203.0.113.10", phase: "connecting",
+    }] });
+  });
   it("keeps reporting the current Core", async () => {
     const { client } = stubClient();
     const { response, body } = await request(client);

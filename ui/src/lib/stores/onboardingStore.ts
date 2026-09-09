@@ -21,8 +21,8 @@ export const onboardingStatusStore = {
  * than an optimisation. `everPaired` flips false → true the instant pairing
  * completes; re-reading it — on a reconnect, say, the way
  * `initializeStores` re-reads everything — would yank the flow off the
- * screen mid-run, between "your Core is connected" and the local-playback
- * step the user has not answered yet. The first-run decision is made once
+ * screen before it completes and offers the optional local-playback note.
+ * The first-run decision is made once
  * per page load, from the state the page loaded into.
  */
 let settled = false;

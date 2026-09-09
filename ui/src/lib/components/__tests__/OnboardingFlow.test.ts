@@ -3,20 +3,17 @@ import userEvent from '@testing-library/user-event';
 import { tick } from 'svelte';
 import { get } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
 import type { OnboardingStatusResponse, Zone } from '@shared/types';
+import { CORE_DISCOVERY_WAIT_MS, type DiscoveredCore } from '@shared/coreDiscovery';
 
-vi.mock('$lib/api/client', async (importOriginal) => {
-	const actual = await importOriginal<typeof import('$lib/api/client')>();
-	return {
-		...actual,
-		fetchOnboardingStatus: vi.fn(),
-		fetchZones: vi.fn()
-	};
-});
+vi.mock('$lib/api/client', async (importOriginal) => ({
+	...await importOriginal<typeof import('$lib/api/client')>(),
+	fetchOnboardingStatus: vi.fn(), fetchCoreDiscovery: vi.fn(), fetchZones: vi.fn()
+}));
 
-import { fetchOnboardingStatus, fetchZones } from '$lib/api/client';
+import { fetchOnboardingStatus, fetchCoreDiscovery, fetchZones } from '$lib/api/client';
 import { setCoreStatus } from '$lib/stores/coreStore';
+import { resetCoreDiscovery, setCoreDiscovery } from '$lib/stores/coreDiscoveryStore';
 import { resetOnboardingStatus } from '$lib/stores/onboardingStore';
 import { selectedZoneStore, setSelectedZone } from '$lib/stores/selectedZoneStore';
 import { setSocketStatus } from '$lib/stores/socketStatusStore';
@@ -24,268 +21,177 @@ import { setZonesSnapshot } from '$lib/stores/zonesStore';
 import OnboardingFlow from '../OnboardingFlow.svelte';
 
 const LOCAL_HOST = 'studio-desk';
-
-function zone(overrides: Partial<Zone> & Pick<Zone, 'zone_id' | 'display_name'>): Zone {
-	return {
-		state: 'stopped',
-		is_play_allowed: true,
-		is_pause_allowed: false,
-		is_previous_allowed: false,
-		is_next_allowed: false,
-		is_seek_allowed: false,
-		outputs: [],
-		...overrides
-	} as Zone;
-}
+const candidate: DiscoveredCore = {
+	id: 'core-a', displayName: 'Studio Core', host: '203.0.113.10', phase: 'connecting'
+};
+const localZone = {
+	zone_id: 'z-local', display_name: 'Studio Desk', state: 'stopped',
+	outputs: [{ output_id: 'o-local', display_name: LOCAL_HOST }]
+} as Zone;
 
 function status(overrides: Partial<OnboardingStatusResponse> = {}): OnboardingStatusResponse {
 	return { everPaired: false, hostname: LOCAL_HOST, ...overrides };
 }
-
-/**
- * `waitFor(() => expect(...).toBeNull())` is worthless for "it must STAY
- * gone": it succeeds on its first synchronous poll, before Svelte has
- * flushed the change that would bring the element back. Flush first, then
- * assert once.
- */
-async function settle(): Promise<void> {
-	await tick();
-	await tick();
+async function settle(): Promise<void> { await tick(); await tick(); }
+async function start(): Promise<void> {
+	render(OnboardingFlow);
+	await screen.findByTestId('onboarding-flow');
+	await settle();
+}
+async function pair(): Promise<void> {
+	setCoreStatus({ status: 'paired', core: { id: 'core-a', displayName: 'Studio Core', displayVersion: '2' } });
+	await settle();
 }
 
 beforeEach(() => {
-	vi.mocked(fetchOnboardingStatus).mockReset();
+	vi.mocked(fetchOnboardingStatus).mockReset().mockResolvedValue(status());
+	vi.mocked(fetchCoreDiscovery).mockReset().mockResolvedValue({ cores: [] });
 	vi.mocked(fetchZones).mockReset().mockResolvedValue([]);
-	resetOnboardingStatus();
+	resetOnboardingStatus(); resetCoreDiscovery();
 	setCoreStatus({ status: 'discovering' });
-	setZonesSnapshot([]);
-	setSelectedZone('');
-	setSocketStatus('connected');
+	setZonesSnapshot([]); setSelectedZone(''); setSocketStatus('connected');
 });
+afterEach(() => { vi.useRealTimers(); });
 
-afterEach(() => {
-	vi.useRealTimers();
-});
-
-describe('OnboardingFlow — when it appears', () => {
-	it('renders the Connect step on an install that has never paired a Core', async () => {
-		vi.mocked(fetchOnboardingStatus).mockResolvedValue(status());
-		render(OnboardingFlow);
-
-		const dialog = await screen.findByTestId('onboarding-flow');
-		expect(dialog).toHaveAttribute('data-onboarding-step', 'connect');
-		expect(dialog).toHaveAttribute('aria-modal', 'true');
-		expect(
-			screen.getByRole('heading', { name: 'Connect to your Roon Core' })
-		).toBeInTheDocument();
-		// The exact label the user has to find in Roon: the server registers
-		// as "Songr (<host>)" so several instances paired to one Core stay
-		// tellable-apart (issue #1 follow-up — identical entries had the
-		// reporter and the owner enabling the wrong one).
-		expect(screen.getByText(`Songr (${LOCAL_HOST})`)).toBeInTheDocument();
-		expect(screen.getByTestId('onboarding-core-status')).toHaveTextContent(
-			/looking for your roon core/i
-		);
+describe('OnboardingFlow — discovery and approval', () => {
+	it('searches on first run without telling the user to approve an undiscovered extension', async () => {
+		await start();
+		expect(screen.getByRole('heading', { name: 'Connect to your Roon Core' })).toBeInTheDocument();
+		expect(screen.getByTestId('onboarding-flow')).toHaveAttribute('aria-modal', 'true');
+		expect(screen.getByText(/searching your local network/i)).toBeInTheDocument();
+		expect(screen.queryByTestId('onboarding-approval-instructions')).toBeNull();
+		expect(screen.queryByText(/settings → extensions/i)).toBeNull();
 	});
 
-	it('never appears for an install that has paired before, Core reachable or not', async () => {
+	it('shows no-Core-found guidance after a bounded wait and recovers automatically', async () => {
+		vi.useFakeTimers(); render(OnboardingFlow); await settle();
+		await vi.advanceTimersByTimeAsync(CORE_DISCOVERY_WAIT_MS - 1);
+		expect(screen.queryByText(/no roon core found yet/i)).toBeNull();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(screen.getByText(/no roon core found yet/i)).toBeInTheDocument();
+		expect(screen.getByText(/a firewall such as ufw/i)).toBeInTheDocument();
+		expect(screen.getByText(/cannot determine whether a firewall/i)).toBeInTheDocument();
+		expect(screen.queryByTestId('onboarding-approval-instructions')).toBeNull();
+		setCoreDiscovery({ cores: [candidate] }); await settle();
+		expect(screen.getByText('Studio Core')).toBeInTheDocument();
+		expect(screen.getByText('203.0.113.10')).toBeInTheDocument();
+		expect(screen.getByText(/discovered · connecting/i)).toBeInTheDocument();
+		expect(screen.queryByText(/no roon core found yet/i)).toBeNull();
+		expect(screen.queryByTestId('onboarding-approval-instructions')).toBeNull();
+	});
+
+	it('shows approval instructions only for a reachable Core with registration submitted', async () => {
+		await start();
+		setCoreDiscovery({ cores: [{ ...candidate, phase: 'registering' }] }); await settle();
+		expect(screen.getByText(/reading core identity/i)).toBeInTheDocument();
+		expect(screen.queryByTestId('onboarding-approval-instructions')).toBeNull();
+		setCoreDiscovery({ cores: [{ ...candidate, phase: 'awaiting-approval' }] }); await settle();
+		expect(screen.getByTestId('onboarding-approval-instructions')).toHaveTextContent(`Songr (${LOCAL_HOST})`);
+		expect(screen.getByText(/waiting for approval in roon/i)).toBeInTheDocument();
+		setCoreDiscovery({ cores: [{ ...candidate, phase: 'failed', detail: 'Connecting to the Core failed (ECONNREFUSED).' }] }); await settle();
+		expect(screen.queryByTestId('onboarding-approval-instructions')).toBeNull();
+		expect(screen.getByText(/ECONNREFUSED/)).toBeInTheDocument();
+	});
+
+	it('shows independent Core statuses, including failure alongside pending approval', async () => {
+		await start();
+		setCoreDiscovery({ cores: [
+			{ ...candidate, phase: 'failed', detail: 'Reading the Core identity timed out.' },
+			{ ...candidate, id: 'core-b', displayName: 'Other Core', phase: 'awaiting-approval' }
+		] }); await settle();
+		expect(screen.getAllByRole('listitem')).toHaveLength(2);
+		expect(screen.getByText(/identity timed out/)).toBeInTheDocument();
+		expect(screen.getByText('Other Core')).toBeInTheDocument();
+		expect(screen.getByTestId('onboarding-approval-instructions')).toBeInTheDocument();
+	});
+
+	it('hides stale approval while disconnected and refreshes on reconnect', async () => {
+		await start();
+		setCoreDiscovery({ cores: [{ ...candidate, phase: 'awaiting-approval' }] }); await settle();
+		setSocketStatus('connecting'); await settle();
+		expect(screen.getByTestId('onboarding-core-status')).toHaveTextContent(/reconnecting/i);
+		expect(screen.queryByTestId('onboarding-approval-instructions')).toBeNull();
+		setSocketStatus('connected'); await settle();
+		expect(fetchCoreDiscovery).toHaveBeenCalledTimes(2);
+		expect(screen.queryByTestId('onboarding-approval-instructions')).toBeNull();
+	});
+
+	it('does not mistake an unavailable discovery snapshot for no Core found', async () => {
+		vi.useFakeTimers();
+		vi.mocked(fetchCoreDiscovery).mockRejectedValue(new Error('unavailable'));
+		render(OnboardingFlow); await settle();
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(screen.getByTestId('onboarding-core-status')).toHaveTextContent(/waiting for discovery status/i);
+		expect(screen.queryByText(/no roon core found yet/i)).toBeNull();
+	});
+});
+
+describe('OnboardingFlow — completion and optional local playback', () => {
+	it('removes the blocking dialog immediately on pairing and offers an optional Bridge note', async () => {
+		await start(); await pair();
+		expect(screen.queryByRole('dialog')).toBeNull();
+		expect(screen.queryByTestId('onboarding-flow')).toBeNull();
+		expect(screen.getByTestId('onboarding-bridge-note')).not.toHaveAttribute('aria-modal');
+		expect(screen.getByText(/Songr is ready to use/)).toBeInTheDocument();
+		expect(screen.getByText(/download and install/)).toHaveTextContent('Settings → Audio');
+		expect(screen.getByRole('link', { name: /get roon bridge/i })).toHaveAttribute('href', 'https://roon.app/downloads');
+		expect(screen.getByRole('link', { name: /get roon bridge/i })).toHaveAttribute('rel', expect.stringContaining('noopener'));
+		expect(fetchZones).not.toHaveBeenCalled();
+	});
+
+	it('needs no hostname or zone discovery to complete', async () => {
+		vi.mocked(fetchOnboardingStatus).mockResolvedValue(status({ hostname: '' }));
+		await start(); await pair();
+		expect(screen.queryByRole('dialog')).toBeNull();
+		expect(screen.getByTestId('onboarding-bridge-note')).toBeInTheDocument();
+	});
+
+	it('selects an already-known local output once and omits the Bridge note', async () => {
+		setZonesSnapshot([localZone]); await start(); await pair();
+		expect(get(selectedZoneStore)).toBe('z-local');
+		expect(screen.queryByTestId('onboarding-bridge-note')).toBeNull();
+		setSelectedZone('another-zone'); setZonesSnapshot([]); setCoreStatus({ status: 'unpaired' }); await settle();
+		expect(screen.queryByRole('dialog')).toBeNull();
+		expect(get(selectedZoneStore)).toBe('another-zone');
+	});
+
+	it('dismisses the note without reopening setup or stealing a later zone selection', async () => {
+		await start(); await pair();
+		await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+		setSelectedZone('another-zone'); setZonesSnapshot([localZone]); setCoreStatus({ status: 'discovering' }); await settle();
+		expect(screen.queryByTestId('onboarding-bridge-note')).toBeNull();
+		expect(screen.queryByRole('dialog')).toBeNull();
+		expect(get(selectedZoneStore)).toBe('another-zone');
+	});
+
+	it('dismisses the note when a Bridge arrives without polling or changing selection', async () => {
+		await start(); await pair(); vi.useFakeTimers();
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(fetchZones).not.toHaveBeenCalled();
+		setSelectedZone('another-zone'); setZonesSnapshot([localZone]); await settle();
+		expect(screen.queryByTestId('onboarding-bridge-note')).toBeNull();
+		expect(get(selectedZoneStore)).toBe('another-zone');
+	});
+});
+
+describe('OnboardingFlow — established-install and palette guards', () => {
+	it('never appears for an established install even when its Core is unreachable', async () => {
 		vi.mocked(fetchOnboardingStatus).mockResolvedValue(status({ everPaired: true }));
 		render(OnboardingFlow);
-
-		await waitFor(() => expect(fetchOnboardingStatus).toHaveBeenCalled());
-		// A paired install whose Core is off reports `discovering`, exactly
-		// like a first run. It must still see nothing.
-		setCoreStatus({ status: 'discovering' });
-		await waitFor(() => expect(screen.queryByTestId('onboarding-flow')).toBeNull());
-
-		setCoreStatus({ status: 'unpaired' });
-		await waitFor(() => expect(screen.queryByTestId('onboarding-flow')).toBeNull());
+		await waitFor(() => expect(fetchOnboardingStatus).toHaveBeenCalled()); await settle();
+		expect(screen.queryByRole('dialog')).toBeNull(); await pair();
+		expect(screen.queryByTestId('onboarding-bridge-note')).toBeNull();
 	});
 
-	it('stays hidden when the first-run read fails, rather than guessing', async () => {
+	it('stays hidden when the first-run read fails', async () => {
 		vi.mocked(fetchOnboardingStatus).mockRejectedValue(new Error('offline'));
-		render(OnboardingFlow);
+		render(OnboardingFlow); await settle();
+		expect(screen.queryByRole('dialog')).toBeNull();
+	});
 
-		await waitFor(() => expect(fetchOnboardingStatus).toHaveBeenCalled());
-		expect(screen.queryByTestId('onboarding-flow')).toBeNull();
+	it('references no theme tokens so first-run text is readable before a theme exists', async () => {
+		const fs = await import('node:fs'); const path = await import('node:path');
+		const source = fs.readFileSync(path.resolve(process.cwd(), 'src/lib/components/OnboardingFlow.svelte'), 'utf8');
+		expect(source.slice(source.indexOf('<style>'))).not.toContain('var(--');
 	});
 });
-
-describe('OnboardingFlow — Connect step', () => {
-	it('reflects a lost socket and a dropped Core without leaving the step', async () => {
-		vi.mocked(fetchOnboardingStatus).mockResolvedValue(status());
-		render(OnboardingFlow);
-		await screen.findByTestId('onboarding-flow');
-
-		setSocketStatus('connecting');
-		await waitFor(() =>
-			expect(screen.getByTestId('onboarding-core-status')).toHaveTextContent(/reconnecting/i)
-		);
-
-		setSocketStatus('connected');
-		setCoreStatus({ status: 'unpaired' });
-		await waitFor(() =>
-			expect(screen.getByTestId('onboarding-core-status')).toHaveTextContent(
-				/your roon core disconnected/i
-			)
-		);
-		expect(screen.getByTestId('onboarding-flow')).toHaveAttribute(
-			'data-onboarding-step',
-			'connect'
-		);
-	});
-
-	it('advances to the local-playback step by itself when pairing lands', async () => {
-		vi.mocked(fetchOnboardingStatus).mockResolvedValue(status());
-		render(OnboardingFlow);
-		await screen.findByTestId('onboarding-flow');
-
-		setCoreStatus({
-			status: 'paired',
-			core: { id: 'core-1', displayName: 'Mock Core', displayVersion: '2.0' }
-		});
-
-		await waitFor(() =>
-			expect(screen.getByTestId('onboarding-flow')).toHaveAttribute(
-				'data-onboarding-step',
-				'local-playback'
-			)
-		);
-		expect(
-			screen.getByRole('heading', { name: 'Play to this computer' })
-		).toBeInTheDocument();
-	});
-});
-
-describe('OnboardingFlow — local playback step', () => {
-	async function reachLocalPlayback(
-		statusOverrides: Partial<OnboardingStatusResponse> = {}
-	): Promise<void> {
-		vi.mocked(fetchOnboardingStatus).mockResolvedValue(status(statusOverrides));
-		render(OnboardingFlow);
-		await screen.findByTestId('onboarding-flow');
-		setCoreStatus({
-			status: 'paired',
-			core: { id: 'core-1', displayName: 'Mock Core', displayVersion: '2.0' }
-		});
-		await waitFor(() =>
-			expect(screen.getByTestId('onboarding-flow')).toHaveAttribute(
-				'data-onboarding-step',
-				'local-playback'
-			)
-		);
-	}
-
-	it('names the zone it is waiting for and links the official downloads page', async () => {
-		await reachLocalPlayback();
-
-		expect(screen.getByTestId('onboarding-zone-status')).toHaveTextContent(LOCAL_HOST);
-		const link = screen.getByRole('link', { name: /get roon bridge/i });
-		expect(link).toHaveAttribute('href', 'https://roon.app/downloads');
-		expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
-	});
-
-	it('explains itself without a hostname instead of promising to auto-detect', async () => {
-		await reachLocalPlayback({ hostname: '' });
-
-		expect(screen.getByTestId('onboarding-zone-status')).toHaveTextContent(
-			/could not be read/i
-		);
-		expect(screen.getByRole('link', { name: /get roon bridge/i })).toBeInTheDocument();
-	});
-
-	it('closes and adopts the zone when one named after this computer appears', async () => {
-		await reachLocalPlayback();
-		expect(get(selectedZoneStore)).toBe('');
-
-		setZonesSnapshot([
-			zone({ zone_id: 'z-kitchen', display_name: 'Kitchen' }),
-			zone({
-				zone_id: 'z-local',
-				display_name: 'Kitchen + Studio Desk',
-				outputs: [
-					{ output_id: 'o-kitchen', display_name: 'Kitchen' },
-					{ output_id: 'o-local', display_name: 'Studio-Desk' }
-				]
-			})
-		]);
-
-		await waitFor(() => expect(screen.queryByTestId('onboarding-flow')).toBeNull());
-		expect(get(selectedZoneStore)).toBe('z-local');
-	});
-
-	it('skips on request and does not reopen when state changes afterwards', async () => {
-		await reachLocalPlayback();
-
-		await userEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
-		await waitFor(() => expect(screen.queryByTestId('onboarding-flow')).toBeNull());
-		expect(get(selectedZoneStore)).toBe('');
-
-		// A later Core blip, or the local zone showing up after all, must not
-		// drag the user back into a wizard they dismissed.
-		setCoreStatus({ status: 'discovering' });
-		setZonesSnapshot([zone({ zone_id: 'z-local', display_name: LOCAL_HOST, outputs: [{ output_id: 'o-local', display_name: LOCAL_HOST }] })]);
-		await settle();
-		expect(screen.queryByTestId('onboarding-flow')).toBeNull();
-		expect(get(selectedZoneStore)).toBe('');
-	});
-
-	it('does not reopen when the adopted local zone later disappears', async () => {
-		await reachLocalPlayback();
-		setZonesSnapshot([zone({ zone_id: 'z-local', display_name: LOCAL_HOST, outputs: [{ output_id: 'o-local', display_name: LOCAL_HOST }] })]);
-		await waitFor(() => expect(screen.queryByTestId('onboarding-flow')).toBeNull());
-
-		// Roon Bridge quits, the machine sleeps, the network hiccups — the
-		// zone goes away. The flow is done and must stay done.
-		setZonesSnapshot([]);
-		await settle();
-		expect(screen.queryByTestId('onboarding-flow')).toBeNull();
-	});
-
-	it('polls the zone list while the step is open and stops once it closes', async () => {
-		vi.useFakeTimers();
-		vi.mocked(fetchOnboardingStatus).mockResolvedValue(status());
-		render(OnboardingFlow);
-		await vi.waitFor(() => expect(screen.queryByTestId('onboarding-flow')).not.toBeNull());
-		setCoreStatus({
-			status: 'paired',
-			core: { id: 'core-1', displayName: 'Mock Core', displayVersion: '2.0' }
-		});
-		await vi.waitFor(() =>
-			expect(screen.getByTestId('onboarding-flow')).toHaveAttribute(
-				'data-onboarding-step',
-				'local-playback'
-			)
-		);
-
-		expect(fetchZones).not.toHaveBeenCalled();
-		await vi.advanceTimersByTimeAsync(5000);
-		expect(vi.mocked(fetchZones).mock.calls.length).toBe(1);
-
-		setZonesSnapshot([zone({ zone_id: 'z-local', display_name: LOCAL_HOST, outputs: [{ output_id: 'o-local', display_name: LOCAL_HOST }] })]);
-		await vi.waitFor(() => expect(screen.queryByTestId('onboarding-flow')).toBeNull());
-
-		const callsAtClose = vi.mocked(fetchZones).mock.calls.length;
-		await vi.advanceTimersByTimeAsync(20000);
-		expect(vi.mocked(fetchZones).mock.calls.length).toBe(callsAtClose);
-	});
-});
-
-describe('OnboardingFlow — self-contained palette', () => {
-	it('references no theme tokens: the surface must be readable before a theme exists', async () => {
-		// The scrim and panel are hardcoded dark. Inheriting var(--text) once
-		// painted near-black on black for every first run on a light-mode OS
-		// (the theme initializer follows prefers-color-scheme), making the
-		// pairing screen unreadable. Style-contract check, same technique as
-		// unifiedSurfaceStyleContract.test.ts.
-		const fs = await import('node:fs');
-		const path = await import('node:path');
-		const source = fs.readFileSync(
-			path.resolve(process.cwd(), 'src/lib/components/OnboardingFlow.svelte'),
-			'utf8'
-		);
-		const styleBlock = source.slice(source.indexOf('<style>'));
-		expect(styleBlock).not.toContain('var(--');
-	});
-});
-

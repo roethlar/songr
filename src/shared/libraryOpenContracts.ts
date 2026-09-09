@@ -192,7 +192,7 @@ export function normalizeLibraryOpenRequest(
   return ref === null ? null : { ref };
 }
 
-function normalizeRow(
+export function normalizeLibraryLevelRow(
   value: unknown,
   generation: string
 ): LibraryLevelRow | null {
@@ -276,7 +276,7 @@ export function normalizeLibraryOpenResponse(
   }
   const rows: LibraryLevelRow[] = [];
   for (const entry of raw.rows) {
-    const row = normalizeRow(entry, raw.generation);
+    const row = normalizeLibraryLevelRow(entry, raw.generation);
     if (row === null) return null;
     rows.push(row);
   }

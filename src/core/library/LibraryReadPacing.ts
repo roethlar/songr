@@ -49,8 +49,10 @@ export const LIBRARY_READ_PRESSURE_SOURCE = "library-roots" as const;
  * different size of work — one browse and a handful of loads, against about
  * sixty calls for the roots — and mixing the two latency populations would make
  * a healthy Core look strained the moment a reader stopped opening pages.
+ * Bounded previews have their own sample too: one prefix must not bias the
+ * latency population of complete levels.
  */
-export const LIBRARY_READ_CALL_KINDS = ["roots", "count", "open"] as const;
+export const LIBRARY_READ_CALL_KINDS = ["roots", "count", "open", "preview"] as const;
 
 export type LibraryReadCallKind = (typeof LIBRARY_READ_CALL_KINDS)[number];
 

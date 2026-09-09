@@ -5,11 +5,13 @@ import { AddressInfo } from "net";
 import type {
   LibraryOnDemandRoot,
   LibraryOpenOutcome,
+  LibraryPreviewOutcome,
   LibraryReadTrigger,
   LibraryRootsOutcome,
   LibrarySnapshot,
 } from "../../../../core/library/LibrarySource";
 import { normalizeLibraryOpenResponse } from "../../../../shared/libraryOpenContracts";
+import { LIBRARY_PREVIEW_CONTRACT, normalizeLibraryPreviewResponse } from "../../../../shared/libraryPreviewContracts";
 import {
   LIBRARY_ROOTS_CONTRACT,
   normalizeLibraryRootsResponse,
@@ -68,10 +70,11 @@ interface Harness {
     revalidate: jest.Mock<Promise<LibraryRootsOutcome>, [LibraryReadTrigger]>;
     open: jest.Mock<Promise<LibraryOpenOutcome>, [{ generation: string; token: string }]>;
     openRoot: jest.Mock<Promise<LibraryOpenOutcome>, [LibraryOnDemandRoot]>;
+    preview: jest.Mock<Promise<LibraryPreviewOutcome>, [{ generation: string; token: string }, number]>;
   };
 }
 
-async function serve(library?: Partial<LibraryRootsPort>): Promise<Harness> {
+async function serve(library?: Partial<LibraryRootsPort> | null): Promise<Harness> {
   const held = snapshot();
   const port = {
     current: jest.fn(() => held),
@@ -80,6 +83,7 @@ async function serve(library?: Partial<LibraryRootsPort>): Promise<Harness> {
     revalidate: jest.fn(async () => found(held)),
     open: jest.fn(async () => ({ kind: "stale" }) as LibraryOpenOutcome),
     openRoot: jest.fn(async () => ({ kind: "stale" }) as LibraryOpenOutcome),
+    preview: jest.fn(async () => ({ kind: "stale" }) as LibraryPreviewOutcome),
     ...library,
   } as Harness["port"];
   const app = express();
@@ -87,7 +91,7 @@ async function serve(library?: Partial<LibraryRootsPort>): Promise<Harness> {
   // (`src/server/http/app.ts`); a harness that did not would be testing a
   // route that does not exist.
   app.use(express.json({ limit: "32kb" }));
-  app.use("/api/library", createLibraryRouter(port as unknown as LibraryRootsPort));
+  app.use("/api/library", createLibraryRouter(library === null ? undefined : port as unknown as LibraryRootsPort));
   const server: Server = await new Promise((resolve) => {
     const listener = app.listen(0, () => resolve(listener));
   });
@@ -101,6 +105,73 @@ async function serve(library?: Partial<LibraryRootsPort>): Promise<Harness> {
       }),
   };
 }
+
+describe("POST /api/library/preview", () => {
+  const ref = { generation: GENERATION, token: "section-albums" };
+  const prefix: LibraryPreviewOutcome = { kind: "preview", preview: {
+    generation: GENERATION, title: "Albums", subtitle: "17 Albums", totalCount: 17, limit: 1,
+    rows: [{ ref: { generation: GENERATION, token: "album-1" }, title: "Invented Album", kind: "album" }]
+  } };
+  function post(url: string, body: unknown = { ref, limit: 1 }) {
+    return fetch(`${url}/api/library/preview`, { method: "POST",
+      headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  }
+  it("serves a prefix with its original total, not a shortened complete level", async () => {
+    const app = await serve({ preview: jest.fn(async () => prefix) });
+    try {
+      const response = await post(app.url);
+      expect(response.status).toBe(200);
+      expect(normalizeLibraryPreviewResponse(await response.json(), 1)).toEqual({
+        contract: LIBRARY_PREVIEW_CONTRACT, ...prefix.preview, kind: "preview"
+      });
+      expect(app.port.preview).toHaveBeenCalledWith(ref, 1);
+      expect(app.port.open).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+  it.each([
+    [{ kind: "stale" }, 409],
+    [{ kind: "unsupported", message: "Wrong section." }, 400],
+    [{ kind: "unavailable", reason: "no-core", message: "No Core." }, 503],
+    [{ kind: "unavailable", reason: "core-under-pressure", message: "Resting." }, 503],
+    [{ kind: "unavailable", reason: "read-failed", message: "Read failed." }, 503]
+  ] as const)("preserves outcome semantics for %j", async (outcome, status) => {
+    const app = await serve({ preview: jest.fn(async () => outcome) });
+    try {
+      const response = await post(app.url);
+      expect(response.status).toBe(status);
+      expect(normalizeLibraryPreviewResponse(await response.json(), 1)?.kind).toBe(status === 409 ? "stale" : "unavailable");
+    } finally { await app.close(); }
+  });
+  it("rejects malformed, expanded or overbound requests before consulting the source", async () => {
+    const app = await serve();
+    try {
+      for (const body of [{}, { ref }, { ref, limit: 0 }, { ref, limit: 101 }, { ref, limit: 1.5 },
+        { ref, limit: "1" }, { ref, limit: 1, hierarchy: "genres" },
+        { ref: { ...ref, itemKey: "raw" }, limit: 1 }, { ref: { token: "x" }, limit: 1 }]) {
+        const response = await post(app.url, body);
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ contract: LIBRARY_PREVIEW_CONTRACT });
+      }
+      expect(app.port.preview).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+  it("rechecks current generation after the awaited source response", async () => {
+    const app = await serve({ preview: jest.fn(async () => prefix), current: jest.fn(() => snapshot("new")) });
+    try {
+      const response = await post(app.url);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ contract: LIBRARY_PREVIEW_CONTRACT, kind: "stale" });
+    } finally { await app.close(); }
+  });
+  it("no-port builds return the preview contract instead of SPA HTML", async () => {
+    const app = await serve(null);
+    try {
+      const response = await post(app.url);
+      expect(response.status).toBe(503);
+      expect(normalizeLibraryPreviewResponse(await response.json(), 1)).toMatchObject({ kind: "unavailable", reason: "no-core" });
+    } finally { await app.close(); }
+  });
+});
 
 describe("GET /api/library/roots", () => {
   it("serves the snapshot with references and Roon's own text", async () => {

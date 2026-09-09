@@ -1,13 +1,14 @@
 <script lang="ts">
 	import { onMount, setContext } from 'svelte';
+	import { get } from 'svelte/store';
+	import { unifiedLibraryPrefsStore } from '$lib/stores/unifiedLibraryPrefsStore';
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
-		buildUnifiedRootPageState,
 		type LibraryViewActivationCause
 	} from '$lib/libraryPageState';
 	import { decodeLibraryRoute, encodeLibraryRoute } from '$lib/libraryRoute';
-	import { libraryPageStateFromRoute } from '$lib/libraryRouteState';
+	import { libraryEntryPageState } from '$lib/libraryRouteState';
 	import {
 		clearPendingLibraryPageStateWrite,
 		consumeSelfAuthoredLibraryPageState,
@@ -24,8 +25,7 @@
 
 	let mounted = false;
 	function pageStateFromUrl(url: URL = page.url) {
-		const route = decodeLibraryRoute(url);
-		return route === null ? buildUnifiedRootPageState() : libraryPageStateFromRoute(route);
+		return libraryEntryPageState(url, get(unifiedLibraryPrefsStore).artistView);
 	}
 
 	function currentLibraryUrl(): URL {

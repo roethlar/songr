@@ -1,4 +1,6 @@
 <script lang="ts">
+	import RetainedLibraryPanel from './RetainedLibraryPanel.svelte';
+	import { prepareLibraryGrid } from '$lib/preparedLibraryGrid';
 	import type { UnifiedLibraryDrillTarget, UnifiedLibraryScope } from '$lib/libraryPageState';
 	import { imageUrl } from '$lib/imageUrl';
 	import { shouldHandleLibraryAnchorClick } from '$lib/libraryPageNavigation';
@@ -45,7 +47,10 @@
 			readonly genres: UnifiedGenresSort;
 		};
 		randomSeed?: number;
+		surpriseSeed?: number;
 		groupAlbums?: boolean;
+		retainScopes?: boolean;
+		layoutRevision?: unknown;
 		railTarget: LetterBucket | null;
 		genres: NamedCountsState;
 		recent: RecentlyPlayedState;
@@ -73,7 +78,10 @@
 		albums,
 		sorts,
 		randomSeed = 1,
+		surpriseSeed = randomSeed,
 		groupAlbums = true,
+		retainScopes = false,
+		layoutRevision,
 		railTarget,
 		genres,
 		recent,
@@ -163,7 +171,7 @@
 		live: entry
 	});
 
-	const albumsSorted = $derived(sortAlbums(albums, sorts.albums, randomSeed));
+	const albumsSorted = $derived(sortAlbums(albums, sorts.albums, sorts.albums === 'shuffle' ? randomSeed : 0));
 	const albumGroups = $derived.by((): Group<TileItem>[] | null => {
 		if (!groupAlbums) return null;
 		if (sorts.albums === 'az' || sorts.albums === 'za')
@@ -180,7 +188,7 @@
 	const albumsFlat = $derived(albumsSorted.map(albumTile));
 
 	const surpriseTiles = $derived(
-		seededShuffle(albums, randomSeed).slice(0, SURPRISE_SAMPLE).map(albumTile)
+		seededShuffle(albums, surpriseSeed).slice(0, SURPRISE_SAMPLE).map(albumTile)
 	);
 
 	/** Slice 5: library-added timestamp descending from the catalog snapshot, no live reads. */
@@ -226,12 +234,13 @@
 
 	$effect(() => {
 		if (!railTarget || !scroller) return;
-		const target = scroller.querySelector<HTMLElement>(`[data-grp="${railTarget.letter}"]`);
+		if (scroller.closest('[data-retained-library-panel][aria-hidden="true"]')) return;
+		const target = scroller.querySelector<HTMLElement>(`[data-scope-panel="${scope}"] [data-grp="${railTarget.letter}"], :scope > .grp[data-grp="${railTarget.letter}"]`);
 		if (target && typeof target.scrollIntoView === 'function')
 			target.scrollIntoView({ block: 'start' });
 	});
 
-	const status = $derived.by((): string | null => {
+	function scopeStatus(scope: UnifiedLibraryScope): string | null {
 		if (scope === 'genres') {
 			if (genres.loading && !genres.loaded) return 'Loading genres…';
 			if (genres.error) return `Could not load genres: ${genres.error}`;
@@ -246,7 +255,7 @@
 		if ((scope === 'albums' || scope === 'surprise' || scope === 'recently-added') && albums.length === 0)
 			return 'No albums in this library.';
 		return null;
-	});
+	}
 
 	function followAddress(event: MouseEvent, open: (() => void) | undefined): void {
 		if (open === undefined || !shouldHandleLibraryAnchorClick(event)) return;
@@ -283,7 +292,7 @@
 {/snippet}
 
 {#snippet albumTiles(items: readonly TileItem[])}
-	<div class="tiles">
+	<div class="tiles" use:prepareLibraryGrid={[items, layoutRevision]}>
 		{#each items as tile (tile.key)}
 			{@const liveEntry = tile.live}
 			{@const drillable = liveEntry !== undefined && onOpenLiveAlbum !== undefined}
@@ -360,49 +369,64 @@
 	{/if}
 {/snippet}
 
-<div
-	class="scope-view"
-	data-testid="unified-scope-view"
-	data-scope={scope}
-	bind:this={scroller}
->
+{#snippet scopeContent(selectedScope: UnifiedLibraryScope)}
+	{@const status = scopeStatus(selectedScope)}
 	{#if status}
 		<p class="hint" data-testid="unified-scope-status">{status}</p>
-	{:else if scope === 'artists'}
+	{:else if selectedScope === 'artists'}
 		{#if artistGroups}
 			{@render grouped(artistGroups as never, artistRows)}
 		{:else}
 			{@render artistRows(artistsSorted)}
 		{/if}
-	{:else if scope === 'albums'}
+	{:else if selectedScope === 'albums'}
 		{#if albumGroups}
 			{@render grouped(albumGroups as never, albumTiles)}
 		{:else}
 			{@render albumTiles(albumsFlat)}
 		{/if}
-	{:else if scope === 'surprise'}
+	{:else if selectedScope === 'surprise'}
 		{@render albumTiles(surpriseTiles)}
 		<div class="hint">
 			Random, not "unplayed" — nothing knows what you have heard. Re-select the chip to redraw.
 		</div>
-	{:else if scope === 'genres'}
+	{:else if selectedScope === 'genres'}
 		{#if cardGroups}
 			{@render grouped(cardGroups as never, cardList)}
 		{:else}
 			{@render cardList(genreCards)}
 		{/if}
 		<div class="hint">Counts marked + are Roon's page bound, not the full genre.</div>
-	{:else if scope === 'recently-played'}
+	{:else if selectedScope === 'recently-played'}
 		{@render albumTiles(recentTiles)}
 		<div class="hint">
 			Only what this controller watched play. Roon does not share its own history.
 		</div>
-	{:else if scope === 'recently-added'}
+	{:else if selectedScope === 'recently-added'}
 		<!-- A restored address outliving the feature: the honest reason, never a
 		     guessed order. Roon's public browse API exposes no import date, and
 		     the native layer that used to supply one is gone. -->
 		<p class="hint" data-testid="unified-recently-added-gated">
 			{NO_IMPORT_DATES_REASON}
 		</p>
+	{/if}
+{/snippet}
+
+<div class="scope-view" data-testid="unified-scope-view" data-scope={scope} bind:this={scroller}>
+	{#if retainScopes}
+		{#each ['artists', 'albums', 'genres', 'recently-played', 'surprise'] as heldScope (heldScope)}
+			<RetainedLibraryPanel active={scope === heldScope}
+				revision={heldScope === 'artists' ? [artists, sorts.artists, layoutRevision] :
+					heldScope === 'albums' ? [albums, sorts.albums, groupAlbums, layoutRevision, sorts.albums === 'shuffle' ? randomSeed : 0] :
+					heldScope === 'genres' ? [genres, sorts.genres, layoutRevision] :
+					heldScope === 'surprise' ? [albums, surpriseSeed, layoutRevision] : [recent, layoutRevision]}>
+				<div data-scope-panel={heldScope}>{@render scopeContent(heldScope as UnifiedLibraryScope)}</div>
+			</RetainedLibraryPanel>
+		{/each}
+		{#if !['artists', 'albums', 'genres', 'recently-played', 'surprise'].includes(scope)}
+			{@render scopeContent(scope)}
+		{/if}
+	{:else}
+		{@render scopeContent(scope)}
 	{/if}
 </div>

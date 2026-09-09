@@ -1,6 +1,6 @@
 {
   "name": "roon-controller-desktop",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "Electron shell that runs the Roon controller engine as a desktop app",
   "main": "dist/main.js",
@@ -9,7 +9,7 @@
   "desktopName": "songr.desktop",
   "license": "MIT",
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc --project tsconfig.json",
     "start": "npm run build && electron .",
     "lint": "tsc --project tsconfig.json --noEmit",
     "test": "jest",

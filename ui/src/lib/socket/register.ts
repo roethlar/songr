@@ -29,6 +29,7 @@ import { normalizeClassicSessionRetiredEvent } from '@shared/classicBrowseContra
 import { normalizeLibrarySessionRetiredEvent } from '@shared/libraryRootsContracts';
 import { classicBrowseSessionClient } from '../stores/classicBrowseSessionStore';
 import { retireLibraryGeneration } from '../stores/libraryRootsStore';
+import { resetCoreDiscovery, setCoreDiscovery } from '../stores/coreDiscoveryStore';
 
 interface CoreStatusEvent {
 	coreStatus: CoreStatusResponse['status'];
@@ -177,6 +178,7 @@ export function registerSocketHandlers(): CleanupFn {
 	};
 
 	const handleDisconnect = (reason: string) => {
+		resetCoreDiscovery();
 		sawConnectionLoss = true;
 		// socket.io disconnect reasons split into auto-reconnecting vs not.
 		// 'io server disconnect' (server explicitly kicked us) and
@@ -214,6 +216,7 @@ export function registerSocketHandlers(): CleanupFn {
 
 	const listeners: Array<[string, (...args: any[]) => void]> = [
 		['core-status', handleCoreStatus],
+		['core-discovery', setCoreDiscovery],
 		['zones', handleZonesSnapshot],
 		['zone-updated', handleZoneUpdated],
 		['zone-removed', handleZoneRemoved],

@@ -12,6 +12,7 @@ import {
 } from '$lib/library/liveLibraryPath';
 import {
 	LIBRARY_ROOT_ROUTE_SCOPES,
+	decodeLibraryRoute,
 	LIBRARY_ROUTE_STEPS_MAX,
 	type LibraryRootRouteScope,
 	type LibraryRoute,
@@ -19,6 +20,16 @@ import {
 	type LibraryRouteBrowseStep,
 	type LibraryRouteLivePath
 } from '$lib/libraryRoute';
+import { albumCreditMatches, type ArtistView } from '$lib/albumArtistGroups';
+
+/** Preferences apply only to unaddressed entry; existing URLs always win. */
+export function libraryEntryPageState(url: URL, artistView: ArtistView): UnifiedLibraryPageState {
+	const bare = (url.pathname === '/library' || url.pathname === '/library/') &&
+		url.search === '' && url.hash === '';
+	const route = bare && artistView === 'album-artists'
+		? { kind: 'album-artists-root' as const } : decodeLibraryRoute(url);
+	return route === null ? buildUnifiedRootPageState() : libraryPageStateFromRoute(route);
+}
 
 function livePageState(
 	scope: UnifiedLibraryPageState['snapshot']['scope'],
@@ -63,6 +74,18 @@ export function libraryPageStateFromRoute(route: LibraryRoute): UnifiedLibraryPa
 	switch (route.kind) {
 		case 'root':
 			return buildUnifiedRootPageState(route.scope);
+		case 'album-artists-root':
+		case 'credit-group':
+		case 'credit-album':
+		case 'credit-album-track':
+			return buildUnifiedLibraryPageState({
+				scope: 'artists', artistView: 'album-artists',
+				albumCredit: route.kind === 'album-artists-root' ? null : route.selector,
+				collectionDrill: null, filterText: '', surpriseSeed: null,
+				itemTarget: route.kind === 'credit-album' || route.kind === 'credit-album-track'
+					? { kind: 'live', path: { origin: 'albums', steps: [routeAlbumStep(route.album)] } } : null,
+				itemDetail: trackDetail(route.kind === 'credit-album-track' ? route.track : undefined)
+			});
 		case 'artist-filter':
 			return buildUnifiedLibraryPageState({
 				scope: 'artists',
@@ -178,11 +201,14 @@ function withTrack(
 	route:
 		| Extract<LibraryRoute, { kind: 'artist-album' }>
 		| Extract<LibraryRoute, { kind: 'album' }>
+		| Extract<LibraryRoute, { kind: 'credit-album' }>
 		| Extract<LibraryRoute, { kind: 'genre-album' }>,
 	detail: UnifiedItemDetailTarget | null
 ): LibraryRoute {
 	if (detail === null) return route;
 	switch (route.kind) {
+		case 'credit-album':
+			return { ...route, kind: 'credit-album-track', track: detail.title };
 		case 'artist-album':
 			return { ...route, kind: 'artist-album-track', track: detail.title };
 		case 'album':
@@ -261,6 +287,23 @@ function routeFromLivePath(
 /** Derive a durable URL route from the mode's current semantic state. */
 export function libraryRouteFromPageState(state: UnifiedLibraryPageState): LibraryRoute | null {
 	const snapshot = state.snapshot;
+	// Credit context is a display filter over Albums, not an Artists path.
+	// Resolve it before the generic live branch so an album keeps its parent.
+	if (snapshot.artistView === 'album-artists') {
+		if (snapshot.scope !== 'artists' || snapshot.collectionDrill !== null ||
+			snapshot.filterText !== '' || snapshot.composition !== null) return null;
+		const selector = snapshot.albumCredit;
+		if (snapshot.itemTarget === null) {
+			if (snapshot.itemDetail !== null) return null;
+			return selector === null ? { kind: 'album-artists-root' } : { kind: 'credit-group', selector };
+		}
+		if (selector === null || snapshot.itemTarget.kind !== 'live' ||
+			snapshot.itemTarget.path.origin !== 'albums' || snapshot.itemTarget.path.steps.length !== 1) return null;
+		const album = albumOf(snapshot.itemTarget.path.steps[0]);
+		return album !== null && albumCreditMatches(selector, album.credit)
+			? withTrack({ kind: 'credit-album', selector, album }, snapshot.itemDetail) : null;
+	}
+	if (snapshot.albumCredit !== null) return null;
 	if (snapshot.itemTarget?.kind === 'live') {
 		return routeFromLivePath(snapshot.itemTarget.path, snapshot.itemDetail);
 	}
@@ -366,6 +409,9 @@ export function libraryParentPageState(
 			itemTarget: null,
 			itemOriginName: null
 		});
+	}
+	if (snapshot.albumCredit !== null) {
+		return buildUnifiedLibraryPageState({ ...snapshot, albumCredit: null });
 	}
 	if (snapshot.composition !== null) {
 		return buildUnifiedLibraryPageState({

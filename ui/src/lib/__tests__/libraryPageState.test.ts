@@ -63,6 +63,8 @@ function browseSnapshot(): BrowseHistorySnapshot {
 function unifiedSnapshot(): UnifiedLibrarySnapshot {
 	return {
 		scope: 'genres',
+		artistView: 'all-artists',
+		albumCredit: null,
 		collectionDrill: { kind: 'genre', label: 'Ambient' },
 		itemTarget: null,
 		itemDetail: null,
@@ -73,6 +75,14 @@ function unifiedSnapshot(): UnifiedLibrarySnapshot {
 		density: 'compact',
 		browseHistory: browseSnapshot()
 	};
+}
+
+/** Legacy payloads must not carry keys that did not exist in their version. */
+function beforeArtistView<T extends { artistView: unknown; albumCredit: unknown }>(snapshot: T) {
+	const { artistView, albumCredit, ...rest } = snapshot;
+	void artistView;
+	void albumCredit;
+	return rest;
 }
 
 /**
@@ -90,7 +100,7 @@ function albumPageSnapshot(): UnifiedLibrarySnapshot {
 
 /** The v6 snapshot shape (item split, no child/composition surfaces). */
 function legacyV6Snapshot(): Record<string, unknown> {
-	const { itemDetail, composition, itemOriginName, ...rest } = unifiedSnapshot();
+	const { itemDetail, composition, itemOriginName, ...rest } = beforeArtistView(unifiedSnapshot());
 	void itemDetail;
 	void composition;
 	void itemOriginName;
@@ -99,7 +109,7 @@ function legacyV6Snapshot(): Record<string, unknown> {
 
 /** The v7 snapshot shape (item origin name not yet introduced, issue #6). */
 function legacyV7Snapshot(): Record<string, unknown> {
-	const { itemOriginName, ...rest } = unifiedSnapshot();
+	const { itemOriginName, ...rest } = beforeArtistView(unifiedSnapshot());
 	void itemOriginName;
 	return rest as unknown as Record<string, unknown>;
 }
@@ -294,7 +304,7 @@ describe('Unified Library page state', () => {
 			normalizeLibraryPageState({
 				libraryView: 'unified',
 				schemaVersion: 8,
-				snapshot: unifiedSnapshot()
+				snapshot: beforeArtistView(unifiedSnapshot())
 			})
 		).toEqual({
 			libraryView: 'unified',
@@ -309,7 +319,7 @@ describe('Unified Library page state', () => {
 				libraryView: 'unified',
 				schemaVersion: 8,
 				snapshot: {
-					...unifiedSnapshot(),
+					...beforeArtistView(unifiedSnapshot()),
 					itemTarget: { kind: 'collection', locator: COLLECTION_LOCATOR }
 				}
 			})
@@ -592,6 +602,8 @@ describe('Unified Library page state', () => {
 		const root = buildUnifiedRootPageState();
 		expect(root.snapshot).toEqual({
 			scope: 'artists',
+			artistView: 'all-artists',
+			albumCredit: null,
 			collectionDrill: null,
 			itemTarget: null,
 			itemDetail: null,
@@ -677,7 +689,8 @@ describe('the live view arm (library-live-view Slice 2, v10)', () => {
 	});
 
 	it('refuses a live address in a v9 state, which could never have written one', () => {
-		const v9 = { ...unified({ kind: 'live', path: livePath }), schemaVersion: 9 };
+		const source = unified({ kind: 'live', path: livePath });
+		const v9 = { ...source, snapshot: beforeArtistView(source.snapshot), schemaVersion: 9 };
 		expect(normalizeLibraryPageState(v9)).toBeNull();
 	});
 
@@ -685,7 +698,8 @@ describe('the live view arm (library-live-view Slice 2, v10)', () => {
 		// v9's own item target was the collection locator, which survives; a v9
 		// state carrying one still promotes to the current version untouched.
 		const target = { kind: 'collection', locator: COLLECTION_LOCATOR };
-		const v9 = { ...unified(target), schemaVersion: 9 };
+		const source = unified(target);
+		const v9 = { ...source, snapshot: beforeArtistView(source.snapshot), schemaVersion: 9 };
 		const restored = normalizeLibraryPageState(v9);
 		expect(restored?.schemaVersion).toBe(UNIFIED_LIBRARY_PAGE_STATE_VERSION);
 		expect(restored?.snapshot.itemTarget).toEqual(target);

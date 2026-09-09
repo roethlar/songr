@@ -119,14 +119,14 @@ describe('deriveOnboardingFlow', () => {
 		}
 	});
 
-	it('advances to the local-playback step by itself when pairing lands', () => {
+	it('completes immediately when pairing lands, with no local zone', () => {
 		const before = deriveOnboardingFlow(input({ coreStatus: 'discovering' }));
 		const after = deriveOnboardingFlow(input({ coreStatus: 'paired' }));
 		expect(before.step).toBe('connect');
 		expect(after).toEqual({
 			firstRun: true,
-			active: true,
-			step: 'local-playback',
+			active: false,
+			step: 'complete',
 			localZoneId: null
 		});
 	});
@@ -151,10 +151,10 @@ describe('deriveOnboardingFlow', () => {
 		});
 	});
 
-	it('auto-advances out of the local-playback step when the zone appears', () => {
+	it('never waits for a local zone, but carries one if already available', () => {
 		const waiting = deriveOnboardingFlow(input({ coreStatus: 'paired', zones: [] }));
-		expect(waiting.step).toBe('local-playback');
-		expect(waiting.active).toBe(true);
+		expect(waiting.step).toBe('complete');
+		expect(waiting.active).toBe(false);
 
 		const arrived = deriveOnboardingFlow(
 			input({

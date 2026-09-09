@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { measureLibraryChrome } from '$lib/libraryListChrome';
 	import type { AlbumActionController } from '$lib/library/AlbumActionController';
 	import type {
 		LiveLibraryPageState
@@ -17,6 +18,11 @@
 	} from '$lib/stores/unifiedLibraryPrefsStore';
 	import { genreDrillSortMenu, sortAlbums } from '$lib/unifiedLibrarySorts';
 	import UnifiedScopeViews from './UnifiedScopeViews.svelte';
+	import UnifiedGenreOverview from './UnifiedGenreOverview.svelte';
+	import type { GenrePreviewState } from '$lib/library/GenrePreviewController';
+	import type { LibraryRenderingPath } from '$lib/library/liveLibraryPath';
+	import type { LibraryPreviewItemKind } from '@shared/libraryPreviewContracts';
+	import type { UnifiedLibraryDensity } from '$lib/stores/unifiedLibraryPrefsStore';
 
 	interface Props {
 		page: LiveLibraryPageState;
@@ -38,6 +44,12 @@
 		};
 		randomSeed: number;
 		onSetAlbumSort: (value: string) => void;
+		genrePreviews: GenrePreviewState;
+		density: UnifiedLibraryDensity;
+		onPreviewCapacity: (capacity: number) => void;
+		onRetryPreview: (kind: LibraryPreviewItemKind) => void;
+		onOpenPreview: (source: LibraryRenderingPath, row: LibraryLevelRow) => void;
+		hrefForPreview: (source: LibraryRenderingPath, row: LibraryLevelRow) => string | null;
 	}
 
 	let {
@@ -55,7 +67,13 @@
 		onBeginActions,
 		sorts,
 		randomSeed,
-		onSetAlbumSort
+		onSetAlbumSort,
+		genrePreviews,
+		density,
+		onPreviewCapacity,
+		onRetryPreview,
+		onOpenPreview,
+		hrefForPreview
 	}: Props = $props();
 
 	let sortOpen = $state(false);
@@ -139,17 +157,17 @@
 	data-testid="unified-live-collection-page"
 	data-level-kind={levelKind}
 >
-	<div class="ctx">
+	<div class="ctx library-list-toolbar" use:measureLibraryChrome={'toolbar'}>
 		<button type="button" class="back" onclick={onBack}>← {backLabel}</button>
 		<h2 tabindex="-1" data-testid="unified-live-collection-title">
 			{page.target?.title ?? page.path?.steps.at(-1)?.title ?? 'Library'}
 		</h2>
-		{#if page.phase === 'ready' && albumRows.length > 0}
+		{#if levelKind !== 'genre' && page.phase === 'ready' && albumRows.length > 0}
 			<span class="n mono" data-testid="unified-live-collection-summary">
 				{(page.level?.count ?? albumRows.length).toLocaleString()} ALBUMS
 			</span>
 		{/if}
-		{#if page.phase === 'ready' && albumRows.length > 0}
+		{#if levelKind !== 'genre' && page.phase === 'ready' && albumRows.length > 0}
 			<div class="sortc-wrap">
 				<button
 					type="button"
@@ -216,6 +234,10 @@
 		<p class="status error">{page.message}</p>
 		<button type="button" onclick={onRetry}>Retry</button>
 	{:else if page.phase === 'ready'}
+		{#if levelKind === 'genre'}
+			<UnifiedGenreOverview state={genrePreviews} {density} onCapacity={onPreviewCapacity}
+				onRetry={onRetryPreview} onOpen={onOpenPreview} hrefFor={hrefForPreview} />
+		{:else}
 		{#if albumRows.length > 0}
 			<div class="live-album-layout" data-testid="unified-live-albums">
 				{#if railVisible}
@@ -240,6 +262,7 @@
 					{sorts}
 					{randomSeed}
 					groupAlbums={true}
+					layoutRevision={density}
 					{railTarget}
 					genres={{ loading: false, loaded: true, error: null, entries: [], totalCount: 0 }}
 					recent={{ loading: false, loaded: true, entries: [] }}
@@ -278,6 +301,7 @@
 					{/if}
 				{/each}
 			</div>
+		{/if}
 		{/if}
 	{/if}
 </section>

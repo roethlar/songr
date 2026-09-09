@@ -6,6 +6,10 @@ import {
 } from '@shared/collectionDrillContracts';
 import { LIBRARY_NODE_KINDS, type LibraryNodeKind } from '@shared/libraryOpenContracts';
 import type { LibraryPathStep, LibraryRenderingPath } from '$lib/library/liveLibraryPath';
+import {
+	albumCreditMatches, normalizeAlbumCreditSelector,
+	type AlbumCreditSelector, type ArtistView
+} from '$lib/albumArtistGroups';
 
 export type LibraryViewActivationCause =
 	| 'initial'
@@ -38,8 +42,9 @@ export interface BrowseHistorySnapshot {
 	forward: BrowseHistoryStep[];
 }
 
-export const UNIFIED_LIBRARY_PAGE_STATE_VERSION = 10 as const;
+export const UNIFIED_LIBRARY_PAGE_STATE_VERSION = 11 as const;
 
+const LEGACY_UNIFIED_LIBRARY_ARTIST_VIEW_VERSION = 10 as const;
 const LEGACY_UNIFIED_LIBRARY_LIVE_TARGET_VERSION = 9 as const;
 /** v8 predates the collection-opened album item target (Slice 8d). */
 const LEGACY_UNIFIED_LIBRARY_COLLECTION_TARGET_VERSION = 8 as const;
@@ -143,6 +148,9 @@ export interface UnifiedCompositionSurface {
 
 export interface UnifiedLibrarySnapshot {
 	scope: UnifiedLibraryScope;
+	artistView: ArtistView;
+	/** Songr's exact credit filter over Albums, never a fabricated Roon path. */
+	albumCredit: AlbumCreditSelector | null;
 	/** Optional genre/composer album-list context. */
 	collectionDrill: UnifiedCollectionDrillTarget | null;
 	/**
@@ -192,6 +200,8 @@ const BROWSE_SNAPSHOT_KEYS = ['context', 'history', 'forward'] as const;
 const LIBRARY_STATE_KEYS = ['libraryView', 'schemaVersion', 'snapshot'] as const;
 const UNIFIED_SNAPSHOT_KEYS = [
 	'scope',
+	'artistView',
+	'albumCredit',
 	'collectionDrill',
 	'itemTarget',
 	'itemDetail',
@@ -202,12 +212,15 @@ const UNIFIED_SNAPSHOT_KEYS = [
 	'density',
 	'browseHistory'
 ] as const;
+const LEGACY_V10_UNIFIED_SNAPSHOT_KEYS = UNIFIED_SNAPSHOT_KEYS.filter(
+	(key) => key !== 'artistView' && key !== 'albumCredit'
+);
 /** v6 predates the item-detail and composition surfaces (and v7's origin name). */
-const LEGACY_V6_UNIFIED_SNAPSHOT_KEYS = UNIFIED_SNAPSHOT_KEYS.filter(
+const LEGACY_V6_UNIFIED_SNAPSHOT_KEYS = LEGACY_V10_UNIFIED_SNAPSHOT_KEYS.filter(
 	(key) => key !== 'itemDetail' && key !== 'composition' && key !== 'itemOriginName'
 );
 /** v7 predates the item origin name (issue #6). */
-const LEGACY_V7_UNIFIED_SNAPSHOT_KEYS = UNIFIED_SNAPSHOT_KEYS.filter(
+const LEGACY_V7_UNIFIED_SNAPSHOT_KEYS = LEGACY_V10_UNIFIED_SNAPSHOT_KEYS.filter(
 	(key) => key !== 'itemOriginName'
 );
 const LEGACY_UNIFIED_SNAPSHOT_KEYS = [
@@ -529,14 +542,14 @@ function normalizeSharedSnapshotFields(value: Record<string, unknown>): {
 
 function normalizeUnifiedSnapshot(
 	value: unknown,
-	legacyTier: 'v6' | 'v7' | 'v8' | 'v9' | null = null
+	legacyTier: 'v6' | 'v7' | 'v8' | 'v9' | 'v10' | null = null
 ): UnifiedLibrarySnapshot | null {
 	const keys =
 		legacyTier === 'v6'
 			? LEGACY_V6_UNIFIED_SNAPSHOT_KEYS
 			: legacyTier === 'v7'
 				? LEGACY_V7_UNIFIED_SNAPSHOT_KEYS
-				: UNIFIED_SNAPSHOT_KEYS;
+				: legacyTier === null ? UNIFIED_SNAPSHOT_KEYS : LEGACY_V10_UNIFIED_SNAPSHOT_KEYS;
 	if (!isRecord(value) || !hasExactKeys(value, keys)) return null;
 	if (!isUnifiedScope(value.scope)) return null;
 	const collectionDrill =
@@ -549,8 +562,8 @@ function normalizeUnifiedSnapshot(
 			? null
 			: normalizeItemTarget(
 					value.itemTarget,
-					legacyTier === null || legacyTier === 'v9',
-					legacyTier === null
+					legacyTier === null || legacyTier === 'v10' || legacyTier === 'v9',
+					legacyTier === null || legacyTier === 'v10'
 				);
 	if (value.itemTarget !== null && !itemTarget) return null;
 	let itemDetail: UnifiedItemDetailTarget | null = null;
@@ -579,7 +592,7 @@ function normalizeUnifiedSnapshot(
 		if (composition !== null && collectionDrill?.kind !== 'composer') return null;
 	}
 	let itemOriginName: string | null = null;
-	if (legacyTier === null) {
+	if (legacyTier === null || legacyTier === 'v10') {
 		itemOriginName =
 			value.itemOriginName === null ? null : normalizeItemOriginName(value.itemOriginName);
 		if (value.itemOriginName !== null && itemOriginName === null) return null;
@@ -593,8 +606,29 @@ function normalizeUnifiedSnapshot(
 	if (!shared) return null;
 	const browseHistory = normalizeBrowseHistorySnapshot(value.browseHistory);
 	if (!browseHistory) return null;
+	const artistView = legacyTier === null ? value.artistView : 'all-artists';
+	if (artistView !== 'album-artists' && artistView !== 'all-artists') return null;
+	const albumCredit = legacyTier !== null || value.albumCredit === null
+		? null : normalizeAlbumCreditSelector(value.albumCredit);
+	if (legacyTier === null && value.albumCredit !== null && albumCredit === null) return null;
+	if (artistView === 'all-artists' && albumCredit !== null) return null;
+	if (artistView === 'album-artists') {
+		if (value.scope !== 'artists' || collectionDrill !== null || composition !== null ||
+			itemOriginName !== null || shared.filterText !== '' ||
+			browseHistory.context.hierarchy !== 'browse' || browseHistory.history.length !== 0 ||
+			browseHistory.forward.length !== 0) return null;
+		if (itemTarget !== null) {
+			if (albumCredit === null || itemTarget.kind !== 'live' ||
+				itemTarget.path.origin !== 'albums' || itemTarget.path.steps.length !== 1) return null;
+			const album = itemTarget.path.steps[0];
+			if (album.kind !== 'album' || album.credit === undefined ||
+				!albumCreditMatches(albumCredit, album.credit)) return null;
+		}
+	}
 	return {
 		scope: value.scope,
+		artistView,
+		albumCredit,
 		collectionDrill,
 		itemTarget,
 		itemDetail,
@@ -648,6 +682,8 @@ function normalizeLegacyUnifiedSnapshot(
 		: null;
 	return {
 		scope: value.scope,
+		artistView: 'all-artists',
+		albumCredit: null,
 		collectionDrill,
 		itemTarget: null,
 		itemDetail: null,
@@ -673,6 +709,15 @@ export function normalizeLibraryPageState(value: unknown): LibraryPageState | nu
 						snapshot
 					}
 				: null;
+		}
+		if (
+			value.libraryView === 'unified' &&
+			value.schemaVersion === LEGACY_UNIFIED_LIBRARY_ARTIST_VIEW_VERSION
+		) {
+			const snapshot = normalizeUnifiedSnapshot(value.snapshot, 'v10');
+			return snapshot ? {
+				libraryView: 'unified', schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION, snapshot
+			} : null;
 		}
 		if (
 			value.libraryView === 'unified' &&
@@ -783,8 +828,10 @@ function requireLibraryPageState(value: unknown): LibraryPageState {
 export function buildUnifiedLibraryPageState(
 	snapshot: Omit<
 		UnifiedLibrarySnapshot,
-		'density' | 'browseHistory' | 'itemDetail' | 'composition' | 'itemOriginName'
+		'density' | 'browseHistory' | 'itemDetail' | 'composition' | 'itemOriginName' | 'artistView' | 'albumCredit'
 	> & {
+		readonly artistView?: ArtistView;
+		readonly albumCredit?: AlbumCreditSelector | null;
 		readonly density?: UnifiedLibraryDensity | null;
 		readonly browseHistory?: BrowseHistorySnapshot;
 		readonly itemDetail?: UnifiedItemDetailTarget | null;
@@ -796,6 +843,8 @@ export function buildUnifiedLibraryPageState(
 		libraryView: 'unified',
 		schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
 		snapshot: {
+			artistView: 'all-artists',
+			albumCredit: null,
 			density: null,
 			browseHistory: emptyBrowseHistory(),
 			itemDetail: null,

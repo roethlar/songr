@@ -670,8 +670,8 @@ export const ROON_EXTENSION_DISPLAY_NAME = 'Songr';
  * new install without ambushing an existing one during a Core outage.
  *
  * `hostname` is this machine's `os.hostname()`. The browser cannot know
- * the host the engine runs on, and the local-playback step needs it to
- * recognise a RoonBridge zone named after this computer.
+ * the host the engine runs on. Onboarding uses it in the extension label
+ * and to recognise an already-available local Roon Bridge output.
  */
 export interface OnboardingStatusResponse {
   everPaired: boolean;

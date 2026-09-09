@@ -1,5 +1,6 @@
 import { browser } from '$app/environment';
 import { writable, type Readable } from 'svelte/store';
+import type { ArtistView } from '$lib/albumArtistGroups';
 
 /**
  * Unified Library sort/density preferences (plan §3.2, slice 4).
@@ -9,7 +10,7 @@ import { writable, type Readable } from 'svelte/store';
  * restore an explicit size change without forfeiting persistence.
  */
 
-export const UNIFIED_LIBRARY_PREFS_VERSION = 3;
+export const UNIFIED_LIBRARY_PREFS_VERSION = 4;
 export const UNIFIED_LIBRARY_PREFS_STORAGE_KEY = 'roon-controller-unified-library-prefs';
 
 export type UnifiedLibraryDensity = 'compact' | 'normal' | 'pi';
@@ -38,6 +39,7 @@ export interface UnifiedLibrarySorts {
 export type SortableUnifiedScope = keyof UnifiedLibrarySorts;
 
 export interface UnifiedLibraryPrefs {
+	readonly artistView: ArtistView;
 	readonly density: UnifiedLibraryDensity;
 	readonly sorts: UnifiedLibrarySorts;
 }
@@ -53,6 +55,7 @@ const SORT_VALUES: Readonly<Record<SortableUnifiedScope, readonly string[]>> = O
 const SORTABLE_SCOPES = Object.keys(SORT_VALUES) as readonly SortableUnifiedScope[];
 
 export const DEFAULT_UNIFIED_LIBRARY_PREFS: UnifiedLibraryPrefs = Object.freeze({
+	artistView: 'album-artists',
 	density: 'normal',
 	sorts: Object.freeze({
 		artists: 'az',
@@ -74,6 +77,7 @@ export type UnifiedLibraryStorageListener = (
 ) => void;
 
 export interface UnifiedLibraryPrefsStore extends Readable<UnifiedLibraryPrefs> {
+	setArtistView(value: unknown): boolean;
 	setDensity(value: unknown): boolean;
 	setSort(scope: SortableUnifiedScope, value: unknown): boolean;
 	/** Detach the cross-tab storage listener (tests and teardown). */
@@ -95,10 +99,13 @@ export function parseUnifiedLibraryPrefs(raw: string | null): UnifiedLibraryPref
 	try {
 		const value = JSON.parse(raw) as unknown;
 		if (!isRecord(value)) return DEFAULT_UNIFIED_LIBRARY_PREFS;
-		if (Object.keys(value).sort().join(',') !== 'density,sorts,version') {
+		const legacy = value.version === 3;
+		const keys = Object.keys(value).sort().join(',');
+		if (keys !== (legacy ? 'density,sorts,version' : 'artistView,density,sorts,version') &&
+			!(value.version === UNIFIED_LIBRARY_PREFS_VERSION && keys === 'density,sorts,version')) {
 			return DEFAULT_UNIFIED_LIBRARY_PREFS;
 		}
-		if (value.version !== UNIFIED_LIBRARY_PREFS_VERSION) {
+		if (!legacy && value.version !== UNIFIED_LIBRARY_PREFS_VERSION) {
 			return DEFAULT_UNIFIED_LIBRARY_PREFS;
 		}
 		if (typeof value.density !== 'string' || !DENSITIES.includes(value.density)) {
@@ -116,6 +123,7 @@ export function parseUnifiedLibraryPrefs(raw: string | null): UnifiedLibraryPref
 			}
 		}
 		return {
+			artistView: !legacy && value.artistView === 'all-artists' ? 'all-artists' : 'album-artists',
 			density: value.density as UnifiedLibraryDensity,
 			sorts: {
 				artists: sorts.artists as UnifiedArtistsSort,
@@ -133,6 +141,7 @@ export function parseUnifiedLibraryPrefs(raw: string | null): UnifiedLibraryPref
 function serializePrefs(prefs: UnifiedLibraryPrefs): string {
 	return JSON.stringify({
 		version: UNIFIED_LIBRARY_PREFS_VERSION,
+		artistView: prefs.artistView,
 		density: prefs.density,
 		sorts: prefs.sorts
 	});
@@ -183,6 +192,10 @@ export function createUnifiedLibraryPrefsStore({
 
 	return {
 		subscribe: internal.subscribe,
+		setArtistView(value: unknown): boolean {
+			if (value !== 'album-artists' && value !== 'all-artists') return false;
+			return commit({ ...current, artistView: value });
+		},
 		setDensity(value: unknown): boolean {
 			if (typeof value !== 'string' || !DENSITIES.includes(value)) return false;
 			return commit({ ...current, density: value as UnifiedLibraryDensity });

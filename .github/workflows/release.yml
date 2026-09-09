@@ -223,17 +223,26 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          dmg=$(find desktop/release/artifacts -maxdepth 1 -name '*.dmg' -print -quit)
-          test -n "$dmg"
+          set -euo pipefail
+          version=$(node -p "require('./desktop/package.json').version")
           test -n "$MAC_SIGNING_IDENTITY"
-          codesign --sign "$MAC_SIGNING_IDENTITY" --timestamp "$dmg"
-          xcrun notarytool submit "$dmg" \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-            --wait 2>&1 | tee /tmp/notarytool.txt
-          grep -qE '^[[:space:]]*status: Accepted$' /tmp/notarytool.txt
-          xcrun stapler staple "$dmg"
+          for arch in arm64 x64; do
+            if [ "$arch" = arm64 ]; then
+              dmg="desktop/release/artifacts/Songr-${version}-arm64.dmg"
+            else
+              dmg="desktop/release/artifacts/Songr-${version}.dmg"
+            fi
+            test -f "$dmg"
+            codesign --sign "$MAC_SIGNING_IDENTITY" --timestamp "$dmg"
+            notary_log="$RUNNER_TEMP/songr-notary-${arch}.txt"
+            xcrun notarytool submit "$dmg" \
+              --apple-id "$APPLE_ID" \
+              --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --wait 2>&1 | tee "$notary_log"
+            grep -qE '^[[:space:]]*status: Accepted$' "$notary_log"
+            xcrun stapler staple "$dmg"
+          done
 
       - name: Verify Windows signature
         # A signing step can silently no-op and still exit 0 — electron-builder's
@@ -255,33 +264,37 @@ jobs:
           }
 
       - name: Verify macOS signature and notarization
-        # Same rationale as the Windows check above: assert, don't trust a
-        # green build. Only when this run's own gate actually signed (mac.
-        # identity=null means an intentionally unsigned build).
-        #
-        # The DMG container itself is never code-signed here — electron-builder's
-        # own schema documents dmg.sign as "will lead to unwanted errors in
-        # combination with notarization requirements" and defaults it false, so
-        # the app inside carries the Developer ID signature and the dmg carries
-        # the stapled notarization ticket instead. codesign --verify therefore
-        # runs against the .app in the unpacked build dir, not the dmg; the dmg
-        # itself is checked via stapler + spctl (Gatekeeper's own acceptance
-        # test), matching ChickenScratch's proven macos-release.yml pattern.
+        # Assert both architectures, not the first file returned by find.
+        # electron-builder signs/notarizes each .app; the preceding step signs,
+        # notarizes and staples each wrapping DMG. Reject a missing architecture
+        # or a mislabeled executable before attaching either release asset.
         if: runner.os == 'macOS' && !contains(env.SIGNING_EXTRA, 'identity=null')
         run: |
-          dmg=$(find desktop/release/artifacts -maxdepth 1 -name '*.dmg' -print -quit)
-          app=$(find desktop/release/artifacts -maxdepth 2 -name '*.app' -print -quit)
-          test -n "$dmg"
-          test -n "$app"
-          codesign --verify --deep --strict "$app"
-          codesign -dv --verbose=4 "$app" 2>&1 | tee /tmp/codesign.txt
-          grep -q 'Authority=Developer ID Application' /tmp/codesign.txt
-          # The "Notarize and staple macOS DMG" step above already stapled
-          # the dmg's own ticket (electron-builder's notarize:true covers
-          # only the .app, confirmed by the first run's CloudKit "Record not
-          # found" when this step tried to staple without that prior step).
-          xcrun stapler validate "$dmg"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+          set -euo pipefail
+          version=$(node -p "require('./desktop/package.json').version")
+          for arch in arm64 x64; do
+            if [ "$arch" = arm64 ]; then
+              app="desktop/release/artifacts/mac-arm64/Songr.app"
+              dmg="desktop/release/artifacts/Songr-${version}-arm64.dmg"
+              binary_arch=arm64
+            else
+              app="desktop/release/artifacts/mac/Songr.app"
+              dmg="desktop/release/artifacts/Songr-${version}.dmg"
+              binary_arch=x86_64
+            fi
+            test -d "$app"
+            test -f "$dmg"
+            test "$(lipo -archs "$app/Contents/MacOS/Songr")" = "$binary_arch"
+            codesign --verify --deep --strict "$app"
+            signature_log="$RUNNER_TEMP/songr-codesign-${arch}.txt"
+            codesign -dv --verbose=4 "$app" 2>&1 | tee "$signature_log"
+            grep -q 'Authority=Developer ID Application' "$signature_log"
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=4 "$app"
+            codesign --verify --strict "$dmg"
+            xcrun stapler validate "$dmg"
+            spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+          done
 
       - name: Attach artifacts to the release
         uses: softprops/action-gh-release@v2

@@ -415,12 +415,6 @@ function createSupervisor(userDataDir: string): EngineSupervisor {
 }
 
 function startApp(): void {
-  app.on('second-instance', () => {
-    // A second launch is a request to see the window that already exists, not
-    // a request for a second engine.
-    focusExistingWindow();
-  });
-
   // Without this the advanced settings — and therefore network serving — were
   // reachable only from the tray, so a desktop with no StatusNotifier host had
   // no way to get at them. Opening the window is all this does; the window
@@ -487,14 +481,6 @@ function startApp(): void {
     // Intentionally empty. Quit is explicit, via the tray or the app menu.
   });
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    } else {
-      focusExistingWindow();
-    }
-  });
-
   // Quitting must not leave an orphan engine behind, so the quit is deferred
   // until the child is actually gone.
   app.on('before-quit', (event) => {
@@ -515,6 +501,9 @@ function startApp(): void {
   });
 
   void app.whenReady().then(() => {
+    if (quitRequested) {
+      return;
+    }
     const userDataDir = app.getPath('userData');
     settingsPath = settingsFilePath(userDataDir);
     settings = loadShellSettings({
@@ -543,6 +532,13 @@ function startApp(): void {
     tray.create();
     createWindow();
     renderTray();
+
+    // macOS can activate during initial launch, before Electron is ready.
+    // Startup creates that first window after loading settings; only then may
+    // Dock activation or another launch focus/recreate it. Neither starts a
+    // second engine.
+    app.on('activate', focusExistingWindow);
+    app.on('second-instance', focusExistingWindow);
 
     if (mode.kind === 'remote') {
       log(`remote mode: using ${mode.url}; no engine will be spawned`);

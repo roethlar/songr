@@ -20,6 +20,7 @@ vi.mock('../../stores/libraryRootsStore', () => ({
 }));
 
 import { registerSocketHandlers } from '../register';
+import { coreDiscoveryStore, resetCoreDiscovery } from '../../stores/coreDiscoveryStore';
 
 // A minimal fake socket that records on/off registrations and lets tests
 // fire events synchronously. Mirrors only the surface `register.ts` uses.
@@ -82,6 +83,7 @@ beforeEach(() => {
 		json: async () => ({ status: 'paired', zones: [] })
 	}));
 	setSocketStatus('connecting');
+	resetCoreDiscovery();
 	clearCommandFeedback();
 	retirementSpies.classic.mockClear();
 	retirementSpies.library.mockClear();
@@ -93,6 +95,16 @@ afterEach(() => {
 });
 
 describe('registerSocketHandlers — connectivity transitions', () => {
+	it('publishes discovery updates and retires them on disconnect and cleanup', () => {
+		cleanup = registerSocketHandlers();
+		const status = { cores: [{ id: 'core-a', displayName: 'Core A', host: '203.0.113.10', phase: 'awaiting-approval' }] };
+		fakeSocket.fire('core-discovery', status);
+		expect(get(coreDiscoveryStore)).toEqual(status);
+		fakeSocket.fire('disconnect', 'transport close');
+		expect(get(coreDiscoveryStore)).toBeNull();
+		cleanup();
+		expect(fakeSocket.listenerCount('core-discovery')).toBe(0);
+	});
 	it('reflects "connecting" while the socket is not yet connected', () => {
 		cleanup = registerSocketHandlers();
 		expect(get(socketStatusStore)).toBe('connecting');

@@ -1,5 +1,6 @@
 import { mount, tick } from 'svelte';
-import { writable } from 'svelte/store';
+import type { LibraryPreviewResponse } from '@shared/libraryPreviewContracts';
+import { get, writable } from 'svelte/store';
 
 import '../../src/app.css';
 import '../../src/routes/library/unified-surface.css';
@@ -43,8 +44,8 @@ import { setSelectedZone } from '../../src/lib/stores/selectedZoneStore';
 import { setZonesSnapshot } from '../../src/lib/stores/zonesStore';
 import { __getNavigationLog, __resetNavigation } from '../../src/test/app-stubs/navigation';
 import type { CatalogStatus } from '@shared/catalogContracts';
-import { decodeLibraryRoute, type LibraryRoute } from '../../src/lib/libraryRoute';
-import { libraryPageStateFromRoute } from '../../src/lib/libraryRouteState';
+import { encodeLibraryRoute } from '../../src/lib/libraryRoute';
+import { libraryEntryPageState, libraryRouteFromPageState } from '../../src/lib/libraryRouteState';
 import {
 	LIBRARY_MODE_ACTIVATION_CONTEXT,
 	type LibraryModeActivationContext,
@@ -58,13 +59,14 @@ import type { LibraryViewActivationCause } from '../../src/lib/libraryPageState'
 // such a test vacuously, which is why this lives in the Chromium suite and
 // mounts the whole mode against a library big enough to actually scroll.
 
-const ARTIST_COUNT = 400;
-const ALBUM_COUNT = 400;
+const ARTIST_COUNT = window.libraryScrollFixtureSize?.artists ?? 400;
+const ALBUM_COUNT = window.libraryScrollFixtureSize?.albums ?? 400;
 
+const presentation = window.libraryScrollFixturePresentation;
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 function letterFor(index: number): string {
-	return LETTERS[index % LETTERS.length];
+	return presentation?.singleLetter ? 'A' : LETTERS[index % LETTERS.length];
 }
 
 const artists: LibraryArtistEntry[] = Array.from({ length: ARTIST_COUNT }, (_, index) => {
@@ -73,7 +75,7 @@ const artists: LibraryArtistEntry[] = Array.from({ length: ARTIST_COUNT }, (_, i
 });
 
 const albums: LibraryAlbumEntry[] = Array.from({ length: ALBUM_COUNT }, (_, index) => {
-	const title = `${letterFor(index)}lbum ${String(index).padStart(3, '0')}`;
+	const title = `${letterFor(index)}lbum ${String(index).padStart(3, '0')}${presentation?.longTitles && index % 3 === 0 ? ' — Live recordings with a much longer title over multiple lines' : ''}`;
 	return {
 		id: `album-${index}`,
 		localId: `album-${index}`,
@@ -85,6 +87,22 @@ const albums: LibraryAlbumEntry[] = Array.from({ length: ALBUM_COUNT }, (_, inde
 		releaseYear: null
 	} as unknown as LibraryAlbumEntry;
 });
+
+const creditVariant = window.libraryScrollFixtureVariant === 'album-credits';
+const coldStart = window.libraryScrollFixtureColdStart === true;
+const longCredit = 'The International Ensemble for Contemporary Music / North and South / Live Recordings and Collaborations';
+if (creditVariant) {
+	const special = [
+		['Solo Record', 'Single Release'], ['Collaboration; One', 'AC/DC / Björk; 100%'],
+		['No Credit', ''], ['Literal Unknown', 'Unknown album artist']
+	];
+	albums.forEach((album, index) => {
+		const [title, credit] = special[index] ?? [index >= 398 ? 'Repeated Rendering' : album.title, longCredit];
+		album.title = title;
+		album.artist = credit;
+		album.searchKey = title.toLowerCase();
+	});
+}
 
 function bucketsFor(names: readonly { name?: string; title?: string }[]) {
 	const buckets: { letter: string; start: number; count: number }[] = [];
@@ -125,17 +143,20 @@ function liveRef(token: string, generation = liveGeneration): LibraryRowReferenc
 }
 
 function artistRowsFor(generation: string): LibraryRootRow[] {
+ const counts = new Map<string, number>();
+ for (const album of albums) counts.set(album.artist, (counts.get(album.artist) ?? 0) + 1);
 	return artists.map((artist) => ({
 		ref: liveRef(`artist:${artist.name}`, generation),
 		title: artist.name,
-		subtitle: `${albums.filter((album) => album.artist === artist.name).length} Albums`
+		subtitle: `${counts.get(artist.name) ?? 0} Albums`
 	}));
 }
 
 function albumRowsFor(generation: string): LibraryRootRow[] {
-	return albums.map((album) => ({
-		ref: liveRef(`album:${album.title}`, generation),
+	return albums.map((album, index) => ({
+		ref: liveRef(`album:${album.title}${creditVariant && index >= 398 ? `:copy:${index}` : ''}`, generation),
 		title: album.title,
+		imageKey: presentation?.artwork ? `art-${index}` : undefined,
 		subtitle: album.artist
 	}));
 }
@@ -164,7 +185,11 @@ function rootsStateFor(retirementRevision: number): LibraryRootsState {
 	};
 }
 
-const rootsStore = writable(rootsStateFor(0));
+const rootsStore = writable<LibraryRootsState>(coldStart ? {
+	...rootsStateFor(0), phase: 'loading', generation: null, readAt: null,
+	artists: [], albums: [], artistRows: [], albumRows: [],
+	artistBuckets: [], albumBuckets: [], artistCount: null, albumCount: null
+} : rootsStateFor(0));
 
 const composerName = 'Philip Glass';
 
@@ -198,10 +223,10 @@ function openLiveRoot(
 	return Promise.resolve(
 		liveLevel(
 			'Genres',
-			Array.from({ length: 60 }, (_unused, index) => {
+			[...Array.from({ length: 60 }, (_unused, index) => {
 				const title = `Genre ${String(index).padStart(2, '0')}`;
 				return levelRow(liveRef(`genre:${title}`), title, 'genre');
-			})
+			}), ...['80s', 'Alt. Rock'].map(title => levelRow(liveRef(`genre:${title}`), title, 'genre'))]
 		)
 	);
 }
@@ -216,6 +241,28 @@ function levelRow(
 }
 
 const liveOpenRefs: LibraryRowReference[] = [];
+const livePreviewReads: { ref: LibraryRowReference; limit: number }[] = [];
+
+function genreSection(token: string): { title: string; rows: LibraryLevelRow[] } | null {
+	const match = /^section:(genre-00|subgenre-00|80s|Alt\. Rock):(artists|albums)$/u.exec(token);
+	if (!match) return null;
+	const [, genre, section] = match;
+	const kind = section === 'artists' ? 'artist' : 'album';
+	const count = genre === 'Alt. Rock' ? 1 : kind === 'artist' ? 4 : genre === '80s' ? 17 : albumRows.length;
+	const source = kind === 'artist' ? artistRows : albumRows;
+	return { title: kind === 'artist' ? 'Artists' : 'Albums', rows: source.slice(0, count).map((row, index) => ({
+		...levelRow(row.ref, row.title, kind, row.subtitle), ...(index === 0 ? { imageKey: 'unavailable-preview-art' } : {})
+	})) };
+}
+
+function previewLiveSection(_fetchFn: typeof fetch, ref: LibraryRowReference, limit: number): Promise<LibraryPreviewResponse> {
+	livePreviewReads.push({ ref: { ...ref }, limit });
+	if (ref.generation !== liveGeneration) return Promise.resolve({ contract: 'library-preview-v1', kind: 'stale' });
+	const source = genreSection(ref.token);
+	if (!source) return Promise.resolve({ contract: 'library-preview-v1', kind: 'unavailable', reason: 'read-failed', message: 'Unknown fixture section' });
+	return Promise.resolve({ contract: 'library-preview-v1', kind: 'preview', generation: liveGeneration,
+		title: source.title, totalCount: source.rows.length, limit, rows: source.rows.slice(0, limit) });
+}
 
 /** What Roon returns for one opened row, keyed by the token it was given. */
 function openLiveRef(_fetchFn: typeof fetch, ref: LibraryRowReference): Promise<LibraryOpenResponse> {
@@ -223,21 +270,24 @@ function openLiveRef(_fetchFn: typeof fetch, ref: LibraryRowReference): Promise<
 	if (ref.generation !== liveGeneration) {
 		return Promise.resolve({ contract: LIBRARY_OPEN_CONTRACT, kind: 'stale' });
 	}
+	const section = genreSection(ref.token);
+	if (section) return Promise.resolve(liveLevel(section.title, section.rows));
+	if (ref.token === 'genre:80s' || ref.token === 'genre:Alt. Rock') {
+		const title = ref.token.slice('genre:'.length);
+		return Promise.resolve(liveLevel(title, [
+			levelRow(liveRef(`action:${title}`), 'Play Genre', 'action'),
+			levelRow(liveRef(`section:${title}:artists`), 'Artists', 'section'),
+			levelRow(liveRef(`section:${title}:albums`), 'Albums', 'section')
+		]));
+	}
 	if (ref.token === 'genre:Genre 00') {
 		return Promise.resolve(
 			liveLevel('Genre 00', [
+				levelRow(liveRef('action:genre-00'), 'Play Genre', 'action'),
 				levelRow(liveRef('section:genre-00:albums'), 'Albums', 'section'),
 				levelRow(liveRef('genre:Subgenre 00'), 'Subgenre 00', 'genre'),
 				levelRow(liveRef('section:genre-00:artists'), 'Artists', 'section')
 			])
-		);
-	}
-	if (ref.token === 'section:genre-00:albums') {
-		return Promise.resolve(
-			liveLevel(
-				'Albums',
-				albumRows.map((row) => levelRow(row.ref, row.title, 'album', row.subtitle))
-			)
 		);
 	}
 	if (ref.token === 'genre:Subgenre 00') {
@@ -245,19 +295,6 @@ function openLiveRef(_fetchFn: typeof fetch, ref: LibraryRowReference): Promise<
 			liveLevel('Subgenre 00', [
 				levelRow(liveRef('section:subgenre-00:artists'), 'Artists', 'section')
 			])
-		);
-	}
-	if (
-		ref.token === 'section:genre-00:artists' ||
-		ref.token === 'section:subgenre-00:artists'
-	) {
-		return Promise.resolve(
-			liveLevel(
-				'Artists',
-				artistRows
-					.slice(0, 4)
-					.map((row) => levelRow(row.ref, row.title, 'artist', row.subtitle))
-			)
 		);
 	}
 	if (ref.token === `composer:${composerName}`) {
@@ -302,8 +339,8 @@ function openLiveRef(_fetchFn: typeof fetch, ref: LibraryRowReference): Promise<
 			rows
 		});
 	}
-	const albumMatch = /^album:(.*)$/u.exec(ref.token);
-	const album = albumMatch ? albums.find((entry) => entry.title === albumMatch[1]) : undefined;
+	const albumIndex = albumRows.findIndex(row => row.ref.token === ref.token);
+	const album = albumIndex < 0 ? undefined : albums[albumIndex];
 	if (album) {
 		const rows = [
 			levelRow(liveRef(`play:${album.title}`), 'Play Album', 'action'),
@@ -332,7 +369,7 @@ function openLiveRef(_fetchFn: typeof fetch, ref: LibraryRowReference): Promise<
 type ConnectionEvent = 'connect' | 'disconnect';
 const connectionListeners = new Map<ConnectionEvent, Set<() => void>>();
 const connectionSocket = {
-	connected: true,
+	connected: !coldStart,
 	on(event: ConnectionEvent, listener: () => void) {
 		const listeners = connectionListeners.get(event) ?? new Set();
 		listeners.add(listener);
@@ -436,17 +473,14 @@ const paletteSearchStore = writable<PaletteSearchState>({
 const recentStore = writable({ entries: [], loading: false, loaded: true });
 const favoritesStore = writable({ entries: [], loading: false, loaded: true });
 
-const prefsStorage = new Map<string, string>();
 const prefsStore = createUnifiedLibraryPrefsStore({
 	isBrowser: true,
-	getStorage: () => ({
-		getItem: (key: string) => prefsStorage.get(key) ?? null,
-		setItem: (key: string, value: string) => {
-			prefsStorage.set(key, value);
-		}
-	}),
-	addStorageListener: () => () => {}
+	getStorage: () => window.localStorage
 });
+// The existing fixture URL explicitly exercises All artists. Real /library
+// entry tests use a fresh preference, just like the production host.
+if (window.location.pathname === '/fixtures/library-scroll.html') prefsStore.setArtistView('all-artists');
+if (presentation?.albumsSort) prefsStore.setSort('albums', presentation.albumsSort);
 
 function fixtureActionState(overrides: Partial<AlbumActionState> = {}): AlbumActionState {
 	return {
@@ -614,6 +648,7 @@ mount(UnifiedLibraryMode, {
 		loadRoots: (async () => {}) as never,
 		openLiveRef: openLiveRef as never,
 		openLiveRoot: openLiveRoot as never,
+		previewLiveSection: previewLiveSection as never,
 		fetchCoreStatusData: (async () => ({
 			status: 'paired',
 			core: { id: 'browser-fixture-core', displayName: 'Fixture', displayVersion: '1' }
@@ -645,12 +680,13 @@ await tick();
 if (registeredLifecycle === null) throw new Error('Library fixture lifecycle did not register');
 const lifecycle: LibraryModeLifecycle = registeredLifecycle;
 
-function routeForLocation(): LibraryRoute {
-	return decodeLibraryRoute(new URL(window.location.href)) ?? { kind: 'root', scope: 'artists' };
-}
-
 function restoreLocation(cause: LibraryViewActivationCause): void {
-	lifecycle.resume({ cause, pageState: libraryPageStateFromRoute(routeForLocation()) });
+	const url = new URL(window.location.href);
+	const pageState = libraryEntryPageState(url, get(prefsStore).artistView);
+	lifecycle.resume({ cause, pageState });
+	if (cause === 'initial' && (url.pathname === '/library' || url.pathname === '/library/')) {
+		window.history.replaceState({}, '', encodeLibraryRoute(libraryRouteFromPageState(pageState)!));
+	}
 }
 
 restoreLocation('initial');
@@ -739,6 +775,15 @@ async function replaceRetiredLibraryGeneration(): Promise<{
 }
 
 const fixture = {
+	async publishInitialRoots() {
+		rootsStore.set(rootsStateFor(0));
+		await tick();
+	},
+	longCredit,
+	async replaceAlbumCredit(credit: string, replacement: string) {
+		for (const album of albums) if (album.artist === credit) album.artist = replacement;
+		return replaceRetiredLibraryGeneration();
+	},
 	setPresentation(theme: 'dark' | 'light', density: UnifiedLibraryDensity) {
 		document.documentElement.dataset.theme = theme;
 		prefsStore.setDensity(density);
@@ -798,6 +843,9 @@ const fixture = {
 	get liveOpenRefs() {
 		return liveOpenRefs.map((ref) => ({ ...ref }));
 	},
+	get livePreviewReads() {
+		return livePreviewReads.map(read => ({ ref: { ...read.ref }, limit: read.limit }));
+	},
 	get actionExecutions() {
 		return actionExecutions;
 	}
@@ -805,6 +853,10 @@ const fixture = {
 
 declare global {
 	interface Window {
+		libraryScrollFixtureSize?: { artists: number; albums: number };
+		libraryScrollFixtureVariant?: 'album-credits';
+		libraryScrollFixturePresentation?: { artwork?: boolean; singleLetter?: boolean; longTitles?: boolean; albumsSort?: 'az' | 'shuffle' };
+		libraryScrollFixtureColdStart?: boolean;
 		libraryScrollFixture: typeof fixture;
 	}
 }

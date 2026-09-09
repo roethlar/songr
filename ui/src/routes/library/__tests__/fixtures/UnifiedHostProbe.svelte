@@ -28,4 +28,5 @@
 	data-testid="unified-host-probe"
 	data-cause={activation.cause}
 	data-scope={activation.pageState.snapshot.scope}
+	data-artist-view={activation.pageState.snapshot.artistView}
 ></div>

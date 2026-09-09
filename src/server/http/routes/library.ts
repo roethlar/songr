@@ -4,6 +4,7 @@ import type {
   LibraryLevelHold,
   LibraryOnDemandRoot,
   LibraryOpenOutcome,
+  LibraryPreviewOutcome,
   LibraryReadTrigger,
   LibraryRootHold,
   LibraryRootsOutcome,
@@ -21,6 +22,8 @@ import {
   normalizeLibraryOpenRequest,
   type LibraryOpenResponse,
 } from "../../../shared/libraryOpenContracts";
+import { LIBRARY_PREVIEW_CONTRACT, normalizeLibraryPreviewRequest,
+  type LibraryPreviewResponse } from "../../../shared/libraryPreviewContracts";
 
 /**
  * The live library's read surface.
@@ -55,6 +58,7 @@ export interface LibraryRootsPort {
     token: string;
   }): Promise<LibraryOpenOutcome>;
   openRoot(root: LibraryOnDemandRoot): Promise<LibraryOpenOutcome>;
+  preview(ref: { generation: string; token: string }, limit: number): Promise<LibraryPreviewOutcome>;
 }
 
 const UNAVAILABLE_WITHOUT_PORT: LibraryRootsUnavailable = Object.freeze({
@@ -162,6 +166,34 @@ function answerOpen(res: Response, outcome: LibraryOpenOutcome): void {
 
 export const createLibraryRouter = (library?: LibraryRootsPort): Router => {
   const router = Router();
+
+  router.post("/preview", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const request = normalizeLibraryPreviewRequest(req.body);
+      if (request === null) {
+        res.status(400).json({ contract: LIBRARY_PREVIEW_CONTRACT, kind: "unavailable",
+          reason: "read-failed", message: "A preview requires one reference and a limit from 1 to 100." } satisfies LibraryPreviewResponse);
+        return;
+      }
+      if (!library) {
+        res.status(503).json({ contract: LIBRARY_PREVIEW_CONTRACT, kind: "unavailable",
+          reason: "no-core", message: "This build has no live library session." } satisfies LibraryPreviewResponse);
+        return;
+      }
+      const outcome = await library.preview(request.ref, request.limit);
+      if (outcome.kind === "stale" || (outcome.kind === "preview" &&
+          library.current()?.generation !== outcome.preview.generation)) {
+        res.status(409).json({ contract: LIBRARY_PREVIEW_CONTRACT, kind: "stale" } satisfies LibraryPreviewResponse);
+      } else if (outcome.kind === "preview") {
+        res.json({ contract: LIBRARY_PREVIEW_CONTRACT, kind: "preview", ...outcome.preview } satisfies LibraryPreviewResponse);
+      } else {
+        res.status(outcome.kind === "unsupported" ? 400 : 503).json({
+          contract: LIBRARY_PREVIEW_CONTRACT, kind: "unavailable",
+          reason: outcome.kind === "unsupported" ? "read-failed" : outcome.reason,
+          message: outcome.message } satisfies LibraryPreviewResponse);
+      }
+    } catch (error) { next(error); }
+  });
 
   // Mounted in every build, with or without a live session, so a build that
   // cannot answer says so in this contract's own words rather than falling

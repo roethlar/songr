@@ -117,6 +117,48 @@ describe("RoonClient — persisted-state callbacks", () => {
   });
 });
 
+describe("RoonClient — discovery observations", () => {
+  const candidate = { id: "core-a", host: "203.0.113.10", displayName: "Studio Core", phase: "connecting" };
+
+  it("keeps independent, sanitized Core observations without emitting pairing events", async () => {
+    const client = new RoonClient({ tokenPath: await makeTokenPath(), logger: stubLogger });
+    client.start();
+    const discovery = jest.fn();
+    const lifecycle = jest.fn();
+    client.on("core-discovery", discovery);
+    client.on("core-status", lifecycle);
+    capturedOptions.connection_status({ ...candidate, token: "private" });
+    capturedOptions.connection_status({ ...candidate, id: "core-b", phase: "awaiting-approval" });
+    expect(client.getDiscoveryStatus().cores).toEqual([
+      candidate, { ...candidate, id: "core-b", phase: "awaiting-approval" },
+    ]);
+    expect(discovery).toHaveBeenCalledTimes(2);
+    expect(lifecycle).not.toHaveBeenCalled();
+    expect(client.getCoreStatus()).toBe("discovering");
+    const copy = client.getDiscoveryStatus().cores[0] as any;
+    copy.phase = "failed";
+    expect(client.getDiscoveryStatus().cores[0].phase).toBe("connecting");
+    capturedOptions.connection_status({ ...candidate, phase: "unknown" });
+    expect(discovery).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears observations on Core switch and ignores retired API callbacks", async () => {
+    const client = new RoonClient({ tokenPath: await makeTokenPath(), logger: stubLogger });
+    client.start();
+    const retired = capturedOptions;
+    retired.connection_status({ ...candidate, phase: "awaiting-approval" });
+    retired.discovery_error("EACCES");
+    expect(client.getDiscoveryStatus().error).toContain("EACCES");
+    client.switchCore();
+    expect(client.getDiscoveryStatus()).toEqual({ cores: [] });
+    retired.connection_status(candidate);
+    retired.discovery_error("EACCES");
+    expect(client.getDiscoveryStatus()).toEqual({ cores: [] });
+    capturedOptions.connection_status(candidate);
+    expect(client.getDiscoveryStatus().cores).toEqual([candidate]);
+  });
+});
+
 describe("RoonClient — hasEverPaired", () => {
   it("is false on a first run with no token file", async () => {
     const tokenPath = await makeTokenPath();

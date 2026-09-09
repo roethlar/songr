@@ -5,6 +5,8 @@ import { vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/svelte';
 import { get, writable, type Writable } from 'svelte/store';
 import UnifiedLibraryMode from '../UnifiedLibraryMode.svelte';
+import type { ArtistView } from '$lib/albumArtistGroups';
+import type { LibraryPreviewResponse } from '@shared/libraryPreviewContracts';
 import {
 	LIBRARY_MODE_ACTIVATION_CONTEXT,
 	type CommittedLibraryModeActivation,
@@ -420,6 +422,8 @@ export function fakeRecentStore() {
 
 
 export interface Harness {
+	/** Existing tests address the All-artists surface; null tests a fresh preference. */
+	artistViewPreference?: ArtistView | null;
 	sessionClient?: SessionClient;
 	withContext?: boolean;
 	/** The Core's own identity, which is what the live roots load asks for. */
@@ -458,6 +462,7 @@ export interface Harness {
 	liveLibrary?: HarnessLiveLibrary;
 	rootsState?: LibraryRootsState;
 	openLiveRef?: (fetchFn: typeof fetch, ref: LibraryRowReference) => Promise<LibraryOpenResponse>;
+	previewLiveSection?: (fetchFn: typeof fetch, ref: LibraryRowReference, limit: number) => Promise<LibraryPreviewResponse>;
 	openLiveRoot?: (
 		fetchFn: typeof fetch,
 		root: 'genres' | 'composers'
@@ -484,6 +489,9 @@ export function mountMode(options: Harness = {}) {
 		options.openLiveRoot ??
 			(async () => ({ contract: LIBRARY_OPEN_CONTRACT, kind: 'stale' as const }))
 	);
+	const previewLiveSection = vi.fn(options.previewLiveSection ?? (async (): Promise<LibraryPreviewResponse> => ({
+		contract: 'library-preview-v1', kind: 'unavailable', reason: 'read-failed', message: 'No fixture preview provided.'
+	})));
 	const loadRoots =
 		options.loadRoots ??
 		vi.fn(async () => {
@@ -508,6 +516,8 @@ export function mountMode(options: Harness = {}) {
 		}),
 		addStorageListener: () => () => {}
 	});
+	const artistViewPreference = options.artistViewPreference === undefined ? 'all-artists' : options.artistViewPreference;
+	if (artistViewPreference !== null) prefsStore.setArtistView(artistViewPreference);
 	const registered: {
 		mode: LibraryView | null;
 		lifecycle: LibraryModeLifecycle | null;
@@ -549,6 +559,7 @@ export function mountMode(options: Harness = {}) {
 		loadRoots: loadRoots as never,
 		openLiveRef: openLiveRef as never,
 		openLiveRoot: openLiveRoot as never,
+		previewLiveSection: previewLiveSection as never,
 		fetchCoreStatusData: fetchCoreStatus as never,
 		corePairedStore: corePairedStore as never,
 		prefsStore,
@@ -616,6 +627,7 @@ export function mountMode(options: Harness = {}) {
 		liveLibrary,
 		openLiveRef,
 		openLiveRoot,
+		previewLiveSection,
 		loadRoots,
 		fetchCoreStatus,
 		corePairedStore,

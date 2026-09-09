@@ -236,3 +236,10 @@ export function libraryPathFailureMessage(resolution: LibraryPathResolution): st
 export function libraryAlbumStep(title: string, credit: string, edition = ''): LibraryPathStep {
 	return { kind: 'album', title, credit, edition };
 }
+
+/** A child belongs to its explicit source, which need not be the visible page. */
+export function libraryChildPath(source: LibraryRenderingPath, row: LibraryLevelRow): LibraryRenderingPath {
+	const step = row.kind === 'album' ? libraryAlbumStep(row.title, row.subtitle ?? '')
+		: { kind: row.kind, title: row.title };
+	return { origin: source.origin, steps: [...source.steps, step] };
+}

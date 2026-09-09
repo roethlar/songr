@@ -16,14 +16,14 @@ async function expectLiveCollection(
 test.beforeEach(async ({ page }) => {
 	await page.goto('/fixtures/library-scroll.html');
 	await expect(page.locator('html')).toHaveAttribute('data-fixture-ready', 'true');
-	await expect(page.getByTestId('unified-row').first()).toBeVisible();
+	await expect(page.getByTestId('unified-row').filter({ visible: true }).first()).toBeVisible();
 });
 
 test('library addresses survive a fresh tab, reload, Back, and Forward', async ({
 	page,
 	context
 }) => {
-	const artistLink = page.getByTestId('unified-row').nth(7);
+	const artistLink = page.getByTestId('unified-row').filter({ visible: true }).nth(7);
 	const artistName = (await artistLink.locator('.an').innerText()).trim();
 	const artistHref = await artistLink.getAttribute('href');
 	expect(artistHref).not.toBeNull();
@@ -39,12 +39,12 @@ test('library addresses survive a fresh tab, reload, Back, and Forward', async (
 	await freshPage.close();
 
 	// Modified click stayed native; the original tab is still on the root.
-	await expect(page.getByTestId('unified-row').first()).toBeVisible();
+	await expect(page.getByTestId('unified-row').filter({ visible: true }).first()).toBeVisible();
 	await artistLink.click();
 	await expect.poll(() => new URL(page.url()).pathname).toBe(new URL(artistHref!, page.url()).pathname);
 	await expect(page.getByTestId('unified-artist-name')).toHaveText(artistName);
 
-	const albumLink = page.getByTestId('unified-tile').first();
+	const albumLink = page.getByTestId('unified-tile').filter({ visible: true }).first();
 	const albumTitle = (await albumLink.locator('.tt').innerText()).trim();
 	const albumHref = await albumLink.getAttribute('href');
 	expect(albumHref).not.toBeNull();
@@ -76,7 +76,7 @@ test('library addresses survive a fresh tab, reload, Back, and Forward', async (
 
 test('Albums-root links survive a modified-click fresh tab and reload', async ({ page, context }) => {
 	await page.getByTestId('unified-scope-albums').click();
-	const albumLink = page.getByTestId('unified-tile').nth(9);
+	const albumLink = page.getByTestId('unified-tile').filter({ visible: true }).nth(9);
 	const albumTitle = (await albumLink.locator('.tt').innerText()).trim();
 	const albumHref = await albumLink.getAttribute('href');
 	expect(albumHref).not.toBeNull();
@@ -93,7 +93,7 @@ test('Albums-root links survive a modified-click fresh tab and reload', async ({
 	await expect(freshPage.getByTestId('unified-album-title')).toHaveText(albumTitle);
 	await freshPage.close();
 
-	await expect(page.getByTestId('unified-scope-view')).toHaveAttribute('data-scope', 'albums');
+	await expect(page.getByTestId('unified-scope-view').filter({ visible: true })).toHaveAttribute('data-scope', 'albums');
 });
 
 test('genre live hierarchy keeps one renderer through sections, subgenre, artist, and album history', async ({
@@ -124,7 +124,7 @@ test('genre live hierarchy keeps one renderer through sections, subgenre, artist
 	await page.goForward();
 	await expectLiveCollection(page, 'genre', 'Genre 00');
 
-	const albumSectionLink = page.getByTestId('unified-live-section-0');
+	const albumSectionLink = page.getByRole('link', { name: 'More albums' });
 	const albumSectionPagePromise = context.waitForEvent('page');
 	await albumSectionLink.click({ modifiers: [NEW_TAB_MODIFIER] });
 	const albumSectionPage = await albumSectionPagePromise;
@@ -157,7 +157,7 @@ test('genre live hierarchy keeps one renderer through sections, subgenre, artist
 
 	await page.getByRole('button', { name: '← Genres' }).click();
 	await expectLiveCollection(page, 'genre', 'Genre 00');
-	const subgenreLink = page.getByTestId('unified-live-genre-1');
+	const subgenreLink = page.getByRole('link', { name: 'Subgenre 00', exact: true });
 	const subgenrePagePromise = context.waitForEvent('page');
 	await subgenreLink.click({ modifiers: [NEW_TAB_MODIFIER] });
 	const subgenrePage = await subgenrePagePromise;
@@ -174,7 +174,7 @@ test('genre live hierarchy keeps one renderer through sections, subgenre, artist
 	await page.goForward();
 	await expectLiveCollection(page, 'genre', 'Subgenre 00');
 
-	const artistSectionLink = page.getByTestId('unified-live-section-0');
+	const artistSectionLink = page.getByRole('link', { name: 'More artists' });
 	const artistSectionPagePromise = context.waitForEvent('page');
 	await artistSectionLink.click({ modifiers: [NEW_TAB_MODIFIER] });
 	const artistSectionPage = await artistSectionPagePromise;

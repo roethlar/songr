@@ -8,6 +8,7 @@
 
 import { LIBRARY_NODE_KINDS, type LibraryNodeKind } from '@shared/libraryOpenContracts';
 import type { LibraryPathStep, LibraryRenderingPath } from '$lib/library/liveLibraryPath';
+import { albumCreditMatches, normalizeAlbumCreditSelector, type AlbumCreditSelector } from '$lib/albumArtistGroups';
 
 export const LIBRARY_ROUTE_TEXT_MAX_LENGTH = 1_024;
 export const LIBRARY_ROUTE_STEPS_MAX = 64;
@@ -48,6 +49,13 @@ export type LibraryRouteLivePath = Omit<LibraryRenderingPath, 'origin'> & {
 
 export type LibraryRoute =
 	| { readonly kind: 'root'; readonly scope: LibraryRootRouteScope }
+	| { readonly kind: 'album-artists-root' }
+	| { readonly kind: 'credit-group'; readonly selector: AlbumCreditSelector }
+	| { readonly kind: 'credit-album'; readonly selector: AlbumCreditSelector; readonly album: LibraryRouteAlbum }
+	| {
+			readonly kind: 'credit-album-track'; readonly selector: AlbumCreditSelector;
+			readonly album: LibraryRouteAlbum; readonly track: string;
+	  }
 	| { readonly kind: 'artist-filter'; readonly filter: string }
 	| { readonly kind: 'artist'; readonly artist: string }
 	| { readonly kind: 'artist-album'; readonly artist: string; readonly album: LibraryRouteAlbum }
@@ -227,11 +235,47 @@ function routePath(parts: readonly string[]): string {
 	return `/${parts.join('/')}`;
 }
 
+function creditRouteParts(selector: AlbumCreditSelector): string[] {
+	const checked = normalizeAlbumCreditSelector(selector);
+	if (checked === null) throw new TypeError('Invalid Library album-credit selector');
+	return ['library', 'album-artists', ...(checked.kind === 'uncredited'
+		? ['uncredited'] : ['credit', encodeSegment(requireText(checked.credit, 'album credit'))])];
+}
+
+function decodeCreditRoute(parts: readonly string[]): LibraryRoute | null {
+	if (parts.length === 2) return { kind: 'album-artists-root' };
+	const selector = normalizeAlbumCreditSelector(parts[2] === 'uncredited'
+		? { kind: 'uncredited' }
+		: parts[2] === 'credit' ? { kind: 'credit', credit: decodeSegment(parts[3] ?? '') } : null);
+	if (selector === null) return null;
+	const tail = parts.slice(selector.kind === 'uncredited' ? 3 : 4);
+	if (tail.length === 0) return { kind: 'credit-group', selector };
+	if (tail[0] !== 'album') return null;
+	const album = decodeAlbum(tail[1] ?? '');
+	if (album === null || !albumCreditMatches(selector, album.credit)) return null;
+	if (tail.length === 2) return { kind: 'credit-album', selector, album };
+	const track = tail.length === 4 && tail[2] === 'track' ? decodeSegment(tail[3]) : null;
+	return track === null ? null : { kind: 'credit-album-track', selector, album, track };
+}
+
 /** Encode one constructible route to its canonical in-app URL. */
 export function encodeLibraryRoute(route: LibraryRoute): string {
 	switch (route.kind) {
 		case 'root':
 			return routePath(['library', route.scope]);
+		case 'album-artists-root':
+			return '/library/album-artists';
+		case 'credit-group':
+			return routePath(creditRouteParts(route.selector));
+		case 'credit-album':
+		case 'credit-album-track': {
+			if (!albumCreditMatches(route.selector, route.album.credit)) {
+				throw new TypeError('Mismatched Library album-credit selector');
+			}
+			return routePath([...creditRouteParts(route.selector), 'album', encodeAlbum(route.album),
+				...(route.kind === 'credit-album-track'
+					? ['track', encodeSegment(requireText(route.track, 'track'))] : [])]);
+		}
 		case 'artist-filter':
 			return `${routePath(['library', 'artists'])}?filter=${encodeSegment(
 				requireText(route.filter, 'artist filter')
@@ -385,6 +429,7 @@ export function decodeLibraryRoute(url: URL): LibraryRoute | null {
 			: { kind: 'browse', steps: steps as LibraryRouteBrowseStep[], search };
 	}
 	if (url.search.length > 0) return null;
+	if (section === 'album-artists') return decodeCreditRoute(parts);
 	const livePath = decodeLivePathRoute(section, parts);
 	if (livePath !== false) return livePath;
 

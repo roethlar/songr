@@ -271,6 +271,9 @@ export const startServer = (
   };
 
   // Wire RoonClient events to Socket.IO
+  roonClient.on("core-discovery", (event) => {
+    socketContext.io.emit("core-discovery", event);
+  });
   roonClient.on("core-status", (event) => {
     logger.info(event, "Roon core status update");
     socketContext.io.emit("core-status", event);

@@ -27,6 +27,7 @@ function memoryStorage(): {
 function validRaw(over: Record<string, unknown> = {}): string {
 	return JSON.stringify({
 		version: UNIFIED_LIBRARY_PREFS_VERSION,
+		artistView: 'all-artists',
 		density: 'compact',
 		sorts: {
 			artists: 'za',
@@ -40,8 +41,19 @@ function validRaw(over: Record<string, unknown> = {}): string {
 }
 
 describe('parseUnifiedLibraryPrefs', () => {
+	it.each([undefined, null, 'invalid', 1])('defaults an absent/invalid artist view without losing other preferences: %j', artistView => {
+		const parsed = parseUnifiedLibraryPrefs(validRaw({ artistView }));
+		expect(parsed).toEqual({ ...parseUnifiedLibraryPrefs(validRaw()), artistView: 'album-artists' });
+	});
+
+	it('migrates v3 density and sorts without reinterpreting them', () => {
+		expect(parseUnifiedLibraryPrefs(validRaw({ version: 3, artistView: undefined })))
+			.toEqual({ ...parseUnifiedLibraryPrefs(validRaw()), artistView: 'album-artists' });
+	});
+
 	it('round-trips a valid envelope', () => {
 		expect(parseUnifiedLibraryPrefs(validRaw())).toEqual({
+			artistView: 'all-artists',
 			density: 'compact',
 			sorts: {
 				artists: 'za',
@@ -102,6 +114,11 @@ describe('unifiedLibraryPrefsStore', () => {
 		});
 
 		expect(get(store).density).toBe('compact');
+		expect(store.setArtistView('album-artists')).toBe(true);
+		expect(get(store).artistView).toBe('album-artists');
+		expect(store.setArtistView('contributors')).toBe(false);
+		expect(get(store).artistView).toBe('album-artists');
+		expect(store.setArtistView('all-artists')).toBe(true);
 
 		expect(store.setDensity('pi')).toBe(true);
 		expect(get(store).density).toBe('pi');
@@ -137,6 +154,7 @@ describe('unifiedLibraryPrefsStore', () => {
 		});
 
 		expect(store.setDensity('compact')).toBe(false);
+		expect(store.setArtistView('all-artists')).toBe(false);
 		expect(get(store)).toEqual(DEFAULT_UNIFIED_LIBRARY_PREFS);
 	});
 
@@ -161,6 +179,7 @@ describe('unifiedLibraryPrefsStore', () => {
 		listener!(UNIFIED_LIBRARY_PREFS_STORAGE_KEY, validRaw());
 		expect(get(store).density).toBe('compact');
 		expect(get(store).sorts.genres).toBe('most-albums');
+		expect(get(store).artistView).toBe('all-artists');
 
 		// A hostile or cleared value falls back to defaults, never throws.
 		listener!(UNIFIED_LIBRARY_PREFS_STORAGE_KEY, null);

@@ -8,7 +8,7 @@ type FixtureActionStep =
 
 async function openAlbum(page: Page): Promise<{ readonly title: string; readonly url: string }> {
 	await page.getByTestId('unified-scope-albums').click();
-	const album = page.getByTestId('unified-tile').first();
+	const album = page.getByTestId('unified-tile').filter({ visible: true }).first();
 	const title = (await album.locator('.tt').innerText()).trim();
 	await album.click();
 	await expect(page.getByTestId('unified-album-title')).toHaveText(title);
@@ -31,7 +31,7 @@ async function expectNoPlayback(page: Page): Promise<void> {
 test.beforeEach(async ({ page }) => {
 	await page.goto('/fixtures/library-scroll.html');
 	await expect(page.locator('html')).toHaveAttribute('data-fixture-ready', 'true');
-	await expect(page.getByTestId('unified-row').first()).toBeVisible();
+	await expect(page.getByTestId('unified-row').filter({ visible: true }).first()).toBeVisible();
 });
 
 test.afterEach(async ({ page }) => {

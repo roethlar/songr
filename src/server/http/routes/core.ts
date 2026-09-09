@@ -21,6 +21,15 @@ function isConfirmedCoreSwitch(value: unknown): value is CoreSwitchRequest {
 export const createCoreRouter = (roonClient: RoonClient): Router => {
   const router = Router();
 
+  router.get('/discovery', (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      res.json(roonClient.getDiscoveryStatus());
+    } catch (error) {
+      next(error);
+    }
+  });
+
   /**
    * GET /api/core
    * Returns current Roon core connection status

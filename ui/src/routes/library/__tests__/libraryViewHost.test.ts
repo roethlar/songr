@@ -9,6 +9,7 @@ import {
 } from '../../../test/app-stubs/navigation';
 import { __setTestPage } from '../../../test/app-stubs/state.svelte';
 import { libraryViewHostStore } from '$lib/stores/libraryViewHostStore';
+import { unifiedLibraryPrefsStore } from '$lib/stores/unifiedLibraryPrefsStore';
 
 vi.mock('../UnifiedLibraryMode.svelte', async () => ({
 	default: (await import('./fixtures/UnifiedHostProbe.svelte')).default
@@ -19,12 +20,20 @@ import DeepLibraryPage from '../[...path]/+page.svelte';
 
 describe('Unified-only Library host', () => {
 	beforeEach(() => {
+		const preferences = new Map<string, string>();
+		vi.stubGlobal('localStorage', {
+			getItem: (key: string) => preferences.get(key) ?? null,
+			setItem: (key: string, value: string) => preferences.set(key, value),
+			clear: () => preferences.clear()
+		});
 		window.history.replaceState({}, '', '/');
 		__resetNavigation('http://localhost/library');
+		unifiedLibraryPrefsStore.setArtistView('album-artists');
 	});
 
 	afterEach(() => {
 		cleanup();
+		vi.unstubAllGlobals();
 	});
 
 	it('mounts Unified directly and publishes it as the active shell mode', async () => {
@@ -54,7 +63,7 @@ describe('Unified-only Library host', () => {
 		await waitFor(() => expect(__getNavigationLog()).toHaveLength(1));
 		expect(__getNavigationLog()[0]).toEqual({
 			operation: 'replaceState',
-			url: 'http://localhost/library/artists',
+			url: 'http://localhost/library/album-artists',
 			state: {}
 		});
 		expect(getByTestId('unified-host-probe')).toHaveAttribute('data-scope', 'artists');
@@ -70,6 +79,23 @@ describe('Unified-only Library host', () => {
 			expect(getByTestId('unified-host-probe')).toHaveAttribute('data-cause', 'history-pop')
 		);
 		expect(getByTestId('unified-host-probe')).toHaveAttribute('data-scope', 'browse');
+	});
+
+	it('canonicalizes bare entry to the remembered All artists choice', async () => {
+		expect(unifiedLibraryPrefsStore.setArtistView('all-artists')).toBe(true);
+		const { getByTestId } = render(LibraryPage);
+		await waitFor(() => expect(__getNavigationLog()[0]?.url).toBe('http://localhost/library/artists'));
+		expect(getByTestId('unified-host-probe')).toHaveAttribute('data-artist-view', 'all-artists');
+	});
+
+	it.each(['all-artists', 'album-artists'] as const)('does not reactively override the addressed view: %s', view => {
+		__resetNavigation(`http://localhost/library/${view === 'all-artists' ? 'artists' : view}`);
+		const { getByTestId } = render(LibraryPage);
+		unifiedLibraryPrefsStore.setArtistView(view === 'all-artists' ? 'album-artists' : 'all-artists');
+		return waitFor(() => {
+			expect(getByTestId('unified-host-probe')).toHaveAttribute('data-artist-view', view);
+			expect(__getNavigationLog()).toEqual([]);
+		});
 	});
 
 	it('uses the address bar when a shallow pop republishes the mounted route URL', async () => {

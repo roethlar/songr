@@ -36,7 +36,10 @@ import {
 	normalizeLibraryOpenResponse,
 	type LibraryOpenResponse
 } from '@shared/libraryOpenContracts';
+import { normalizeLibraryPreviewRequest, normalizeLibraryPreviewResponse,
+	type LibraryPreviewResponse } from '@shared/libraryPreviewContracts';
 import { buildApiRequestInit } from '@shared/apiRequest';
+import type { CoreDiscoveryStatus } from '@shared/coreDiscovery';
 
 export class ApiError extends Error {
 	readonly status: number;
@@ -193,8 +196,39 @@ export function openLibraryRoot(
 	return libraryOpenRequest(fetchFn, { root });
 }
 
+/** A bounded, generation-bound prefix, kept distinct from a complete open. */
+export async function previewLibrarySection(
+	fetchFn: FetchLike, ref: LibraryRowReference, limit: number
+): Promise<LibraryPreviewResponse> {
+	const body = normalizeLibraryPreviewRequest({ ref, limit });
+	if (body === null) throw new ApiError('Invalid library preview request', 400, null);
+	let payload: unknown;
+	try {
+		payload = await request<unknown>(fetchFn, '/api/library/preview', {
+			method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+		});
+	} catch (error) {
+		if (error instanceof ApiError && (error.status === 409 || error.status === 503 || error.status === 400)) {
+			const stated = normalizeLibraryPreviewResponse(error.body, limit);
+			if (stated?.kind === 'stale' && error.status === 409) return stated;
+			if (stated?.kind === 'unavailable' && (error.status === 503 || error.status === 400)) return stated;
+		}
+		if (error instanceof SyntaxError) throw new ApiError('Invalid library preview response', 502, null);
+		throw error;
+	}
+	const preview = normalizeLibraryPreviewResponse(payload, limit);
+	if (!preview || (preview.kind === 'preview' && preview.generation !== ref.generation)) {
+		throw new ApiError('Invalid library preview response', 502, payload);
+	}
+	return preview;
+}
+
 export function fetchCoreStatus(fetchFn: FetchLike): Promise<CoreStatusResponse> {
 	return request<CoreStatusResponse>(fetchFn, '/api/core');
+}
+
+export function fetchCoreDiscovery(fetchFn: FetchLike): Promise<CoreDiscoveryStatus> {
+	return request<CoreDiscoveryStatus>(fetchFn, '/api/core/discovery', { cache: 'no-store' });
 }
 
 export function switchCore(fetchFn: FetchLike): Promise<CoreSwitchResponse> {

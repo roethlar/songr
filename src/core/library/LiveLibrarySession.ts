@@ -56,6 +56,7 @@ import {
 import type { GovernedCallOutcome } from "../pacing/CallAdmissionController";
 
 import type { LibraryReadPacing } from "./LibraryReadPacing";
+import { isLibraryPreviewLimit, libraryGenrePreviewKind } from "../../shared/libraryPreviewContracts";
 import type { LibraryRowReference } from "../../shared/libraryRootsContracts";
 import {
   LIBRARY_LEVEL_ROWS_MAX,
@@ -73,6 +74,7 @@ import type {
   LibraryOnDemandRoot,
   LibraryOpenOutcome,
   LibraryPublicationPort,
+  LibraryPreviewOutcome,
   LibraryReadTrigger,
   LibraryRootHold,
   LibraryRootRowHold,
@@ -474,6 +476,104 @@ export class LiveLibrarySession implements LibrarySource {
     });
   }
 
+  public async preview(ref: LibraryRowReference, limit: number): Promise<LibraryPreviewOutcome> {
+    if (!isLibraryPreviewLimit(limit)) {
+      return { kind: "unsupported", message: "That is not a supported preview size." };
+    }
+    const held = this.snapshot;
+    if (held === null || held.generation !== ref.generation) return { kind: "stale" };
+    const node = held.nodes.get(ref.token);
+    if (node === undefined) return { kind: "stale" };
+    const implied = libraryGenrePreviewKind(node);
+    if (implied === null) {
+      return { kind: "unsupported", message: "Previews require a genre Artists or Albums section." };
+    }
+    const coreId = this.coreId;
+    if (this.closed || coreId === null) {
+      return { kind: "unavailable", reason: "no-core", message: "No Roon Core is paired." };
+    }
+    if (!this.options.pacing.admits(coreId)) {
+      return { kind: "unavailable", reason: "core-under-pressure",
+        message: "The Roon Core is being given a rest; previews will be available shortly." };
+    }
+    const assertCurrent = (): void => {
+      if (this.closed || this.snapshot !== held || this.coreId !== coreId ||
+          held.nodes.get(ref.token) !== node) {
+        throw new BrowseSessionCoordinatorError("STALE_GENERATION", "The preview's library has been retired");
+      }
+      // Also checks the retained publication authority, not just our snapshot.
+      this.resolve(ref);
+    };
+    const ticket = this.options.pacing.begin(coreId, "preview");
+    const startedAt = this.now();
+    try {
+      const preview = await this.options.runBrowse(coreId, async session => {
+        assertCurrent();
+        if (session.sessionScope !== held.sessionScope) {
+          throw new BrowseSessionCoordinatorError("SESSION_LOST", "The preview's browse session is gone");
+        }
+        const itemKey = this.resolve(ref).itemKey;
+        const first = await session.browse({ hierarchy: node.hierarchy, itemKey, offset: 0, pageSize: limit });
+        assertCurrent();
+        const totalCount = first.totalCount;
+        if (totalCount === undefined || !Number.isSafeInteger(totalCount) || totalCount < 0 ||
+            totalCount > LIBRARY_LEVEL_ROWS_MAX || first.offset !== 0 ||
+            first.items.length !== Math.min(limit, totalCount)) {
+          throw new Error("The preview prefix had an invalid total, offset or row count");
+        }
+        const keys = new Set<string>();
+        for (const item of first.items) {
+          if (typeof item.itemKey !== "string" || !item.itemKey.length || keys.has(item.itemKey) ||
+              libraryRowKind(implied, item) !== implied) {
+            throw new Error("The preview prefix had a missing/duplicate key or unsupported row kind");
+          }
+          keys.add(item.itemKey);
+        }
+        // No continuation loads: a prefix is deliberately not a complete list.
+        assertCurrent();
+        const rows = this.publishLevelRows(held, node, first.items, implied);
+        return { generation: held.generation, title: first.title ?? node.title,
+          ...(first.subtitle !== undefined ? { subtitle: first.subtitle } : {}),
+          totalCount, limit, rows };
+      });
+      assertCurrent();
+      this.pruneLevels(held);
+      assertCurrent();
+      for (const row of preview.rows) this.resolve(row.ref);
+      this.options.pacing.settle(ticket, "answered", this.now() - startedAt);
+      return { kind: "preview", preview };
+    } catch (error) {
+      this.options.pacing.settle(ticket, classifyReadFailure(error), this.now() - startedAt);
+      if (this.snapshot !== held || this.coreId !== coreId) return { kind: "stale" };
+      if (isNotFoundOutcome(error)) {
+        if ((error instanceof BrowseSessionCoordinatorError && error.code === "SESSION_LOST") ||
+            (error instanceof RoonBrowseError && error.invalidatesItemKeys)) this.retire("session-lost");
+        return { kind: "stale" };
+      }
+      this.options.logger.warn({ err: error, coreId, kind: node.kind }, "Live library preview read failed");
+      return { kind: "unavailable", reason: "read-failed", message: "Roon could not read that preview just now." };
+    }
+  }
+
+  /** Full levels and prefixes publish into the same bounded token authority. */
+  private publishLevelRows(
+    held: HeldSnapshot, node: LibraryNodeHold, items: readonly BrowseItem[], implied: LibraryNodeKind
+  ): LibraryLevelRowHold[] {
+    const published = this.options.publication.appendCatalogPublishedItems(
+      held.sessionScope, held.authorityGeneration, items
+    );
+    const rows = items.map((item, index): LibraryLevelRowHold => {
+      const kind = libraryRowKind(implied, item);
+      const token = published[index].token;
+      held.nodes.set(token, { hierarchy: node.hierarchy, kind, title: item.title });
+      return { ref: { generation: held.generation, token }, title: item.title, kind,
+        ...(item.subtitle !== undefined ? { subtitle: item.subtitle } : {}),
+        ...(item.imageKey !== undefined ? { imageKey: item.imageKey } : {}) };
+    });
+    held.levels.push(published.map(entry => entry.token));
+    return rows;
+  }
+
   /**
    * The one read behind both open paths.
    *
@@ -541,43 +641,9 @@ export class LiveLibrarySession implements LibrarySource {
               Math.ceil(LIBRARY_LEVEL_ROWS_MAX / LIBRARY_LEVEL_PAGE_SIZE) + 1,
             refuse: (message) => new Error(`[LiveLibrarySession] ${message}`),
           });
-          const published = this.options.publication.appendCatalogPublishedItems(
-            held.sessionScope,
-            held.authorityGeneration,
-            items
-          );
           const implied =
             input.impliedOverride ?? libraryImpliedChildKind(node);
-          const rows = items.map((item, index): LibraryLevelRowHold => {
-            const kind = libraryRowKind(implied, {
-              title: item.title,
-              ...(item.subtitle !== undefined
-                ? { subtitle: item.subtitle }
-                : {}),
-              ...(item.hint !== undefined ? { hint: item.hint } : {}),
-              ...(item.itemType !== undefined
-                ? { itemType: item.itemType }
-                : {}),
-            });
-            const token = published[index].token;
-            held.nodes.set(token, {
-              hierarchy: node.hierarchy,
-              kind,
-              title: item.title,
-            });
-            return {
-              ref: { generation: held.generation, token },
-              title: item.title,
-              kind,
-              ...(item.subtitle !== undefined
-                ? { subtitle: item.subtitle }
-                : {}),
-              ...(item.imageKey !== undefined
-                ? { imageKey: item.imageKey }
-                : {}),
-            };
-          });
-          held.levels.push(published.map((entry) => entry.token));
+          const rows = this.publishLevelRows(held, node, items, implied);
           return {
             generation: held.generation,
             // Roon's own heading for the level, so a page states what it

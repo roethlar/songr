@@ -143,6 +143,7 @@ Sood.prototype.initsocket = function(cb) {
         //	    this.logger.log(`SOOD: new sock: unicast`);
         unicast.send_sock = dgram.createSocket({ type: 'udp4' });
         unicast.send_sock.on('error', (err) => {
+            this.emit('socket-error', err);
             //		this.logger.log(`server error ${ip}`, err);
             unicast.send_sock.close();
         });
@@ -189,6 +190,7 @@ Sood.prototype._listen_iface = function(ip, netmask, ifacename) {
         new_iface = true;
 	iface.recv_sock = dgram.createSocket({ type: 'udp4', reuseAddr: true });
 	iface.recv_sock.on('error', (err) => {
+            this.emit('socket-error', err);
 //	    this.logger.log(`server error ${ip}`, err);
 	    iface.recv_sock.close();
 	});
@@ -201,7 +203,12 @@ Sood.prototype._listen_iface = function(ip, netmask, ifacename) {
 	    if (msg) this.emit("message", msg);
 	});
 	iface.recv_sock.bind({ port: SOOD_PORT }, () => {
-	    iface.recv_sock.addMembership(SOOD_MULTICAST_IP, ip);
+            try {
+                iface.recv_sock.addMembership(SOOD_MULTICAST_IP, ip);
+            } catch (err) {
+                this.emit('socket-error', err);
+                iface.recv_sock.close();
+            }
 	});
     }
     if (!iface.send_sock) {
@@ -210,6 +217,7 @@ Sood.prototype._listen_iface = function(ip, netmask, ifacename) {
 	iface.send_sock = dgram.createSocket({ type: 'udp4' });
         iface.broadcast = getBroadcastAddress(ip, netmask);
 	iface.send_sock.on('error', (err) => {
+            this.emit('socket-error', err);
 //	    this.logger.log(`server error ${ip}`, err);
 	    iface.send_sock.close();
 	});

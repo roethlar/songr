@@ -175,6 +175,7 @@ export const attachSocketServer = (
       coreStatus: roonClient.getCoreStatus(),
       coreInfo: roonClient.getCoreInfo() ?? undefined,
     });
+    socket.emit("core-discovery", roonClient.getDiscoveryStatus());
     socket.emit("zones", { zones: transportService.getZones() });
     for (const nowPlaying of transportService.getNowPlayingAll()) {
       socket.emit("now-playing-updated", {

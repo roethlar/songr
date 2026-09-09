@@ -7,7 +7,7 @@ import type { Zone } from '@shared/types';
  * this UI is served by is not a concept the flow introduces, mentions, or
  * asks the user to think about.
  */
-export type OnboardingStep = 'connect' | 'local-playback' | 'complete';
+export type OnboardingStep = 'connect' | 'complete';
 
 /**
  * `unknown` is the honest pre-answer state and the fail-closed one: until
@@ -87,8 +87,7 @@ export function matchesHostname(
  * auto-select somebody's pre-existing "Kitchen" zone and silently complete
  * the flow against the wrong room. An ungrouped RoonBridge zone is still
  * found through the output it contains; a zones payload with no output
- * data yields no match, which the flow already handles (the step waits or
- * is skipped) — strictly better than wrong-room playback.
+ * data yields no match; local playback is optional and never holds up setup.
  */
 export function findLocalZoneId(
 	zones: readonly Zone[],
@@ -117,9 +116,8 @@ export function findLocalZoneId(
  *     working app.
  *  3. Not paired yet → the Connect step, which advances by itself the
  *     moment pairing lands.
- *  4. Paired and this computer already plays audio → straight to complete,
- *     carrying the zone to select. Nothing to ask.
- *  5. Otherwise → the skippable local-playback step.
+ *  4. Paired → complete immediately. Carry an existing local zone to select
+ *     if one is already known; never wait for a Bridge or a zone refresh.
  */
 export function deriveOnboardingFlow(input: OnboardingFlowInput): OnboardingFlowState {
 	const firstRun = input.everPaired === false;
@@ -133,8 +131,5 @@ export function deriveOnboardingFlow(input: OnboardingFlowInput): OnboardingFlow
 		return { firstRun: true, active: true, step: 'connect', localZoneId: null };
 	}
 	const localZoneId = findLocalZoneId(input.zones, input.hostname);
-	if (localZoneId) {
-		return { firstRun: true, active: false, step: 'complete', localZoneId };
-	}
-	return { firstRun: true, active: true, step: 'local-playback', localZoneId: null };
+	return { firstRun: true, active: false, step: 'complete', localZoneId };
 }

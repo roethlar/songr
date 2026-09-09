@@ -23,6 +23,32 @@ Get Roon core connection status
 
 **Status Values**: `discovering`, `paired`, `unpaired`
 
+#### GET /core/discovery
+
+Returns pre-authorization observations independently of the paired-Core
+lifecycle. `Cache-Control: no-store`. The `core-discovery` Socket.IO event
+publishes the same snapshot, including initial hydration on each connection.
+
+```json
+{
+  "cores": [{
+    "id": "discovery-id",
+    "displayName": "Studio Core",
+    "host": "192.0.2.10",
+    "phase": "awaiting-approval"
+  }]
+}
+```
+
+Phases: `connecting`, `registering` (reading Core identity), `awaiting-approval`
+(registry info answered and registration submitted), `registered`, `failed`.
+A failed entry may include `detail`; a local discovery socket failure may add
+top-level `error`. No registry bodies or authorization tokens are included.
+An empty `cores` list means no Core has been observed in this discovery run;
+it does not establish that a firewall is blocking traffic. Failed observations
+remain identifiable until a later discovery retries them or a Core switch
+clears the run.
+
 ---
 
 ### Zones

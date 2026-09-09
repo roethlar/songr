@@ -1,3 +1,4 @@
+import { activeLibraryElements, activeLibraryScreen } from '../../../test/activeLibraryQueries';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/svelte';
 import { get, writable } from 'svelte/store';
@@ -231,7 +232,7 @@ describe('UnifiedLibraryMode — lifecycle', () => {
 
 		expect(harness.registered.mode).toBe('unified');
 		expect(harness.session.claim).not.toHaveBeenCalled();
-		expect(screen.getByText('Suspended.')).toBeInTheDocument();
+		expect(activeLibraryScreen.getByText('Suspended.')).toBeInTheDocument();
 
 		harness.registered.lifecycle!.resume({
 			cause: 'initial',
@@ -252,7 +253,7 @@ describe('UnifiedLibraryMode — lifecycle', () => {
 		harness.registered.lifecycle!.suspend();
 		// The release is synchronous; only the DOM flush waits.
 		expect(harness.session.release).toHaveBeenCalledTimes(1);
-		await waitFor(() => expect(screen.getByText('Suspended.')).toBeInTheDocument());
+		await waitFor(() => expect(activeLibraryScreen.getByText('Suspended.')).toBeInTheDocument());
 	});
 
 	it('drops a Core status fetch that resolves after suspend', async () => {
@@ -357,7 +358,7 @@ describe('UnifiedLibraryMode — lifecycle', () => {
 
 		await waitFor(() => expect(harness.fetchCoreStatus).toHaveBeenCalledTimes(1));
 		expect(harness.loadRoots).not.toHaveBeenCalled();
-		expect(screen.getByText('Idle.')).toBeInTheDocument();
+		expect(activeLibraryScreen.getByText('Idle.')).toBeInTheDocument();
 
 		// Pairing arrives on the `core-status` event the socket registrar
 		// feeds into `coreStore`; the deferred load rides that signal.
@@ -394,7 +395,7 @@ describe('UnifiedLibraryMode — lifecycle', () => {
 		await Promise.resolve();
 		expect(harness.fetchCoreStatus).toHaveBeenCalledTimes(2);
 		expect(harness.loadRoots).not.toHaveBeenCalled();
-		expect(screen.getByText('Idle.')).toBeInTheDocument();
+		expect(activeLibraryScreen.getByText('Idle.')).toBeInTheDocument();
 	});
 });
 
@@ -451,9 +452,9 @@ describe('UnifiedLibraryMode — shell', () => {
 			'Favorites',
 			'Surprise me'
 		]);
-		expect(screen.queryByText('Most played')).toBeNull();
-		expect(screen.queryByText('Recently added')).toBeNull();
-		expect(screen.queryByText(/Roon exposes no play counts/)).toBeNull();
+		expect(activeLibraryScreen.queryByText('Most played')).toBeNull();
+		expect(activeLibraryScreen.queryByText('Recently added')).toBeNull();
+		expect(activeLibraryScreen.queryByText(/Roon exposes no play counts/)).toBeNull();
 		expect(screen.queryByTestId('unified-scope-composers')).toBeNull();
 		expect(screen.getByTestId('unified-summary')).toHaveTextContent('50 TOTAL');
 		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
@@ -973,8 +974,7 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 
 describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 	const renderedTileTitles = (): string[] =>
-		screen
-			.getAllByTestId('unified-tile')
+		activeLibraryScreen.getAllByTestId('unified-tile')
 			.map((tile) => tile.querySelector('.tt')?.textContent ?? '');
 
 	beforeEach(() => {
@@ -1090,7 +1090,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 
 		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
 		await fireEvent.click(screen.getByTestId('unified-scope-artists'));
-		await fireEvent.click(screen.getByText('a artist 0').closest('a,button')!);
+		await fireEvent.click(activeLibraryScreen.getByText('a artist 0').closest('a,button')!);
 
 		const enteredDrill = __getHistorySnapshot();
 		expect(enteredDrill).toMatchObject({ index: 3 });
@@ -1158,8 +1158,8 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			})
 		});
 
-		const countedRow = screen.getByText('Counted Artist').closest('a,button');
-		const zeroRow = screen.getByText('Zero Artist').closest('a,button');
+		const countedRow = activeLibraryScreen.getByText('Counted Artist').closest('a,button');
+		const zeroRow = activeLibraryScreen.getByText('Zero Artist').closest('a,button');
 		expect(countedRow?.querySelector('.ac')).toHaveTextContent('27');
 		expect(zeroRow?.querySelector('.ac')).toHaveTextContent('0');
 	});
@@ -1175,10 +1175,11 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		const first = renderedTileTitles();
 		expect(first).toHaveLength(24);
 		expect(screen.queryByRole('button', { name: 'Redraw' })).toBeNull();
-		const hint = screen.getByText(
+		const hint = activeLibraryScreen.getByText(
 			'Random, not "unplayed" — nothing knows what you have heard. Re-select the chip to redraw.'
 		);
-		expect(screen.getByTestId('unified-scope-view').lastElementChild).toBe(hint);
+		expect(hint.previousElementSibling).toHaveClass('tiles');
+		expect(hint.parentElement?.lastElementChild).toBe(hint);
 
 		await fireEvent.click(surpriseChip);
 		expect(renderedTileTitles()).not.toEqual(first);
@@ -1195,19 +1196,19 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		await fireEvent.click(screen.getByTestId('unified-sort'));
 		await fireEvent.click(screen.getByTestId('unified-sort-option-shuffle'));
 		const first = renderedTileTitles();
-		expect(screen.queryByText(/Random, not/)).toBeNull();
+		expect(activeLibraryScreen.queryByText(/Random, not/)).toBeNull();
 		expect(screen.queryByRole('button', { name: 'Redraw' })).toBeNull();
 
 		await fireEvent.click(albumsChip);
 		expect(renderedTileTitles()).not.toEqual(first);
-		expect(screen.queryByText(/Random, not/)).toBeNull();
+		expect(activeLibraryScreen.queryByText(/Random, not/)).toBeNull();
 	});
 
 	it('renders the reference Recently played subtitle without appending the album', async () => {
 		mountMode({ liveLibrary: harnessLibrary(), recentStore: fakeRecentStore() });
 
 		await fireEvent.click(screen.getByTestId('unified-scope-recently-played'));
-		const tile = screen.getByText('A Recent Track').closest('a,button');
+		const tile = activeLibraryScreen.getByText('A Recent Track').closest('a,button');
 		expect(tile?.querySelector('.ta')).toHaveTextContent('Reference Artist');
 		expect(tile?.querySelector('.ta')).not.toHaveTextContent('Album must not appear');
 	});
@@ -1309,7 +1310,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		});
 
 		await fireEvent.click(screen.getByTestId('unified-scope-genres'));
-		await fireEvent.click(await screen.findByText('Bright Machinery'));
+		await fireEvent.click(await activeLibraryScreen.findByText('Bright Machinery'));
 		expect(await screen.findByTestId('unified-live-collection-page')).toHaveAttribute(
 			'data-level-kind',
 			'genre'
@@ -1350,7 +1351,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		});
 
 		expect(screen.queryByTestId('unified-scope-recently-added')).toBeNull();
-		expect(screen.queryByText('Recently added')).toBeNull();
+		expect(activeLibraryScreen.queryByText('Recently added')).toBeNull();
 	});
 
 	it('gates a restored Recently added page on the one honest reason (Slice 5)', async () => {
@@ -1373,11 +1374,11 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		} as CommittedLibraryModeActivation);
 
 		await waitFor(() =>
-			expect(screen.getByTestId('unified-recently-added-gated')).toHaveTextContent(
+			expect(activeLibraryScreen.getByTestId('unified-recently-added-gated')).toHaveTextContent(
 				NO_IMPORT_DATES_REASON
 			)
 		);
-		expect(screen.queryByTestId('unified-tile')).toBeNull();
+		expect(activeLibraryScreen.queryByTestId('unified-tile')).toBeNull();
 	});
 
 	it('reverses the rail buckets under za so letters mirror the list', async () => {
@@ -1468,8 +1469,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		await fireEvent.click(screen.getByTestId('unified-sort-option-by-artist'));
 
 		expect(
-			screen
-				.getAllByTestId('unified-tile')
+			activeLibraryScreen.getAllByTestId('unified-tile')
 				.map((tile) => tile.querySelector('.ta')?.textContent)
 		).toEqual([
 			'Faith No More',
@@ -1479,7 +1479,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			'The The',
 			'The Verve'
 		]);
-		expect(Array.from(document.querySelectorAll('.grp .gl'), (group) => group.textContent)).toEqual([
+		expect(Array.from(activeLibraryElements('.grp .gl'), (group) => group.textContent)).toEqual([
 			'F',
 			'J',
 			'T',
@@ -1499,14 +1499,14 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 
 		await fireEvent.click(screen.getByTestId('unified-scope-genres'));
 		await waitFor(() =>
-			expect(Array.from(document.querySelectorAll('.grp .gl'), (group) => group.textContent)).toEqual([
+			expect(Array.from(activeLibraryElements('.grp .gl'), (group) => group.textContent)).toEqual([
 				'#',
 				'A',
 				'D'
 			])
 		);
 		expect(
-			Array.from(document.querySelectorAll('.grp'), (group) =>
+			Array.from(activeLibraryElements('.grp'), (group) =>
 				Array.from(group.querySelectorAll('.gn'), (name) => name.textContent)
 			)
 		).toEqual([['60s', 'Česká', 'Électronique'], ['Alternative'], ['Dance']]);
@@ -1529,11 +1529,11 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			albumActionController: fakeModeActionController()
 		});
 
-		const rows = screen.getAllByTestId('unified-row');
+		const rows = activeLibraryScreen.getAllByTestId('unified-row');
 		await fireEvent.click(rows[0]);
 		await screen.findByTestId('unified-artist-name');
 
-		await fireEvent.click(screen.getAllByTestId('unified-tile')[0]);
+		await fireEvent.click(activeLibraryScreen.getAllByTestId('unified-tile')[0]);
 
 		await waitFor(() => expect(screen.getByTestId('unified-album-page')).toBeInTheDocument());
 		// The actual back target is the artist's page, not the "Artists"
@@ -1559,7 +1559,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 
 		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
 		expect(screen.getByTestId('unified-rail')).toBeInTheDocument();
-		const tiles = screen.getAllByTestId('unified-tile');
+		const tiles = activeLibraryScreen.getAllByTestId('unified-tile');
 		const clickedTitle = tiles[0].querySelector('.tt')?.textContent ?? '';
 		expect(clickedTitle).not.toBe('');
 		await fireEvent.click(tiles[0]);
@@ -1576,7 +1576,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		// mounted but hidden so Back restores its exact transient state.
 		expect(screen.getByTestId('unified-album-page')).toBeInTheDocument();
 		expect(document.querySelector('[role="dialog"]')).toBeNull();
-		expect(document.querySelector('.collection-host')).toHaveAttribute('hidden');
+		expect(document.querySelector('[data-retained-library-panel]')).toHaveAttribute('aria-hidden', 'true');
 		expect(screen.queryByTestId('unified-rail')).toBeNull();
 		expect(screen.getByTestId('unified-scope-albums')).not.toHaveClass('on');
 		// Back names the exact invoking collection.
@@ -2339,11 +2339,11 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 				surpriseSeed: null
 			})
 		} as CommittedLibraryModeActivation);
-		await screen.findByText('Kind of Blue');
+		await activeLibraryScreen.findByText('Kind of Blue');
 
 		const pane = screen.getByTestId('unified-pane');
 		pane.scrollTop = 640;
-		await fireEvent.click(screen.getByText('Kind of Blue').closest('a,button')!);
+		await fireEvent.click(activeLibraryScreen.getByText('Kind of Blue').closest('a,button')!);
 		// The Albums list is Roon's own root (Slice 2), so the tile opens by the
 		// reference it carries; the scroll-parking rule is the same either way.
 		await waitFor(() => expect(album.adoptLiveLevel).toHaveBeenCalled());
@@ -2368,7 +2368,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 				surpriseSeed: null
 			})
 		} as CommittedLibraryModeActivation);
-		await screen.findByText('Kind of Blue');
+		await activeLibraryScreen.findByText('Kind of Blue');
 		await waitFor(() => expect(pane.scrollTop).toBe(640));
 		browserBack.mockRestore();
 	});
@@ -2448,8 +2448,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 	}
 
 	function rowNamed(name: string): HTMLElement {
-		const row = screen
-			.getAllByTestId('unified-row')
+		const row = activeLibraryScreen.getAllByTestId('unified-row')
 			.find((candidate) => candidate.querySelector('.an')?.textContent === name);
 		if (!row) throw new Error(`no Artists row rendered for ${name}`);
 		return row;
@@ -2565,7 +2564,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 		await waitFor(() => expect(harness.session.recover).toHaveBeenCalledTimes(1));
 		expect(harness.genresStore.load).not.toHaveBeenCalled();
 
-		const section = await screen.findByTestId('unified-live-section-0');
+		const section = await screen.findByRole('link', { name: 'More albums' });
 		expect(section.tagName).toBe('A');
 		expect(section).toHaveAttribute(
 			'href',
@@ -2614,7 +2613,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 		expect(await screen.findByTestId('unified-live-collection-title')).toHaveTextContent(
 			'Glassworks: Opening'
 		);
-		expect(await screen.findByText('Opening')).toBeInTheDocument();
+		expect(await activeLibraryScreen.findByText('Opening')).toBeInTheDocument();
 		expect(openLiveRoot).toHaveBeenCalledWith(expect.anything(), 'composers');
 		expect(openLiveRef.mock.calls.map((call) => call[1].token)).toEqual([
 			'composer:glass',
@@ -2838,9 +2837,9 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 			albumActionController: fakeModeActionController()
 		});
 
-		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		await waitFor(() => expect(activeLibraryScreen.getAllByTestId('unified-row')).toHaveLength(2));
 		await fireEvent.click(rowNamed('Alfheim Consort'));
-		await fireEvent.click(await screen.findByTestId('unified-tile'));
+		await fireEvent.click(await activeLibraryScreen.findByTestId('unified-tile'));
 		await waitFor(() => expect(album.adoptLiveLevel).toHaveBeenCalledTimes(1));
 
 		const trackLink = await screen.findByTestId('unified-track-info-1');
@@ -2867,7 +2866,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 	it('opens the artist the reader clicked, by that row\'s own reference', async () => {
 		const harness = mountLive();
 
-		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		await waitFor(() => expect(activeLibraryScreen.getAllByTestId('unified-row')).toHaveLength(2));
 		const row = rowNamed('Nornir Trio');
 		expect(row.tagName).toBe('A');
 		expect(row).toHaveAttribute('href', '/library/artists/Nornir%20Trio');
@@ -2887,7 +2886,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 			token: 'artist:Nornir Trio'
 		});
 		// Roon's own level is the discography: its two album rows, no verb row.
-		const tiles = screen.getAllByTestId('unified-tile');
+		const tiles = activeLibraryScreen.getAllByTestId('unified-tile');
 		expect(tiles.map((tile) => tile.querySelector('.tt')?.textContent)).toEqual([
 			'Skuld',
 			'Skuld'
@@ -2902,16 +2901,16 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 		const album = fakeModeAlbumController();
 		mountLive({ albumController: album.controller, albumActionController: fakeModeActionController() });
 
-		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		await waitFor(() => expect(activeLibraryScreen.getAllByTestId('unified-row')).toHaveLength(2));
 		await fireEvent.click(rowNamed('Nornir Trio'));
-		await waitFor(() => expect(screen.getAllByTestId('unified-tile')).toHaveLength(2));
-		expect(screen.getAllByTestId('unified-tile')[1]).toHaveAttribute(
+		await waitFor(() => expect(activeLibraryScreen.getAllByTestId('unified-tile')).toHaveLength(2));
+		expect(activeLibraryScreen.getAllByTestId('unified-tile')[1]).toHaveAttribute(
 			'href',
 			'/library/artists/Nornir%20Trio/Skuld;Nornir%20Trio%20%26%20Guests;'
 		);
 
 		// The SECOND of two rows that read alike apart from their credit.
-		await fireEvent.click(screen.getAllByTestId('unified-tile')[1]);
+		await fireEvent.click(activeLibraryScreen.getAllByTestId('unified-tile')[1]);
 		await waitFor(() => expect(album.adoptLiveLevel).toHaveBeenCalledTimes(1));
 		expect(
 			(album.adoptLiveLevel.mock.calls[0][0] as { rows: readonly { title: string }[] }).rows.map(
@@ -2932,7 +2931,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 	it('re-resolves the open page onto the same row when the snapshot moves', async () => {
 		const harness = mountLive();
 
-		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		await waitFor(() => expect(activeLibraryScreen.getAllByTestId('unified-row')).toHaveLength(2));
 		await fireEvent.click(rowNamed('Nornir Trio'));
 		await waitFor(() =>
 			expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('Nornir Trio')
@@ -2958,7 +2957,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 			expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('Nornir Trio')
 		);
 		expect(screen.queryByTestId('unified-drill-missing')).toBeNull();
-		expect(screen.getAllByTestId('unified-tile')).toHaveLength(2);
+		expect(activeLibraryScreen.getAllByTestId('unified-tile')).toHaveLength(2);
 	});
 
 	function rootsResponse(library: HarnessLiveLibrary): Response {
@@ -2983,7 +2982,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 				rootsSource: libraryRootsStore,
 				loadRoots: vi.fn((_fetch, options) => loadLibraryRoots(fetchFn, options))
 			});
-			await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+			await waitFor(() => expect(activeLibraryScreen.getAllByTestId('unified-row')).toHaveLength(2));
 			await fireEvent.click(rowNamed('Nornir Trio'));
 			await screen.findByTestId('unified-artist-name');
 			const address = __getNavigationLog().at(-1);
@@ -3017,7 +3016,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 			harness.registered.lifecycle!.resume({
 				cause: 'initial', pageState: buildUnifiedRootPageState()
 			} as CommittedLibraryModeActivation);
-			await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+			await waitFor(() => expect(activeLibraryScreen.getAllByTestId('unified-row')).toHaveLength(2));
 			const owned = refreshLibraryRootsNow(fetchFn, { coreId: 'core-a' });
 			retireLibraryGeneration({
 				contract: LIBRARY_SESSION_RETIRED_CONTRACT, coreId: 'core-a',
@@ -3053,7 +3052,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 	it('says a row is gone rather than showing a page, and stays said', async () => {
 		const harness = mountLive();
 
-		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		await waitFor(() => expect(activeLibraryScreen.getAllByTestId('unified-row')).toHaveLength(2));
 		await fireEvent.click(rowNamed('Nornir Trio'));
 		await waitFor(() =>
 			expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('Nornir Trio')
@@ -3088,7 +3087,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 	it('asks the server for one fresh snapshot when a page is refused as stale', async () => {
 		const harness = mountLive();
 
-		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		await waitFor(() => expect(activeLibraryScreen.getAllByTestId('unified-row')).toHaveLength(2));
 		await fireEvent.click(rowNamed('Nornir Trio'));
 		await waitFor(() =>
 			expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('Nornir Trio')
@@ -3104,6 +3103,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 			harness.rootsStore.update((state) => ({ ...state }));
 		});
 		harness.openLiveRef.mockResolvedValue({ contract: LIBRARY_OPEN_CONTRACT, kind: 'stale' });
+		await fireEvent.click(screen.getByTestId('unified-scope-artists'));
 		const loadsBefore = harness.loadRoots.mock.calls.length;
 		await fireEvent.click(rowNamed('Alfheim Consort'));
 
@@ -3140,7 +3140,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 			rootsState: liveRootsState(library)
 		});
 
-		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(44));
+		await waitFor(() => expect(activeLibraryScreen.getAllByTestId('unified-row')).toHaveLength(44));
 		expect(screen.getByTestId('unified-summary')).toHaveTextContent('44 TOTAL');
 		const letters = [...screen.getByTestId('unified-rail').querySelectorAll('button')]
 			.filter((button) => !button.hasAttribute('disabled'))
@@ -3184,10 +3184,10 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 		setSelectedZone('zone-2');
 		mountLive({ albumController: album.controller, albumActionController: actions });
 
-		await waitFor(() => expect(screen.getAllByTestId('unified-row')).toHaveLength(2));
+		await waitFor(() => expect(activeLibraryScreen.getAllByTestId('unified-row')).toHaveLength(2));
 		await fireEvent.click(rowNamed('Alfheim Consort'));
-		await waitFor(() => expect(screen.getAllByTestId('unified-tile')).toHaveLength(1));
-		await fireEvent.click(screen.getAllByTestId('unified-tile')[0]);
+		await waitFor(() => expect(activeLibraryScreen.getAllByTestId('unified-tile')).toHaveLength(1));
+		await fireEvent.click(activeLibraryScreen.getAllByTestId('unified-tile')[0]);
 		await waitFor(() => expect(album.adoptLiveLevel).toHaveBeenCalled());
 
 		// The level as the page holds it: one whole-album verb row and its two
@@ -3396,7 +3396,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'philip glass' }
 		});
-		const composerRow = await screen.findByText('Composer: Philip Glass');
+		const composerRow = await activeLibraryScreen.findByText('Composer: Philip Glass');
 		await fireEvent.mouseMove(composerRow.closest('a,button')!);
 		await fireEvent.click(composerRow.closest('a,button')!);
 
@@ -3418,7 +3418,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		).toHaveLength(0);
 		expect(screen.getByTestId('unified-palette')).toBeInTheDocument();
 		expect(screen.getByTestId('unified-palette-input')).toHaveValue('philip glass');
-		expect(screen.getByText('Composer: Philip Glass')).toBeInTheDocument();
+		expect(activeLibraryScreen.getByText('Composer: Philip Glass')).toBeInTheDocument();
 		browserBack.mockRestore();
 	});
 
@@ -3450,7 +3450,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'dear theodosia' }
 		});
-		const songRow = screen.getByText('Dear Theodosia').closest('a,button')!;
+		const songRow = activeLibraryScreen.getByText('Dear Theodosia').closest('a,button')!;
 		await fireEvent.click(songRow);
 
 		expect(screen.queryByTestId('unified-palette')).toBeNull();
@@ -3460,7 +3460,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 
 		expect(screen.getByTestId('unified-palette')).toBeInTheDocument();
 		expect(screen.getByTestId('unified-palette-input')).toHaveValue('dear theodosia');
-		expect(screen.getByText('Dear Theodosia').closest('a,button')).toHaveClass('sel');
+		expect(activeLibraryScreen.getByText('Dear Theodosia').closest('a,button')).toHaveClass('sel');
 	});
 
 	it('starts one background relationship lookup without delaying a song action', async () => {
@@ -3513,7 +3513,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'dear theodosia' }
 		});
-		await fireEvent.click(screen.getByText('Dear Theodosia').closest('a,button')!);
+		await fireEvent.click(activeLibraryScreen.getByText('Dear Theodosia').closest('a,button')!);
 
 		expect(relationship).toHaveBeenCalledTimes(1);
 		expect(screen.getByTestId('unified-song-relationship-status')).toHaveTextContent(
@@ -3580,7 +3580,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'dear theodosia' }
 		});
-		await fireEvent.click(screen.getByText('Dear Theodosia').closest('a,button')!);
+		await fireEvent.click(activeLibraryScreen.getByText('Dear Theodosia').closest('a,button')!);
 
 		await waitFor(() =>
 			expect(screen.getByTestId('unified-song-relationship-status')).toHaveTextContent(
@@ -3622,7 +3622,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'dear theodosia' }
 		});
-		await fireEvent.click(screen.getByText('Dear Theodosia').closest('a,button')!);
+		await fireEvent.click(activeLibraryScreen.getByText('Dear Theodosia').closest('a,button')!);
 
 		// The track page owns the surface: the library body is mounted but
 		// hidden, and Back to the results restores it.
@@ -3689,14 +3689,14 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'songs' }
 		});
-		await fireEvent.click(screen.getByText('First Song').closest('a,button')!);
+		await fireEvent.click(activeLibraryScreen.getByText('First Song').closest('a,button')!);
 		await fireEvent.click(screen.getByRole('button', { name: 'Close search' }));
 
 		await fireEvent.click(screen.getByTestId('unified-find'));
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'songs' }
 		});
-		await fireEvent.click(screen.getByText('Second Song').closest('a,button')!);
+		await fireEvent.click(activeLibraryScreen.getByText('Second Song').closest('a,button')!);
 		// The panel's own heading is what says which song it is now; the album
 		// link is no longer offered here, because there is no catalog album
 		// page for it to open.
@@ -3762,7 +3762,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'dear theodosia' }
 		});
-		await fireEvent.click(screen.getByText('Dear Theodosia').closest('a,button')!);
+		await fireEvent.click(activeLibraryScreen.getByText('Dear Theodosia').closest('a,button')!);
 		await fireEvent.click(screen.getByTestId('unified-song-add-next'));
 
 		await waitFor(() =>
@@ -3830,7 +3830,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'songs' }
 		});
-		await fireEvent.click(screen.getByText('First Song').closest('a,button')!);
+		await fireEvent.click(activeLibraryScreen.getByText('First Song').closest('a,button')!);
 		await fireEvent.click(screen.getByTestId('unified-song-play-now'));
 		await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
 		await fireEvent.click(screen.getByRole('button', { name: 'Close search' }));
@@ -3839,7 +3839,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'songs' }
 		});
-		await fireEvent.click(screen.getByText('Second Song').closest('a,button')!);
+		await fireEvent.click(activeLibraryScreen.getByText('Second Song').closest('a,button')!);
 		expect(screen.getByTestId('unified-song-action-busy')).toBeInTheDocument();
 
 		firstAction.resolve({ authorityRetired: true });
@@ -4109,7 +4109,7 @@ describe('UnifiedLibraryMode — smart-filter pages (plan §3.2 slice 7)', () =>
 				.map((row) => row.querySelector('.an')?.textContent)
 		).toEqual(['Live Forty']);
 		// And nothing from the stored index leaks in beside it.
-		expect(screen.queryByText('Big Cat')).toBeNull();
+		expect(activeLibraryScreen.queryByText('Big Cat')).toBeNull();
 	});
 
 	it('does not test an artist Roon gave no album count, and says how many', async () => {

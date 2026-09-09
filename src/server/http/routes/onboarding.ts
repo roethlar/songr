@@ -13,8 +13,8 @@ import { OnboardingStatusResponse } from "../../../shared/types";
  *    off, so it cannot gate a first-run flow without ambushing existing
  *    users.
  *  - `hostname`    — the machine the engine runs on. The browser has no way
- *    to see it, and the local-playback step matches it against zone and
- *    output names to spot a RoonBridge for this computer.
+ *    to see it. Onboarding names the extension with it and matches output
+ *    names to recognise an already-available Roon Bridge for this computer.
  *
  * Read-only. Nothing here is a setting, and nothing here starts, stops or
  * reconfigures anything.

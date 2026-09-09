@@ -29,6 +29,20 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 	globalThis.ResizeObserver = NoopResizeObserver as unknown as typeof ResizeObserver;
 }
 
+// jsdom has no Element.scrollTo. Preserve the API's position updates;
+// actual layout, clipping and scrolling are verified by the browser suite.
+if (typeof HTMLElement.prototype.scrollTo !== 'function') {
+	HTMLElement.prototype.scrollTo = function (options: ScrollToOptions | number = {}, y?: number): void {
+		if (typeof options === 'number') {
+			this.scrollLeft = options;
+			this.scrollTop = y ?? 0;
+		} else {
+			if (options.left !== undefined) this.scrollLeft = options.left;
+			if (options.top !== undefined) this.scrollTop = options.top;
+		}
+	};
+}
+
 beforeEach(() => {
 	safeClear(globalThis.sessionStorage);
 	safeClear(globalThis.localStorage);

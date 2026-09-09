@@ -16,6 +16,8 @@ Roon API.
  * @param {RoonApi~core_found} [desc.core_found] - Called when a Roon Core is found. Usually, you want to implement pairing instead of using this.
  * @param {RoonApi~core_lost} [desc.core_lost] - Called when Roon Core is lost. Usually, you want to implement pairing instead of using this.
  * @param {RoonApi~onerror} [desc.moo_onerror] - Called when there is an error on the connection to a core.
+ * @param {function} [desc.connection_status] - Songr observer for pre-authorization connection progress (no tokens).
+ * @param {function} [desc.discovery_error] - Songr observer for local discovery socket errors.
  */
 /**
  * @callback RoonApi~core_paired
@@ -132,6 +134,11 @@ function RoonApi(o) {
                 this.logger.log("Setting up sood");
                 this._sood = require('./sood.js')(this.logger);
                 this._sood_conns = {};
+                this._sood.on('socket-error', err => {
+                    if (this.extension_opts.discovery_error) {
+                        this.extension_opts.discovery_error(networkErrorCode(err));
+                    }
+                });
                 this._sood.on('message', msg => {
                     //this.logger.log(msg);
                     if (msg.props.service_id === "00720724-5143-4a9b-abac-0e50cba674bb" && msg.props.unique_id) {
@@ -153,6 +160,7 @@ function RoonApi(o) {
                         this._sood_conns[msg.props.unique_id] = this.ws_connect({
                             host: ip,
                             port: msg.props.http_port,
+                            discovery: { id: msg.props.unique_id, displayName: msg.props.name },
                             onclose: () => {
                                 delete(this._sood_conns[msg.props.unique_id]);
                             },
@@ -436,26 +444,80 @@ RoonApi.prototype.register_service = function(svcname, spec) {
  * @param {RoonApi~onclose} [options.onclose] - Called once when connect to host is lost
  * @param {RoonApi~onerror} [options.onerror] - Called when there is a websocket error
  */
-RoonApi.prototype.ws_connect = function({ host, port, onclose, onerror }) {
+function networkErrorCode(error) {
+    const code = error && (error.code || (error.error && error.error.code));
+    return typeof code == 'string' && /^[A-Z][A-Z0-9_]{1,49}$/.test(code) ? code : 'NETWORK_ERROR';
+}
+
+RoonApi.prototype.ws_connect = function({ host, port, onclose, onerror, discovery }) {
     let moo = new Moo(new WSTransport(host, port, this.logger));
+    let closed = false;
+    let phase;
+    let progressTimer;
+    let displayName = discovery && discovery.displayName || host;
+    // These observations never change pairing authority. Only an explicit
+    // observer enables the bounded progress timer; it reports a slow handshake
+    // without cancelling a request that may still succeed later.
+    const report = (nextPhase, detail) => {
+        if (closed) return;
+        clearTimeout(progressTimer);
+        phase = nextPhase;
+        if (!this.extension_opts.connection_status) return;
+        try {
+            this.extension_opts.connection_status({
+                id: discovery && discovery.id || host + ':' + port,
+                host, displayName, phase,
+                ...(detail ? { detail } : {})
+            });
+        } catch (err) {
+            this.logger.log('Connection status observer failed');
+        }
+        if (phase == 'connecting' || phase == 'registering') {
+            const stage = phase == 'connecting' ? 'Connecting to the Core' : 'Reading the Core identity';
+            progressTimer = setTimeout(() => report('failed', stage + ' timed out. Still waiting for a response.'), 15000);
+            if (progressTimer.unref) progressTimer.unref();
+        }
+    };
+    report('connecting');
 
     moo.transport.onopen = () => {
+        if (closed) return;
+        report('registering');
         //        this.logger.log("OPEN");
 
         moo.send_request("com.roonlabs.registry:1/info",
 			     (msg, body) => {
-			         if (!msg) return;
+			         if (!msg || closed) return;
+                         if (msg.name != 'Success' || !body || typeof body.core_id != 'string') {
+                             report('failed', 'The Core did not return a valid identity.');
+                             return;
+                         }
+                         if (typeof body.display_name == 'string' && body.display_name.trim()) displayName = body.display_name;
 			         let s = this.get_persisted_state();
 			         if (s.tokens && s.tokens[body.core_id]) this.extension_reginfo.token = s.tokens[body.core_id];
 			         
+                         let registrationAnswered = false;
 			         moo.send_request("com.roonlabs.registry:1/register", this.extension_reginfo,
 					                    (msg, body) => {
+                                                if (closed && msg) return;
+                                                if (msg && !closed) {
+                                                    registrationAnswered = true;
+                                                    if (msg.name == 'Registered') report('registered');
+                                                    else report('failed', 'The Core refused extension registration.');
+                                                }
 						                ev_registered.call(this, moo, msg, body);
 					                    });
+                         // Registry info has answered and the registration
+                         // request has been sent on that connection. Roon's
+                         // Registered response arrives only after authorization.
+                         if (!registrationAnswered) report('awaiting-approval');
 			     });
     };
 
     moo.transport.onclose = () => {
+        if (phase != 'failed') report('failed', 'Connection to the Core closed. Searching for it again.');
+        closed = true;
+        clearTimeout(progressTimer);
 //        this.logger.log("CLOSE");
         Object.keys(this._service_request_handlers).forEach(e => this._service_request_handlers[e] && this._service_request_handlers[e](null, moo.mooid));
         moo.clean_up();
@@ -464,6 +526,8 @@ RoonApi.prototype.ws_connect = function({ host, port, onclose, onerror }) {
     };
 
     moo.transport.onerror = err => {
+        const stage = phase == 'connecting' ? 'Connecting to the Core' : 'Communicating with the Core';
+        report('failed', stage + ' failed (' + networkErrorCode(err) + ').');
         this.logger.log("ERROR", err);
         onerror && onerror(moo);
     };

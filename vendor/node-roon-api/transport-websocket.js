@@ -42,7 +42,7 @@ function Transport(ip, port, logger) {
     };
 
     this.ws.onerror = (err) => {
-        this.onerror();
+        this.onerror(err);
     }
 
     this.ws.onmessage = (event) => {

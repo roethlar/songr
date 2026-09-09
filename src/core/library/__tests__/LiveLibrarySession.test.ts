@@ -911,6 +911,210 @@ describe("LiveLibrarySession", () => {
     });
   });
 
+  describe("preview(ref, limit)", () => {
+    async function prepared(title = "Albums", count = 10000, maxOpenLevels = 32) {
+      script.genres = [listRow("80s", "genre-80s")];
+      script.levels.set("genre-80s", { title: "80s", items: [
+        verbRow("Play Genre"), listRow("Artists", "preview-artists"), listRow("Albums", "preview-albums")
+      ] });
+      script.levels.set("preview-artists", { title: "Artists", items: Array.from({ length: count }, (_, i) => artistRow(i)) });
+      script.levels.set("preview-albums", { title: "Albums", items: Array.from({ length: count }, (_, i) => albumRow(i)) });
+      const session = makeSession({ maxOpenLevels });
+      session.connect(CORE_ID);
+      await session.roots("first-read");
+      const root = await session.openRoot("genres");
+      if (root.kind !== "level") throw new Error("no genre root");
+      const genre = await session.open(root.level.rows[0].ref);
+      if (genre.kind !== "level") throw new Error("no genre");
+      const ref = genre.level.rows.find(row => row.title === title)!.ref;
+      service.browse.mockClear(); service.load.mockClear();
+      return { session, ref, root, genre };
+    }
+
+    it.each([
+      ["Albums", 0, 1], ["Albums", 1, 100], ["Albums", 17, 1],
+      ["Albums", 10000, 100], ["Artists", 10000, 1], ["Artists", 17, 100]
+    ] as const)("reads only a bounded %s prefix (total %i, limit %i)", async (title, count, limit) => {
+      const { session, ref } = await prepared(title, count);
+      const begin = jest.spyOn(pacing, "begin");
+      const settle = jest.spyOn(pacing, "settle");
+      const result = await session.preview(ref, limit);
+      expect(result.kind).toBe("preview");
+      if (result.kind !== "preview") throw new Error("not a preview");
+      expect(result.preview.totalCount).toBe(count);
+      expect(result.preview.limit).toBe(limit);
+      expect(result.preview.rows).toHaveLength(Math.min(count, limit));
+      expect(service.browse).toHaveBeenCalledTimes(1);
+      expect(service.browse.mock.calls[0][0]).toMatchObject({
+        hierarchy: "genres", itemKey: title === "Albums" ? "preview-albums" : "preview-artists", offset: 0, pageSize: limit
+      });
+      expect(service.load).not.toHaveBeenCalled();
+      expect(begin).toHaveBeenCalledWith(CORE_ID, "preview");
+      expect(settle).toHaveBeenCalledTimes(1);
+      expect(settle.mock.calls[0][1]).toBe("answered");
+      for (const row of result.preview.rows) {
+        expect(row.kind).toBe(title === "Albums" ? "album" : "artist");
+        expect(row.ref.generation).toBe(ref.generation);
+        expect(session.resolve(row.ref).title).toBe(row.title);
+        expect(JSON.stringify(row)).not.toContain("-key-");
+      }
+    });
+
+    it("More still drains a complete level, and same-title rows stay distinct", async () => {
+      const { session, ref } = await prepared("Albums", 250);
+      const rows = script.levels.get("preview-albums")!.items;
+      rows[1] = { ...rows[1], title: rows[0].title };
+      const result = await session.preview(ref, 2);
+      if (result.kind !== "preview") throw new Error("not preview");
+      expect(result.preview.rows[0].title).toBe(result.preview.rows[1].title);
+      expect(result.preview.rows[0].ref.token).not.toBe(result.preview.rows[1].ref.token);
+      expect(service.load).not.toHaveBeenCalled();
+      const full = await session.open(ref);
+      if (full.kind !== "level") throw new Error("not full");
+      expect(full.level.rows).toHaveLength(250);
+      expect(full.level.count).toBe(250);
+      expect(service.load).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      { totalCount: -1 }, { totalCount: 20001 }, { totalCount: 1.5 }, { totalCount: undefined },
+      { offset: 1 }, { items: [albumRow(1)] }, { items: [albumRow(1), albumRow(1)] },
+      { items: [albumRow(1), albumRow(2, { itemKey: "" })] },
+      { items: [albumRow(1), albumRow(2, { itemKey: undefined })] },
+      { items: [albumRow(1), verbRow("Play Album")] },
+      { items: [albumRow(1), albumRow(2, { hint: "action" })] }
+    ])("refuses corrupt prefix before publication: %j", async over => {
+      const { session, ref } = await prepared("Albums", 17);
+      const publish = jest.spyOn(coordinator, "appendCatalogPublishedItems");
+      const settle = jest.spyOn(pacing, "settle");
+      service.browse.mockResolvedValueOnce({ ...page("Albums", [albumRow(1), albumRow(2)], 0, 2), ...over });
+      expect(await session.preview(ref, 2)).toMatchObject({ kind: "unavailable", reason: "read-failed" });
+      expect(publish).not.toHaveBeenCalled();
+      expect(service.load).not.toHaveBeenCalled();
+      expect(settle).toHaveBeenCalledTimes(1);
+      expect(settle.mock.calls[0][1]).toBe("failed");
+    });
+
+    it("refuses stale, forged, unsupported subjects and invalid limits before browsing", async () => {
+      const { session, ref, root, genre } = await prepared();
+      expect(await session.preview({ ...ref, generation: "old" }, 1)).toEqual({ kind: "stale" });
+      expect(await session.preview({ ...ref, token: "forged" }, 1)).toEqual({ kind: "stale" });
+      for (const subject of [root.level.rows[0].ref, genre.level.rows[0].ref, session.current()!.artists.rows[0].ref]) {
+        expect(await session.preview(subject, 1)).toMatchObject({ kind: "unsupported" });
+      }
+      for (const limit of [0, 101, 1.1]) expect(await session.preview(ref, limit)).toMatchObject({ kind: "unsupported" });
+      expect(service.browse).not.toHaveBeenCalled();
+    });
+
+    it("refuses under pressure without opening a session or beginning a ticket", async () => {
+      const { session, ref } = await prepared();
+      const begin = jest.spyOn(pacing, "begin");
+      pacing.onBreakerOpen(CORE_ID);
+      expect(await session.preview(ref, 1)).toMatchObject({ kind: "unavailable", reason: "core-under-pressure" });
+      expect(begin).not.toHaveBeenCalled();
+      expect(service.browse).not.toHaveBeenCalled();
+    });
+
+    it("checks ownership after the queued transaction is admitted, before any browse", async () => {
+      const { session, ref } = await prepared();
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const held = coordinator.runCatalog(CORE_ID, handle, async () => { await gate; });
+      const result = session.preview(ref, 1);
+      session.disconnect("core-lost");
+      release(); await held;
+      expect(await result).toEqual({ kind: "stale" });
+      expect(service.browse).not.toHaveBeenCalled();
+    });
+
+    it.each(["disconnect", "authority"] as const)("fences %s loss during the prefix before publication", async loss => {
+      const { session, ref } = await prepared();
+      let release!: (value: BrowseResult) => void;
+      let entered!: () => void;
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      service.browse.mockImplementationOnce(() => { entered(); return new Promise<BrowseResult>(resolve => { release = resolve; }); });
+      const publish = jest.spyOn(coordinator, "appendCatalogPublishedItems");
+      const settle = jest.spyOn(pacing, "settle");
+      const result = session.preview(ref, 1);
+      await started;
+      if (loss === "disconnect") session.disconnect("core-lost");
+      else {
+        const scope = session.resolveActionSubject(ref).anchor.sessionScope;
+        coordinator.beginCatalogPublication(scope);
+      }
+      release(page("Albums", [albumRow(1)], 0, 1));
+      expect(await result).toEqual({ kind: "stale" });
+      expect(publish).not.toHaveBeenCalled();
+      expect(settle).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["SESSION_LOST", "InvalidItemKey"] as const)("lost session keys (%s) retire the whole snapshot and settle the failed ticket", async reason => {
+      const { session, ref } = await prepared();
+      const settle = jest.spyOn(pacing, "settle");
+      service.browse.mockRejectedValueOnce(reason === "SESSION_LOST" ?
+        new BrowseSessionCoordinatorError("SESSION_LOST", "Gone") : new RoonBrowseError("browse", "InvalidItemKey"));
+      expect(await session.preview(ref, 1)).toEqual({ kind: "stale" });
+      expect(session.current()).toBeNull();
+      expect(settle).toHaveBeenCalledTimes(1);
+    });
+
+    it("rechecks ownership before answering even if publication completed", async () => {
+      const { session, ref } = await prepared();
+      const append = coordinator.appendCatalogPublishedItems.bind(coordinator);
+      jest.spyOn(coordinator, "appendCatalogPublishedItems").mockImplementationOnce((...args) => {
+        const result = append(...args);
+        session.disconnect("core-lost");
+        return result;
+      });
+      const settle = jest.spyOn(pacing, "settle");
+      expect(await session.preview(ref, 1)).toEqual({ kind: "stale" });
+      expect(settle).toHaveBeenCalledTimes(1);
+    });
+
+    it("publication failure settles the ticket without claiming a prefix", async () => {
+      const { session, ref } = await prepared();
+      jest.spyOn(coordinator, "appendCatalogPublishedItems").mockImplementationOnce(() => { throw new Error("Publication refused"); });
+      const settle = jest.spyOn(pacing, "settle");
+      expect(await session.preview(ref, 1)).toMatchObject({ kind: "unavailable", reason: "read-failed" });
+      expect(settle).toHaveBeenCalledTimes(1);
+      expect(session.current()?.generation).toBe(ref.generation);
+    });
+
+    it("two prefix requests share the existing FIFO transaction and publication channel", async () => {
+      const { session, ref, genre } = await prepared("Albums", 17);
+      const artistsRef = genre.level.rows.find(row => row.title === "Artists")!.ref;
+      let release!: () => void;
+      let entered!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      const browse = service.browse.getMockImplementation()!;
+      service.browse.mockImplementationOnce(async (...args) => { entered(); await gate; return browse(...args); });
+      const artists = session.preview(artistsRef, 2);
+      await started;
+      const albums = session.preview(ref, 2);
+      await Promise.resolve();
+      expect(service.browse).toHaveBeenCalledTimes(1);
+      release();
+      expect((await artists).kind).toBe("preview");
+      expect((await albums).kind).toBe("preview");
+      expect(service.browse.mock.calls.map(call => call[0].itemKey)).toEqual(["preview-artists", "preview-albums"]);
+      expect(new Set(service.browse.mock.calls.map(call => call[0].multiSessionKey)).size).toBe(1);
+      expect(service.load).not.toHaveBeenCalled();
+    });
+
+    it("prefix tokens share complete-level eviction and never open an approximate row", async () => {
+      const { session, ref } = await prepared("Albums", 2, 3);
+      const result = await session.preview(ref, 1);
+      if (result.kind !== "preview") throw new Error("not preview");
+      const item = result.preview.rows[0].ref;
+      expect(session.resolve(item).itemKey).toBe("album-key-0");
+      for (let i = 0; i < 3; i++) await session.openRoot("genres");
+      expect(() => session.resolve(item)).toThrow(BrowseSessionCoordinatorError);
+      expect(await session.open(item)).toEqual({ kind: "stale" });
+      expect(session.resolve(session.current()!.artists.rows[0].ref)).toBeDefined();
+    });
+  });
+
   /**
    * The scheduled read is deliberately fire-and-forget — a timer has nobody to
    * hand a promise to — so the test waits for the queue rather than for a

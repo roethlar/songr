@@ -65,6 +65,17 @@ palette search, per-scope sorts, and density control. Artist, album, genre,
 composer and track pages carry durable `/library/...` addresses that survive
 a reload, a fresh tab, and Back/Forward.
 
+The Artists tab has a visible **Album artists / All artists** switch. Album
+artists is the default and groups albums by the exact credit Roon supplies;
+single-album artists stay included, collaboration credits stay together, and
+albums without a credit have their own Unknown album artist group. All artists
+shows Roon's full Artists list, including contributors. Songr remembers your
+choice, while an explicit page address always wins. Credit groups and their
+album/track pages can also be bookmarked or opened in a new tab.
+
+The list heading, count, artist-view switch, and Sort controls stay visible
+below the scope tabs while the list scrolls.
+
 Everything the Library shows comes from Roon's own public Browse API. Songr
 reads nothing from the Core that Roon does not publish, and it holds no
 library data of its own between runs.
@@ -199,9 +210,16 @@ npm --prefix ui run build
 
 ## Pairing
 
-On first run: Roon → Settings → Extensions → enable **Songr (your machine's name)**
+On first run, Songr searches for your Core and shows its name and connection
+progress. Once it requests approval: Roon → Settings → Extensions → enable **Songr (your machine's name)**
 (installs paired before mid-2026 may still show the older name "Custom Roon
 Controller").
+
+If no Core responds after 15 seconds, the guide shows network/firewall checks
+and keeps searching. A discovery timeout does not identify the cause by itself.
+Pairing finishes setup immediately. Roon Bridge is optional: install it only
+if you want audio playback on this computer, then enable the output in
+Roon → Settings → Audio. The final Bridge note does not block the library.
 
 Roon's pairing state — `paired_core_id` plus a per-core token map — is persisted to `ROON_TOKEN_PATH` (mode `0o600`, atomic write). Reconnect is automatic on subsequent starts.
 

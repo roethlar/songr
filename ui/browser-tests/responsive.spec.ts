@@ -35,7 +35,7 @@ async function overflowingElements(page: Page): Promise<string[]> {
 
 test('nothing is clipped out of reach at any supported width', async ({ page }) => {
 	await page.goto('/fixtures/library-scroll.html');
-	await expect(page.getByTestId('unified-row').first()).toBeVisible();
+	await expect(page.getByTestId('unified-row').filter({ visible: true }).first()).toBeVisible();
 
 	for (const width of WIDTHS) {
 		await page.setViewportSize({ width, height: 844 });
@@ -53,7 +53,7 @@ test('nothing is clipped out of reach at any supported width', async ({ page }) 
 test('the core controls stay reachable on a phone', async ({ page }) => {
 	await page.setViewportSize({ width: 390, height: 844 });
 	await page.goto('/fixtures/library-scroll.html');
-	await expect(page.getByTestId('unified-row').first()).toBeVisible();
+	await expect(page.getByTestId('unified-row').filter({ visible: true }).first()).toBeVisible();
 
 	for (const id of [
 		'unified-brand',
@@ -67,7 +67,7 @@ test('the core controls stay reachable on a phone', async ({ page }) => {
 
 	// Names must be readable, not ellipsed into a single-column-worth of nothing:
 	// the multi-column list collapses to one column at phone width.
-	const firstRow = page.getByTestId('unified-row').first();
+	const firstRow = page.getByTestId('unified-row').filter({ visible: true }).first();
 	await expect(firstRow).toContainText(/Artist \d{3}/u);
 	const rowWidth = await firstRow.evaluate((el) => el.getBoundingClientRect().width);
 	expect(rowWidth).toBeGreaterThan(200);

@@ -5,6 +5,12 @@ import os from "os";
 import path from "path";
 import { Logger } from "pino";
 import { ROON_EXTENSION_DISPLAY_NAME } from "../../shared/types";
+import {
+  MAX_DISCOVERED_CORES,
+  normalizeDiscoveredCore,
+  type CoreDiscoveryStatus,
+  type DiscoveredCore,
+} from "../../shared/coreDiscovery";
 
 const RoonApi = require("node-roon-api");
 const RoonApiTransport = require("node-roon-api-transport");
@@ -43,6 +49,8 @@ export interface RoonEvents {
 }
 
 export declare interface RoonClient {
+  on(event: "core-discovery", listener: (event: CoreDiscoveryStatus) => void): this;
+  emit(event: "core-discovery", data: CoreDiscoveryStatus): boolean;
   on(event: "core-status", listener: (event: RoonEvents) => void): this;
   emit(event: "core-status", data: RoonEvents): boolean;
 }
@@ -58,6 +66,8 @@ export class RoonClient extends EventEmitter {
   private pairedCore: RoonCoreInfo | null = null;
   private pairedCoreAddress: RoonCoreAddress | null = null;
   private coreStatus: "discovering" | "paired" | "unpaired" = "discovering";
+  private discoveryCores = new Map<string, DiscoveredCore>();
+  private discoveryError: string | undefined;
 
   constructor(options: RoonClientOptions) {
     super();
@@ -78,6 +88,7 @@ export class RoonClient extends EventEmitter {
     const roon = this.createApi(generation);
     this.apiGeneration = generation;
     this.roon = roon;
+    this.resetDiscovery();
     this.coreStatus = "discovering";
     this.emit("core-status", { coreStatus: "discovering" });
     roon.start_discovery();
@@ -100,6 +111,26 @@ export class RoonClient extends EventEmitter {
       email: "mcoelho@gmail.com",
       website: "https://github.com/roethlar/songr",
       log_level: this.options.logger.level ?? "info",
+      connection_status: (value: unknown) => {
+        if (generation !== this.apiGeneration) return;
+        const core = normalizeDiscoveredCore(value);
+        if (!core) return;
+        if (!this.discoveryCores.has(core.id) && this.discoveryCores.size >= MAX_DISCOVERED_CORES) {
+          // Bound historical failed discoveries; an active Core must retain
+          // its independent progress when another responder appears.
+          const failed = [...this.discoveryCores.values()].find((entry) => entry.phase === "failed");
+          if (!failed) return;
+          this.discoveryCores.delete(failed.id);
+        }
+        this.discoveryCores.set(core.id, core);
+        this.emit("core-discovery", this.getDiscoveryStatus());
+      },
+      discovery_error: (code: string) => {
+        if (generation !== this.apiGeneration) return;
+        const safeCode = /^[A-Z][A-Z0-9_]{1,49}$/.test(code) ? code : "NETWORK_ERROR";
+        this.discoveryError = `A local discovery socket failed (${safeCode}). Check this computer's network connection.`;
+        this.emit("core-discovery", this.getDiscoveryStatus());
+      },
       // node-roon-api persists pairing state via these two callbacks
       // (it reads `paired_core_id` + per-core `tokens` to resume
       // pairing across restarts). The earlier `token` + `save_config`
@@ -156,6 +187,19 @@ export class RoonClient extends EventEmitter {
 
   public getCoreStatus(): "discovering" | "paired" | "unpaired" {
     return this.coreStatus;
+  }
+
+  public getDiscoveryStatus(): CoreDiscoveryStatus {
+    return {
+      cores: [...this.discoveryCores.values()].map((core) => ({ ...core })),
+      ...(this.discoveryError ? { error: this.discoveryError } : {}),
+    };
+  }
+
+  private resetDiscovery(): void {
+    this.discoveryCores.clear();
+    this.discoveryError = undefined;
+    this.emit("core-discovery", this.getDiscoveryStatus());
   }
 
   /**
@@ -232,6 +276,7 @@ export class RoonClient extends EventEmitter {
     const previousRoon = this.roon;
     this.switchPending = true;
     this.apiGeneration = nextGeneration;
+    this.resetDiscovery();
     this.clearCoreState("Switching to a different Roon core");
 
     try {

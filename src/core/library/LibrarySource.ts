@@ -30,6 +30,7 @@ import type {
   LibraryNodeKind,
   LibraryOpenUnavailableReason,
 } from "../../shared/libraryOpenContracts";
+import type { LibraryPreview } from "../../shared/libraryPreviewContracts";
 import type {
   CoordinatedBrowseSession,
   LibraryActionAnchor,
@@ -175,6 +176,14 @@ export type LibraryOpenOutcome =
       readonly message: string;
     };
 
+export type LibraryPreviewHold = Omit<LibraryPreview, "contract" | "kind">;
+export type LibraryPreviewOutcome =
+  | { readonly kind: "preview"; readonly preview: LibraryPreviewHold }
+  | { readonly kind: "stale" }
+  | { readonly kind: "unsupported"; readonly message: string }
+  | { readonly kind: "unavailable"; readonly reason: LibraryOpenUnavailableReason;
+      readonly message: string };
+
 /** The two roots read on connect, and the two read only when asked for. */
 export type LibraryOnDemandRoot = "genres" | "composers";
 
@@ -278,6 +287,9 @@ export interface LibrarySource {
    * generation, so a reader can descend without anything above it going dead.
    */
   open(ref: LibraryRowReference): Promise<LibraryOpenOutcome>;
+
+  /** A prefix of a published genre Artists/Albums section, never a full level. */
+  preview(ref: LibraryRowReference, limit: number): Promise<LibraryPreviewOutcome>;
 
   /**
    * Read one of the roots that is not held on connect, as a level.
