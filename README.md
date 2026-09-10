@@ -1,3 +1,5 @@
+> **Releases temporarily withdrawn:** Songr release downloads have been withdrawn while the codebase is audited and UI consistency issues are corrected. There is currently no recommended release to install. Existing npm versions are marked withdrawn; container and third-party index removals are still being completed.
+
 # Songr
 
 Web-based controller for a local Roon Core, built with Node.js + SvelteKit.
