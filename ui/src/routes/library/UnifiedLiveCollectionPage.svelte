@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy, untrack } from 'svelte';
 	import { get } from 'svelte/store';
+	import { prepareLibraryGrid } from '$lib/preparedLibraryGrid';
 	import { measureLibraryChrome } from '$lib/libraryListChrome';
 	import type { AlbumActionController } from '$lib/library/AlbumActionController';
 	import type {
@@ -41,7 +42,6 @@
 		hrefForAlbum: (entry: LibraryAlbumEntry) => string | null;
 		actionController: AlbumActionController;
 		actionsEnabled: boolean;
-		onBeginActions: () => void;
 		sorts: {
 			readonly artists: UnifiedArtistsSort;
 			readonly albums: UnifiedAlbumsSort;
@@ -72,7 +72,6 @@
 		hrefForAlbum,
 		actionController,
 		actionsEnabled,
-		onBeginActions,
 		sorts,
 		randomSeed,
 		onSetAlbumSort,
@@ -91,6 +90,8 @@
 	let menuStartingRequestId: string | null = null;
 	let menuMayReissue = false;
 	let sortOpen = $state(false);
+	let rowFilter = $state('');
+	let rowSort = $state('original');
 	let railTarget = $state<LetterBucket | null>(null);
 	const action = $derived($actionController);
 	const rows = $derived(page.level?.rows ?? []);
@@ -99,7 +100,15 @@
 	const ordinaryRows = $derived(
 		rows.filter((row) => row.kind !== 'album' && row.kind !== 'action')
 	);
-	const hasActions = $derived(rows.some((row) => row.kind === 'action'));
+	const ordinaryMatches = $derived.by(() => {
+		const query = rowFilter.trim().toLocaleLowerCase();
+		const matching = ordinaryRows.filter(row => !query || `${row.title}\n${row.subtitle ?? ''}`.toLocaleLowerCase().includes(query));
+		if (rowSort !== 'original') matching.sort((a, b) => (rowSort === 'name-desc' ? -1 : 1) * a.title.localeCompare(b.title, undefined, { sensitivity: 'base', numeric: true }));
+		return matching;
+	});
+	const rowLabel = $derived(levelKind === 'composer' ? 'Compositions' : 'Recordings');
+	$effect(() => { page.level; rowFilter = ''; rowSort = 'original'; });
+	const actionRows = $derived(rows.filter((row) => row.kind === 'action'));
 	const bulkRows = $derived(rows.filter(row => row.kind === 'action' &&
 		['play artist', 'play album', 'play genre', 'play composer', 'play composition', 'play work'].includes(row.title.trim().toLowerCase())));
 	const actionBusy = $derived(
@@ -183,6 +192,7 @@
 		closeRowMenu();
 		menuRow = row;
 		menuTrigger = event.currentTarget as HTMLButtonElement;
+		menuTrigger.focus();
 		menuStartingRequestId = get(actionController).requestId;
 		menuRequestId = null;
 		onRowMore(row);
@@ -229,10 +239,12 @@
 	}
 </script>
 
-{#snippet rowControls(row: LibraryLevelRow, prominent: boolean)}
+{#snippet rowControls(row: LibraryLevelRow, prominent: boolean, playable = true)}
 	<div class="recording-controls" class:prominent data-live-row-menu={menuRow === row ? 'open' : undefined}>
+		{#if playable}
 		<button type="button" class="tgo" disabled={!onRowAction || !actionsEnabled || actionBusy} onclick={() => onRowAction?.(row, 'play-now')}>Play</button>
 		<button type="button" class="tq" disabled={!onRowAction || !actionsEnabled || actionBusy} onclick={() => onRowAction?.(row, 'queue')}>Queue</button>
+		{/if}
 		<button type="button" class="recording-more" aria-label="More actions for {row.title}" aria-haspopup="menu" aria-expanded={menuRow === row}
 			disabled={menuRow !== row && (!onRowMore || !actionsEnabled || actionBusy)} onclick={event => openRowMenu(row, event)}>⋯</button>
 		{#if menuRow === row}
@@ -272,7 +284,7 @@
 			</span>
 		{/if}
 		{#if page.phase === 'ready' && (levelKind === 'composer' || levelKind === 'composition') && ordinaryRows.length > 0}
-			<span class="n mono" data-testid="unified-live-collection-summary">{ordinaryRows.length.toLocaleString()} {levelKind === 'composer' ? 'COMPOSITIONS' : 'RECORDINGS'}</span>
+			<span class="n mono" data-testid="unified-live-collection-summary">{ordinaryMatches.length.toLocaleString()}{rowFilter ? ` OF ${ordinaryRows.length.toLocaleString()}` : ''} {levelKind === 'composer' ? 'COMPOSITIONS' : 'RECORDINGS'}</span>
 		{/if}
 		{#if levelKind !== 'genre' && page.phase === 'ready' && albumRows.length > 0}
 			<div class="sortc-wrap">
@@ -305,33 +317,23 @@
 				</div>
 			</div>
 		{/if}
-		{#if page.phase === 'ready' && hasActions && levelKind === 'genre'}
-			<button
-				type="button"
-				class="ctab"
-				data-testid="unified-live-actions"
-				disabled={!actionsEnabled || actionBusy}
-				onclick={onBeginActions}
-			>
-				Actions
-			</button>
-		{:else if page.phase === 'ready'}
-			{#each bulkRows as row (`${row.ref.generation}:${row.ref.token}`)}
-				<div class="bulk-controls" aria-label={row.title}>{@render rowControls(row, true)}</div>
+		{#if levelKind === 'composer' || levelKind === 'composition'}
+			<input class="row-filter" type="search" aria-label="Filter {rowLabel}" placeholder="Filter {rowLabel.toLowerCase()}…" bind:value={rowFilter} disabled={page.phase !== 'ready'} />
+			<select class="row-sort" aria-label="Sort {rowLabel}" bind:value={rowSort} disabled={page.phase !== 'ready'}>
+				<option value="original">Roon order</option><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option>
+			</select>
+		{/if}
+		{#if page.phase === 'ready'}
+			{#each actionRows as row (`${row.ref.generation}:${row.ref.token}`)}
+				<div class="bulk-controls" aria-label={row.title}>
+					{#if actionRows.length > 1 || !bulkRows.includes(row)}<span>{row.title}</span>{/if}
+					{@render rowControls(row, true, bulkRows.includes(row))}
+				</div>
 			{/each}
 		{/if}
 	</div>
 
-	{#if levelKind === 'genre' && action.phase === 'choosing'}
-		<div class="action-choices" data-testid="unified-live-action-choices">
-			{#each action.actions as choice (choice.actionId)}
-				<button type="button" onclick={() => actionController.execute(choice.actionId)}>
-					{choice.label}
-				</button>
-			{/each}
-			<button type="button" class="ghost" onclick={() => actionController.cancel()}>Cancel</button>
-		</div>
-	{:else if !menuRow && (action.phase === 'resolving' || action.phase === 'executing')}
+	{#if !menuRow && (action.phase === 'resolving' || action.phase === 'executing')}
 		<p class="status" data-testid="unified-live-action-busy">Working…</p>
 	{:else if !menuRow && (action.phase === 'failed' || action.phase === 'outcome-unknown')}
 		<p class="status error" data-testid="unified-live-action-error">
@@ -385,8 +387,9 @@
 		{/if}
 		{#if ordinaryRows.length > 0}
 			{#if levelKind === 'composer' || levelKind === 'composition'}<h3 class="section-label">{levelKind === 'composer' ? 'Compositions' : 'Recordings'}</h3>{/if}
-			<div class="alist" data-testid="unified-live-collection-rows">
-				{#each ordinaryRows as row, index (`${row.ref.generation}:${row.ref.token}`)}
+			{#if ordinaryMatches.length === 0}<p class="status">No matches.</p>{/if}
+			<div class="alist prepared-rows" data-testid="unified-live-collection-rows" use:prepareLibraryGrid={[ordinaryMatches, density, menuRow]}>
+				{#each ordinaryMatches as row, index (`${row.ref.generation}:${row.ref.token}`)}
 					{@const href = hrefForRow(row)}
 					{#if row.kind === 'track'}
 						<div class="tr recording-row" data-testid="unified-live-recording-{index}" data-row-kind={row.kind}>
@@ -424,6 +427,11 @@
 </section>
 
 <style>
+	.prepared-rows { display: grid; grid-template-columns: minmax(0, 1fr); --library-chunk-overflow: 280px; }
+	.row-filter, .row-sort { font: inherit; font-size: 12px; color: var(--text); background: var(--control); border: 1px solid var(--line); border-radius: 6px; min-height: 32px; padding: 5px 9px; max-width: 100%; }
+	.row-filter { margin-left: auto; width: 180px; min-width: 100px; }
+	.row-filter:focus-visible, .row-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 	.section-label { margin: 14px 8px 8px; color: var(--soft); font-size: 13px; font-weight: 500; }
 	.recording-menu span { padding: 7px 10px; color: var(--soft); font-size: 12px; }
 	.recording-menu .error { color: var(--songr-error); }
@@ -433,7 +441,7 @@
 	.recording-credit { flex: 0 1 40%; min-width: 0; font-size: 12px; color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.recording-controls { position: relative; display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 	.recording-more { border: 0; background: transparent; font: inherit; cursor: pointer; color: var(--soft); padding: 2px 6px; border-radius: 4px; }
-	.recording-menu { display: flex; flex-direction: column; position: absolute; right: 0; top: 100%; z-index: 20; min-width: 110px; padding: 4px; background: var(--control); border: 1px solid var(--line); border-radius: 5px; }
+	.recording-menu { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; position: absolute; right: 0; top: 100%; z-index: 20; min-width: 110px; padding: 4px; background: var(--control); border: 1px solid var(--line); border-radius: 5px; }
 	.recording-menu button { text-align: left; border: 0; background: transparent; color: var(--text); padding: 7px 10px; font: inherit; font-size: 12px; cursor: pointer; }
 	.recording-row:focus-within .tgo, .recording-row:focus-within .tq, .recording-controls:focus-within .tgo, .recording-controls:focus-within .tq, .prominent .tgo, .prominent .tq { opacity: 1; }
 	.recording-controls button:disabled { cursor: default; color: var(--dim); }

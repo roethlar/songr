@@ -6,7 +6,6 @@
 	import { isCorePaired } from '$lib/stores/coreStore';
 	import { healthStore } from '$lib/stores/healthStore';
 	import { libraryViewHostStore } from '$lib/stores/libraryViewHostStore';
-	import { workspaceShellStore } from '$lib/stores/workspaceShellStore';
 	import { initializeTheme } from '$lib/stores/themeStore';
 	import { unifiedLibraryPrefsStore } from '$lib/stores/unifiedLibraryPrefsStore';
 	import {
@@ -59,11 +58,8 @@
 	let unifiedZoneMenuOpen = $state(false);
 	let unifiedQueueOpen = $state(false);
 	let unifiedZonePicker = $state<HTMLElement | null>(null);
-	// An active workspace claim wins ahead of the path-based resolution; a
-	// build with no claimant resolves every workspace-looking URL neutrally.
 	const shellContract = $derived(
-		$workspaceShellStore.contract ??
-			resolveAppShellContract($page.url.pathname, $libraryViewHostStore.activeMode)
+		resolveAppShellContract($page.url.pathname, $libraryViewHostStore.activeMode)
 	);
 	const unifiedTransport = $derived(shellContract.transportPresentation === 'unified');
 	const unifiedPiTransport = $derived(

@@ -45,8 +45,8 @@
  */
 
 import {
-  CATALOG_DISPLAY_TEXT_MAX_LENGTH,
-} from "./catalogContracts";
+  LIBRARY_DISPLAY_TEXT_MAX_LENGTH,
+} from "./libraryText";
 
 export const COLLECTION_DRILL_SOURCE_CONTRACT =
   "controller-collection-drill-v1" as const;
@@ -239,7 +239,7 @@ function isBoundedDisplayText(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
-    value.length <= CATALOG_DISPLAY_TEXT_MAX_LENGTH &&
+    value.length <= LIBRARY_DISPLAY_TEXT_MAX_LENGTH &&
     canonicalDisplayText(value) === value &&
     !CONTROL_CHARACTER.test(value)
   );
@@ -298,7 +298,7 @@ function hasExactKeys(
  * empty once trimmed, over the display bound, or carrying control characters.
  */
 export function canonicalCollectionDrillText(value: unknown): string | null {
-  if (typeof value !== "string" || value.length > CATALOG_DISPLAY_TEXT_MAX_LENGTH) {
+  if (typeof value !== "string" || value.length > LIBRARY_DISPLAY_TEXT_MAX_LENGTH) {
     return null;
   }
   const canonical = canonicalDisplayText(value);

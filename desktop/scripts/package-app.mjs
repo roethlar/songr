@@ -17,11 +17,9 @@
  * committed lockfile, `tsc` and `vite` against committed sources, a file copy,
  * and electron-builder against `electron-builder.yml`. Two runs from one commit
  * produce the same file *contents*; the archives are not byte-identical,
- * because dmg, deb and AppImage all embed timestamps. Nothing here reads the
- * environment for a decision except the tree marker described below.
- *
- * The one decision this script makes: which application id to build under.
- * Every checkout builds the same public Songr identity.
+ * because dmg, deb and AppImage all embed timestamps. Every checkout builds
+ * the same public Songr identity; signing follows the build host and explicit
+ * options.
  */
 
 import { execFileSync } from 'node:child_process';

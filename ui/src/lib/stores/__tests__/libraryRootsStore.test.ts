@@ -503,7 +503,7 @@ describe('type-to-filter over the in-memory root', () => {
 	});
 
 	it('does not fold diacritics, which is the repo s existing rule and not this slice s to change', () => {
-		// `normalizeCatalogText` lowercases and does not fold diacritics, so an
+		// `normalizeLibraryText` lowercases and does not fold diacritics, so an
 		// ASCII query does not reach an accented name. The palette has behaved
 		// this way over the stored index for as long as it has existed; the live
 		// filter matches it deliberately rather than quietly diverging on one

@@ -41,7 +41,7 @@ import {
 	__getNavigationLog,
 	__resetNavigation
 } from '../../../test/app-stubs/navigation';
-import { NO_GENRE_SORT_REASON, NO_IMPORT_DATES_REASON, NO_RELEASE_DATES_REASON } from '$lib/unifiedLibrarySorts';
+import { NO_IMPORT_DATES_REASON, NO_RELEASE_DATES_REASON } from '$lib/unifiedLibrarySorts';
 import type { NamedCountEntry } from '$lib/stores/unifiedNamedCountsStore';
 import { COLLECTION_DRILL_SOURCE_CONTRACT } from '@shared/collectionDrillContracts';
 import { setZonesSnapshot } from '$lib/stores/zonesStore';
@@ -1054,7 +1054,6 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 					error: null
 				}
 			],
-			degraded: false,
 			selectedVersionId: 'version-2',
 			actionsAvailable: true,
 			albumActionsAvailable: true,
@@ -1849,7 +1848,6 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			artist: null,
 			title: null,
 			versions: [],
-			degraded: false,
 			selectedVersionId: null,
 			actionsAvailable: false,
 			albumActionsAvailable: false,
@@ -1916,7 +1914,6 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 					error: null
 				}
 			],
-			degraded: false,
 			selectedVersionId: 'version-2',
 			actionsAvailable: true,
 			albumActionsAvailable: true,
@@ -2219,7 +2216,6 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 					error: null
 				}
 			],
-			degraded: false,
 			selectedVersionId: 'version-2',
 			actionsAvailable: true,
 			albumActionsAvailable: true,

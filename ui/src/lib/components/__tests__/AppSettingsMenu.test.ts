@@ -374,7 +374,6 @@ describe('songr theme contract', () => {
 			'ErrorToast.svelte',
 			'NowPlayingOverlay.svelte',
 			'ZoneGroupingModal.svelte',
-			'TrackActionsMenu.svelte'
 		];
 
 		for (const component of components) {

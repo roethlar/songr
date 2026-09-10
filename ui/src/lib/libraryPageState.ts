@@ -1,5 +1,5 @@
 import type { UnifiedLibraryDensity } from '$lib/stores/unifiedLibraryPrefsStore';
-import { CATALOG_DISPLAY_TEXT_MAX_LENGTH } from '@shared/catalogContracts';
+import { LIBRARY_DISPLAY_TEXT_MAX_LENGTH } from '@shared/libraryText';
 import {
 	normalizeCollectionDrillOpenLocator,
 	type CollectionDrillOpenLocator
@@ -60,7 +60,7 @@ export const UNIFIED_FILTER_TEXT_MAX_LENGTH = 256;
 // The origin name is a raw catalog display name; accept exactly the catalog's
 // own display-text domain so a name valid upstream can never be rejected on
 // restore (finding gh6-1).
-export const UNIFIED_ITEM_ORIGIN_NAME_MAX_LENGTH = CATALOG_DISPLAY_TEXT_MAX_LENGTH;
+export const UNIFIED_ITEM_ORIGIN_NAME_MAX_LENGTH = LIBRARY_DISPLAY_TEXT_MAX_LENGTH;
 export const UNIFIED_BROWSE_RESTORE_COUNT_MAX = 100_000;
 /** Mirrors the editorial contract's zero-based track-anchor bound. */
 

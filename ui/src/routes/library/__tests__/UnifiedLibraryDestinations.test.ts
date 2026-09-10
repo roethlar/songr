@@ -167,7 +167,7 @@ describe('Library public destinations integration', () => {
 		expect(screen.getByRole('option', { name: 'Artist A–Z' })).toHaveValue('artist-asc');
 		expect(screen.getByRole('option', { name: 'Artist Z–A' })).toHaveValue('artist-desc');
 		await fireEvent.change(screen.getByLabelText('Sort Tracks'), { target: { value: 'artist-asc' } });
-		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(100);
+		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(275);
 		expect(screen.getAllByTestId('unified-browse-row')[0]).toHaveTextContent('Track 274');
 		expect(screen.getAllByTestId('unified-browse-row')[0]).toHaveTextContent('AAA Artist');
 		expect(screen.getByTestId('unified-browse-summary')).toHaveTextContent('275');
@@ -192,12 +192,12 @@ describe('Library public destinations integration', () => {
 		expect(screen.getByRole('option', { name: 'Name Z–A' })).toHaveValue('name-desc');
 	});
 
-	it('filters/sorts the complete collection independently of rendered page size', async () => {
+	it('filters/sorts one complete continuous collection', async () => {
 		const harness = fixture();
 		await fireEvent.click(screen.getByTestId('unified-scope-tracks'));
 		await waitFor(() => expect(screen.getByLabelText('Filter Tracks')).toBeEnabled());
 		expect(harness.restore).toHaveBeenCalledWith(expect.anything(), snapshot, undefined, { complete: true });
-		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(100);
+		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(275);
 		await fireEvent.input(screen.getByLabelText('Filter Tracks'), { target: { value: 'Needle artist' } });
 		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(1);
 		expect(screen.getByTestId('unified-browse-list')).toHaveTextContent('Track 274');
@@ -205,26 +205,25 @@ describe('Library public destinations integration', () => {
 		await fireEvent.input(screen.getByLabelText('Filter Tracks'), { target: { value: '' } });
 		await fireEvent.change(screen.getByLabelText('Sort Tracks'), { target: { value: 'name-desc' } });
 		expect(screen.getAllByTestId('unified-browse-row')[0]).toHaveTextContent('Track 274');
-		await fireEvent.click(screen.getByRole('button', { name: 'Show next 100' }));
-		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(200);
+		expect(screen.queryByRole('button', { name: /Show next/ })).toBeNull();
+		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(275);
 		expect(harness.restore).toHaveBeenCalledTimes(1);
 		await fireEvent.click(screen.getByTestId('unified-scope-artists'));
 		await fireEvent.click(screen.getByTestId('unified-scope-tracks'));
 		await waitFor(() => expect(screen.getByLabelText('Sort Tracks')).toHaveValue('name-desc'));
-		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(200);
+		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(275);
 		expect(get(harness.navigationPrefsStore).availableDestinations).toContain('tracks');
 		expect(get(harness.navigationPrefsStore).availableDestinations).not.toContain('playlists');
 	});
-	it('completes server pages whose count remains the full total when returning from descendants repeatedly', async () => {
+	it('refuses partial injected state without silently starting another read', async () => {
 		const harness = fixture();
 		await fireEvent.click(screen.getByTestId('unified-scope-tracks'));
 		await waitFor(() => expect(harness.restore).toHaveBeenCalledTimes(1));
 		const full = get(harness.state);
-		for (let returned = 1; returned <= 2; returned++) {
-			harness.state.set({ ...full, result: { ...full.result!, items: full.result!.items.slice(0, 100) } });
-			await waitFor(() => expect(harness.restore).toHaveBeenCalledTimes(returned + 1));
-			expect(screen.getByTestId('unified-browse-summary')).toHaveTextContent('275');
-		}
+		harness.state.set({ ...full, result: { ...full.result!, items: full.result!.items.slice(0, 100) } });
+		await waitFor(() => expect(screen.getByLabelText('Filter Tracks')).toBeDisabled());
+		expect(harness.restore).toHaveBeenCalledTimes(1);
+		expect(screen.getByRole('button', { name: 'Retry Tracks' })).toBeEnabled();
 	});
 	it('does not mutate the page or start a read when disconnected', async () => {
 		const harness = fixture(true);

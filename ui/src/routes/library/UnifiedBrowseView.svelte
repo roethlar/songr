@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { prepareLibraryGrid } from '$lib/preparedLibraryGrid';
 	import type { LibraryCollectionSort } from '$lib/library/LibraryDestinations';
 	import type { NavigationDestinationId } from '@shared/navigationSettings';
 	import type { BrowseItem } from '@shared/types';
@@ -7,18 +8,18 @@
 	import { classifyBrowsePage, classifyBrowseRow, isBrowseBulkItem, type BrowseRowActions } from '$lib/library/browsePresentation';
 	import UnifiedBrowseRowControls from './UnifiedBrowseRowControls.svelte';
 
-	let { state, onBack, onForward, onItem, onLoadMore, onSearchPrompt, hrefForItem = () => null,
+	let { state, onBack, onForward, onItem, onSearchPrompt, hrefForItem = () => null,
 		displayItems, collection, trackActions }: {
 		state: UnifiedBrowseState;
 		onBack: () => void; onForward: () => void; onItem: (item: BrowseItem) => void;
-		onLoadMore: () => void; onSearchPrompt: () => void;
+		onSearchPrompt: () => void;
 		hrefForItem?: (item: BrowseItem) => string | null;
 		displayItems?: readonly BrowseItem[];
 		trackActions?: BrowseRowActions;
 		collection?: {
-			id?: NavigationDestinationId; label: string; ready?: boolean; filter: string; sort: LibraryCollectionSort; matchCount: number;
+			id?: NavigationDestinationId; root?: boolean; label: string; ready?: boolean; filter: string; sort: LibraryCollectionSort; matchCount: number; totalCount?: number;
 			onFilter: (value: string) => void; onSort: (sort: LibraryCollectionSort) => void;
-			onShowMore: () => void; onRetry: () => void;
+			onRetry: () => void;
 		};
 	} = $props();
 
@@ -28,8 +29,7 @@
 	const hasMessage = $derived(result?.action === 'message' || Boolean(result?.message) || result?.isError === true);
 	const total = $derived(result?.totalCount ?? result?.count ?? 0);
 	const loadedCount = $derived(result?.items.length ?? 0);
-	const contentTotal = $derived(Math.max(0, total - (loadedCount - presentation.contentItems.length)));
-	const canLoadMore = $derived(!collection && (state.phase === 'ready' || state.phase === 'error') && loadedCount < total);
+	const contentTotal = $derived(collection?.totalCount ?? Math.max(0, total - (loadedCount - presentation.contentItems.length)));
 	const title = $derived(collection?.label ?? result?.title ?? state.snapshot.history.at(-1)?.breadcrumb.title ?? 'Library');
 
 	function followItem(event: MouseEvent, href: string | null, item: BrowseItem): void {
@@ -44,12 +44,12 @@
 
 <section class="browse-surface" data-testid="unified-browse-view" aria-label={title}>
 	<div class="ctx collection-heading library-list-toolbar">
-		{#if !collection}
+		{#if !collection?.root}
 			<button type="button" class="back" data-testid="unified-browse-back"
 				disabled={state.snapshot.history.length === 0 || state.phase === 'loading'} onclick={onBack}>← Back</button>
 		{/if}
 		<h2 tabindex="-1" data-testid="unified-browse-title">{title}</h2>
-		{#if result && !hasMessage && state.phase === 'ready'}
+		{#if result && !hasMessage && state.phase === 'ready' && (!collection || collection.ready !== false)}
 			<span class="n mono browse-count" data-testid="unified-browse-summary">
 				{#if collection}{collection.matchCount.toLocaleString()}{collection.filter ? ` OF ${contentTotal.toLocaleString()}` : ''}
 				{:else}{presentation.contentItems.length.toLocaleString()}{contentTotal > presentation.contentItems.length ? ` OF ${contentTotal.toLocaleString()}` : ''}{/if}
@@ -63,7 +63,8 @@
 				<option value="original">Roon order</option><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option>
 				{#if collection.id === 'tracks'}<option value="artist-asc">Artist A–Z</option><option value="artist-desc">Artist Z–A</option>{/if}
 			</select>
-		{:else if state.snapshot.forward.length > 0}
+		{/if}
+		{#if state.snapshot.forward.length > 0}
 			<button type="button" class="back" data-testid="unified-browse-forward" disabled={state.phase === 'loading'} onclick={onForward}>Forward →</button>
 		{/if}
 		{#each presentation.bulkItems as item}
@@ -95,12 +96,12 @@
 	{:else if collection && state.phase === 'ready' && collection.ready === false}
 		<p class="browse-status" role="status">Roon did not return a complete {collection.label.toLowerCase()} collection.</p>
 		<button type="button" class="browse-more" onclick={collection.onRetry}>Retry {collection.label}</button>
-	{:else if result && items.length === 0 && !canLoadMore}
+	{:else if result && items.length === 0}
 		<p class="browse-status" data-testid="unified-browse-empty">{collection?.filter ? 'No matches.' : 'Nothing is available here.'}</p>
 	{:else if result}
-		{#if state.phase === 'error'}<p class="browse-status browse-error" data-testid="unified-browse-error">Could not load more{state.error ? `: ${state.error}` : '.'}</p>{/if}
+		{#if state.phase === 'error'}<p class="browse-status browse-error" data-testid="unified-browse-error">This page could not be loaded{state.error ? `: ${state.error}` : '.'}</p>{/if}
 		{#if presentation.sectionLabel}<h3 class="section-label">{presentation.sectionLabel}</h3>{/if}
-		<div class="browse-list" data-testid="unified-browse-list">
+		<div class="browse-list" data-testid="unified-browse-list" use:prepareLibraryGrid={[items, trackActions?.menu]}>
 			{#each items as item, index (`${index}:${item.title}:${item.subtitle ?? ''}`)}
 				{@const rowKind = classifyBrowseRow(item, presentation)}
 				{@const navigable = rowKind === 'navigation'}
@@ -121,8 +122,6 @@
 				</div>
 			{/each}
 		</div>
-		{#if collection && items.length < collection.matchCount}<button type="button" class="browse-more" onclick={collection.onShowMore}>Show next {Math.min(100, collection.matchCount - items.length)}</button>{/if}
-		{#if canLoadMore}<button type="button" class="browse-more" data-testid="unified-browse-more" onclick={onLoadMore}>{state.phase === 'error' ? 'Retry next' : 'Load next'} {Math.min(100, total - loadedCount).toLocaleString()}</button>{/if}
 	{/if}
 </section>
 
@@ -141,7 +140,7 @@
 	.browse-crumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0 8px; list-style: none; color: var(--dim); font-size: 11px; }
 	.browse-crumbs li:not(:last-child)::after { content: ' /'; }
 	.section-label { margin: 10px 8px 0; font-size: 13px; font-weight: 500; color: var(--soft); }
-	.browse-list { display: flex; flex-direction: column; }
+	.browse-list { display: grid; grid-template-columns: minmax(0, 1fr); --library-chunk-overflow: 280px; }
 	.browse-row { min-width: 0; cursor: default; }
 	.browse-name { display: flex; align-items: baseline; flex: 1; gap: 14px; min-width: 0; border: 0; padding: 0; background: transparent; color: inherit; text-align: left; text-decoration: none; font: inherit; }
 	button.browse-name, a.browse-name { cursor: pointer; align-self: stretch; align-items: center; }

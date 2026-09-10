@@ -2,7 +2,7 @@
   <title>Songr app icon</title>
   <!-- The sol rune (s), the first rune of the Sǫngr wordmark, on the brand's
        black-and-gold. The path is the wordmark's own geometry
-       (product/brand/songr-wordmark.svg), transformed rather than redrawn, so
+       (ui/static/brand/songr-wordmark.svg), transformed rather than redrawn, so
        the icon and the wordmark cannot drift apart. The tile is inset with
        transparent corners so every platform's mask and dock treat it well;
        the faint gold ring keeps the tile readable on dark docks. -->

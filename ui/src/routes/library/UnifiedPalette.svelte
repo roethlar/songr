@@ -31,7 +31,7 @@
 	} from '$lib/stores/unifiedPaletteSearchStore';
 	import { parseSmartFilters } from '$lib/unifiedSmartFilters';
 	import { pluralize } from '$lib/pluralize';
-	import { normalizeCatalogText } from '@shared/catalogContracts';
+	import { normalizeLibraryText } from '@shared/libraryText';
 	import type { SearchResult } from '@shared/types';
 	import { browseItemOpensActions } from '$lib/library/UnifiedBrowseController';
 	import type { BrowseRowActions } from '$lib/library/browsePresentation';
@@ -121,7 +121,7 @@
 	const groups = $derived.by((): PaletteGroup[] => {
 		const q = query.trim();
 		if (!q) return [];
-		const nq = normalizeCatalogText(q);
+		const nq = normalizeLibraryText(q);
 		const lq = q.toLowerCase();
 		const out: PaletteGroup[] = [];
 
@@ -164,7 +164,7 @@
 
 		if (roots.phase === 'ready') {
 			const genreMatches = genres.entries.filter((entry) =>
-				normalizeCatalogText(entry.label).includes(nq)
+				normalizeLibraryText(entry.label).includes(nq)
 			);
 			if (genreMatches.length > 0) {
 				out.push({
@@ -233,7 +233,7 @@
 
 			const composerMatches = composers.entries.filter(
 				(entry) =>
-					normalizeCatalogText(entry.label).includes(nq) ||
+					normalizeLibraryText(entry.label).includes(nq) ||
 					entry.label.toLowerCase().includes(lq)
 			);
 			if (composerMatches.length > 0) {
@@ -247,7 +247,7 @@
 						id: `composer-${entry.label}`,
 						icon: '♩',
 						primary: `Composer: ${entry.label}`,
-						secondary: formatGenreAlbumCount(entry.albumCount),
+						secondary: entry.countLabel ?? '',
 						filter: false,
 						disabled: false,
 						reason: null,

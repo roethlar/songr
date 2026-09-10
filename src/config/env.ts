@@ -15,13 +15,6 @@ export interface AppConfig {
   readonly favoritesPath: string;
   readonly navigationSettingsPath: string;
   /**
-   * Where an earlier install's saved catalog store sits, so it can be removed
-   * at start (`src/server/removeRetiredCatalogStore.ts`). Nothing reads or
-   * writes a library model here any more; the key survives only so an operator
-   * who moved the store with CATALOG_PATH still gets it cleaned up.
-   */
-  readonly retiredCatalogPath: string;
-  /**
    * Whether the browse canary runs (post-connect load trial, plan
    * `.agents/plans/core-wedge-postconnect.md` §A0).
    *
@@ -217,14 +210,6 @@ const parseFavoritesPath = (
   return path.resolve(rawPath);
 };
 
-const parseCatalogPath = (
-  value: string | undefined,
-  dataDir: string
-): string => {
-  const rawPath = coerceString(value) ?? path.join(dataDir, "catalog");
-  return path.resolve(rawPath);
-};
-
 const DEFAULT_RECENTLY_PLAYED_CAP = 50;
 
 const parseRecentlyPlayedCap = (value: string | undefined): number => {
@@ -314,12 +299,6 @@ export const loadConfig = (): AppConfig => {
     process.env.RECENTLY_PLAYED_CAP
   );
   const favoritesPath = parseFavoritesPath(process.env.FAVORITES_PATH, dataDir);
-  // CATALOG_PATH is the key; TIMELINE_CATALOG_PATH is honored as a fallback
-  // because deployed .env files predate Timeline's removal (2026-08-09).
-  const retiredCatalogPath = parseCatalogPath(
-    process.env.CATALOG_PATH ?? process.env.TIMELINE_CATALOG_PATH,
-    dataDir
-  );
   // On by default since the B6b follow-up. The sweep governor will not freeze
   // a latency baseline without an authority outside its own samples calling
   // the Core healthy, so a build that shipped the canary off shipped a
@@ -345,7 +324,6 @@ export const loadConfig = (): AppConfig => {
     recentlyPlayedCap,
     favoritesPath,
     navigationSettingsPath: path.join(dataDir, "navigation-preferences.json"),
-    retiredCatalogPath,
     browseCanaryEnabled,
     browseCanaryBaselineP95Ms,
   };

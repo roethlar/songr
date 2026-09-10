@@ -75,6 +75,14 @@ describe('browseSemantics', () => {
 		expect(selectBrowseSearchItem([sparse, exact], original)?.itemKey).toBe('exact');
 	});
 
+	it('refuses tied duplicate search descriptors instead of choosing the first token', () => {
+		const original = item({ title: 'Duplicate', subtitle: 'Same artist', hint: 'action_list' });
+		const first = { ...original, itemKey: 'first' };
+		const second = { ...original, itemKey: 'second' };
+		expect(selectBrowseSearchItem([first, second], original)).toBeUndefined();
+		expect(selectBrowseSearchItem([second, first], original)).toBeUndefined();
+	});
+
 	it('uses the shared taxonomy to resolve Stations as radio', () => {
 		const station = item({
 			title: 'BBC Radio 3',

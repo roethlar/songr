@@ -26,9 +26,8 @@ export interface TrayControllerOptions {
   readonly onNext: () => void;
   readonly onPrevious: () => void;
   /**
-   * The advanced settings page. Deliberately reachable only from here: the
-   * owner's ruling is that these options stay buried and out of onboarding
-   * (plan §1), so nothing in the app's own UI links to them.
+   * Opens the advanced settings page. The main Settings menu offers the same
+   * entry point on desktops without a tray; onboarding does not require it.
    */
   readonly onOpenSettings: () => void;
   readonly onQuit: () => void;

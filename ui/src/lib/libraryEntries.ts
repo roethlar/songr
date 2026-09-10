@@ -1,7 +1,6 @@
 import {
-	normalizeCatalogText,
-	type CatalogPartialDate
-} from '@shared/catalogContracts';
+	normalizeLibraryText
+} from '@shared/libraryText';
 import type { LibraryRowReference } from '@shared/libraryRootsContracts';
 
 /**
@@ -71,11 +70,6 @@ export interface LibraryAlbumEntry {
 	 * `LibraryArtistEntry.liveRef` above.
 	 */
 	liveRef?: LibraryRowReference;
-	/** Native release dates; the release-year sort key. */
-	originalReleaseDate?: CatalogPartialDate;
-	releaseDate?: CatalogPartialDate;
-	/** Native import timestamp; the recently-added sort key. */
-	importDate?: string;
 }
 
 export interface LetterBucket {
@@ -91,7 +85,7 @@ export interface LetterBucket {
  * renders them (`sortKey = (s) => s.replace(/^(the |a |an )/i, '')`).
  */
 export function librarySortKey(text: string): string {
-	return normalizeCatalogText(text).replace(/^(the |a |an )/, '');
+	return normalizeLibraryText(text).replace(/^(the |a |an )/, '');
 }
 
 /**
@@ -130,7 +124,7 @@ export function computeBuckets(searchKeys: readonly string[]): LetterBucket[] {
  * Rail-bucket rank for a search key: `#` first, then A–Z. Sorting by this
  * rank before code-point order keeps every bucket letter contiguous.
  * Without it, keys that start above `z` (e.g. `č`, `é`, `ó` — accented
- * initials survive `normalizeCatalogText`, which lowercases but does not
+ * initials survive `normalizeLibraryText`, which lowercases but does not
  * fold diacritics) sort after the A–Z run and open a second `#` bucket,
  * which crashes the letter-keyed each blocks in the unified scope views
  * (duplicate key `#`).

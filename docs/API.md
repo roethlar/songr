@@ -1,4 +1,4 @@
-# Roon Controller API Reference
+# Songr API Reference
 
 ## REST Endpoints
 
@@ -159,8 +159,9 @@ The `classic-*` names are retained wire-protocol identifiers, not a separate UI.
 Requests to the retired
 `POST /api/browse*` routes return JSON `404 Not Found`.
 
-The Library's Unified view uses the catalog REST reads below for keyless
-discovery.
+The Library uses the live root/open reads below for discovery. Songr does not
+keep a separate library catalog or expose private-protocol playlist, DSP or
+Most Played APIs.
 
 ---
 
@@ -210,183 +211,50 @@ All three return **503** when favorites persistence is degraded
 
 ---
 
-### Catalog
+### Live library
 
-The catalog is a controller-owned, Core-scoped read model. The server always
-derives the active Core from the paired Roon connection; clients must not send
-or select a `coreId`. Responses contain only durable catalog descriptors, never
-Roon browse-session keys or actions.
+These routes read the connected Core through Roon's public Browse API. Root
+snapshots and opaque row references belong to the current in-memory generation;
+they are not stored library records or stable playback identifiers.
 
-All catalog responses set `Cache-Control: no-store`.
+| Route | Request | Result |
+|---|---|---|
+| `GET /library/roots` | Optional `generation` query | Current Artists/Albums snapshot, confirmation that the held generation is current, or an unavailable result |
+| `POST /library/roots/refresh` | No body required | Explicitly refresh the live roots |
+| `POST /library/open` | `{ "ref": { "generation": "…", "token": "…" } }` | Open that exact current row |
+| `POST /library/open` | `{ "root": "genres" }` or `{ "root": "composers" }` | Open an on-demand root |
+| `POST /library/preview` | `{ "ref": { "generation": "…", "token": "…" }, "limit": 8 }` | A bounded preview; limit is 1–100 |
 
-#### GET /catalog/status
+A stale generation returns **409**. Unavailable Core/session/read results use
+**503**; malformed inputs use **400**. Responses carry their contract and
+result kind rather than pretending a failed read is an empty library. The
+complete schemas are `libraryRootsContracts.ts`, `libraryOpenContracts.ts` and
+`libraryPreviewContracts.ts` under `src/shared/`.
 
-Returns freshness, persistence, refresh, completeness, revision, and item-count
-status for the paired Core.
+`/api/catalog/*` and the earlier REST Browse mutation routes are removed and
+return the generic JSON API **404**. No catalog refresh or index-rebuild command
+is required for the current Library.
 
-#### POST /catalog/refresh
+### Navigation settings
 
-Starts or joins the paired Core's background catalog scan. The request body and
-query must be empty. A successful request returns **202** with the accepted
-status only:
+`GET /settings/navigation` reads the server's complete committed navigation
+snapshot. `PUT /settings/navigation` updates it with the version/revision and
+preferences defined in `src/shared/navigationSettings.ts`. A conflicting write
+returns **409** with the current snapshot; invalid input returns **400** and
+unavailable persistence returns **503**. Both routes disable HTTP caching.
 
-```json
-{
-  "status": {
-    "coreId": "core-id",
-    "freshness": "fresh",
-    "persistence": "healthy",
-    "refresh": "running",
-    "available": true,
-    "complete": true,
-    "revision": 3,
-    "artistCount": 250,
-    "albumCount": 1800,
-    "updatedAt": "2026-07-15T12:00:00.000Z",
-    "lastCompleteScanAt": "2026-07-15T11:30:00.000Z"
-  }
-}
-```
+The `navigation-settings-updated` Socket.IO event broadcasts the complete saved
+snapshot to connected clients. Settings belong to the Songr server, including
+an embedded desktop server; they are not per-browser local preferences.
 
-The response does not wait for, or include, the completed scan snapshot.
-Concurrent refresh requests coalesce onto the same scan. On an initial scan the
-accepted status may still be empty and unavailable; with an older complete
-snapshot it may remain available while `refresh` is `running`. A background
-failure is reported by a later `/status` response rather than by changing the
-already-returned **202** response.
+### Recently played and setup
 
-#### GET /catalog/index
-
-Returns the bulk library index for the paired Core: status plus artists and
-albums with their durable descriptors. Empty catalog → **409**
-`{ "error": "catalog empty" }`; degraded → **503**. Albums may carry native
-(native-protocol) fields when a native snapshot is available:
-`originalReleaseDate`, `releaseDate`, `importDate`, `playCount`,
-`lastPlayedAt`, and native identity bindings. The response may also carry a
-`native` capability block (`dateFeaturesAvailable`,
-`playFeaturesAvailable`, and `playlistFeaturesAvailable`, with feature-local
-reasons when unavailable).
-
-#### GET /catalog/most-played
-
-Returns one all-time, selected-profile native snapshot; the route takes no
-query parameters. The response contains:
-
-- `status` and the canonical `pulledAt` instant;
-- `topPerformers`, ordered by exact Core-reported listening `minutes`;
-- `topReleases`, ordered by exact Core-reported listening `minutes`; and
-- `topTracks`, ordered by selected-profile `playCount`.
-
-Performer and release rows carry opaque `selectionId` values for their native
-drill routes. Release and track rows may also carry `albumLocalId` and
-`imageKeyHint` accelerators when one unique public-catalog album is known, but
-native identity remains authoritative. Track rows carry resolver authority for
-Play Now, Add Next, and Queue; unavailable native rows carry an explicit
-non-actionable authority instead. Aggregate performer labels (`Various
-Artists`, `Various Performers`, `Unknown Artist`, and `Unknown Artists`) are
-excluded. Raw native IDs and public Browse item keys are never returned.
-
-Returns **409** with `details: "MOST_PLAYED_UNAVAILABLE"` when the
-Most Played-specific capability is unavailable. A compatible retained
-snapshot is not served through that gate.
-
-#### GET /catalog/most-played/performers/:selectionId
-
-Revalidates the opaque, snapshot-scoped performer selection, then returns every
-bounded native library track attributed to that exact performer identity,
-grouped by release in native disc/track order. This includes tracks on releases
-whose album artist is `Various Artists`; it does not depend on a matching public
-Library artist row. The response carries `snapshotPulledAt`, the performer
-`name`, release metadata, and resolver authority for each available track.
-
-#### GET /catalog/most-played/releases/:selectionId
-
-Revalidates the opaque, snapshot-scoped release selection, then returns the
-tracks belonging to that exact native album identity in disc/track order. The
-response carries `snapshotPulledAt`, release metadata, optional catalog
-accelerators, and resolver authority for each available track.
-
-Both drill routes take no query parameters. An expired, wrong-kind, wrong-Core,
-or replaced-snapshot selection fails closed; native capability loss and bounded
-result/decoder failures are returned with their stable error detail rather than
-falling back to title/artist guessing.
-
-#### Playlist reads and management
-
-`GET /catalog/playlists` returns the native playlist list, global write
-availability, and per-playlist action eligibility. `GET
-/catalog/playlists/:playlistId/contents` returns the Core-evaluated contents.
-`GET /catalog/playlists/:playlistId/manage` refreshes live eligibility; for a
-smart playlist it also returns the Focus scope, a plain summary, editability,
-and track/album editor capability. The list and manage requests require
-`X-Roon-Controller-Playlist-Actions: 2`; a stale browser receives **409**
-`PLAYLIST_ACTIONS_RELOAD_REQUIRED`.
-
-Complete Track Focus and Album Focus editing uses an opaque, process-local
-editor lease:
-
-- `POST /catalog/playlists/focus/bootstrap` with `{ "scope": "tracks" }` or
-  `{ "scope": "albums" }` opens a create editor.
-- `POST /catalog/playlists/:playlistId/focus/bootstrap` with `{}` opens the
-  existing smart playlist without changing its scope.
-- `POST /catalog/playlists/focus/document`, `/retry`, and `/heartbeat` take
-  `{ "state": <editor-state> }`; the document operation advances its
-  generation and returns a fresh advisory match count.
-- `POST /catalog/playlists/focus/pick` takes the editor state plus one
-  generation-bound picker request. `POST /catalog/playlists/focus/adopt`
-  exchanges returned candidate IDs for editor-bound selection IDs.
-- `POST /catalog/playlists/focus/close` explicitly releases the lease.
-- `POST /catalog/playlists/focus` creates from `{ "name", "state" }`.
-  `PUT /catalog/playlists/:playlistId/focus` updates from `{ "state" }`.
-
-Bootstrap/document responses contain `status`, the opaque editor state,
-`previewCount`, and selected display labels. Native IDs, query object IDs, and
-raw criteria bytes never cross HTTP. One editor owns a Core at a time; a
-second opener receives **409** `EDITOR_BUSY` unless it explicitly confirms
-takeover. Update uses an opaque composite baseline and returns **409**
-`EDITOR_CONFLICT` instead of overwriting a concurrent Roon edit.
-
-Every successful create/update response is based on a fresh native read and
-contains `playlistId`, `operationId`, and `detail`. `OUTCOME_UNKNOWN`,
-`VERIFICATION_FAILED`, and `WRITE_FAILED_RETIRED` are terminal for that editor:
-the browser must reopen from Roon before saving again. A `WRITE_FAILED` proven
-before native invoke preserves the logical editor and its unsaved document.
-
-Manual management remains available through `POST /catalog/playlists/manual`
-and the target-specific `/rename`, `/description`, `/items`,
-`/items/remove`, and `/items/move` routes. There is deliberately no public
-whole-playlist `DELETE` route; deletion exists only in guarded local tooling.
-
-#### GET /catalog/artists?query=:query&limit=:limit
-
-Searches artists using deterministic exact, prefix, then substring ordering.
-An empty query returns an empty result rather than dumping the catalog. `limit`
-defaults to 20 and may not exceed 40.
-
-#### GET /catalog/artists/:artistLocalId/albums?limit=:limit
-
-Returns albums bound to the exact durable artist identifier. `limit` defaults
-to 200 and may not exceed 500. In an available, complete catalog, a well-formed
-but unknown artist identifier returns **404**; an unavailable catalog returns
-**503** instead.
-
-#### POST /catalog/artists/:artistLocalId/albums/load?revision=:revision&limit=:limit
-
-Returns an existing resolved discography or uses a bounded, server-owned catalog
-session to resolve one unresolved catalog artist, with the same artist-albums
-response shape. The body must be empty.
-`revision` is required and is the caller's catalog commit precondition; `limit`
-has the same default and maximum as the read route. A revision mismatch returns
-**409** with `details: "REVISION_CONFLICT"`, so the caller must reload
-catalog state rather than retrying with the stale revision.
-
-`GET /catalog/status` can return **200** with an empty, stale, or degraded status
-so clients can diagnose it. Other catalog operations return **400** for
-malformed or unsupported input, **404** for an unknown artist in an available
-complete catalog, **409** for a revision conflict, and **503** when no Core is
-paired or the requested operation cannot be served safely. `/api/health`
-exposes catalog readiness and degradation as a non-critical diagnostic; it
-never changes controller readiness.
+- `GET /recently-played` returns the history observed by this Songr server.
+- `DELETE /recently-played` clears that history. It does not alter Roon history.
+- `GET /onboarding` returns current first-run setup status.
+- `POST /core/switch` starts switching the paired Core; see the request handling
+  in `src/server/http/routes/core.ts` before constructing a client.
+- `GET /health` is available under `/api` and also at `/health`.
 
 ---
 
@@ -542,7 +410,7 @@ or disconnecting a session invalidates its item tokens.
 ```
 
 The event name and `operation` must match. `role` is one of
-`classic-browse`, `classic-search`, or `classic-explore`; the hierarchy and
+`classic-browse`, `classic-search`, `classic-explore`, or `classic-composition`; the hierarchy and
 operation must be valid for that role. `options` is the bounded operation-specific
 object and cannot contain `multiSessionKey`. Browse results use opaque item tokens
 bound to the exact session generation and role. Coordinated search responses are
@@ -551,6 +419,19 @@ and contains either `result`, or a bounded error code and message. The exact wir
 schema and limits are defined in `src/shared/classicBrowseContracts.ts`.
 
 ---
+
+### Retained album reads and search
+
+`library-album:open`, `library-album:select` and `library-album:cancel` use
+acknowledgments and the `library-album:versions`, `:resolved`, `:version-failed`
+and `:failed` follow-up events. A retained page is opened from a public
+collection locator and has opaque operation/version identity. It is not a
+catalog record. See `src/shared/libraryAlbumContracts.ts`.
+
+The search palette uses `unified-search:search`, `unified-search:clear` and
+`unified-search:action`, with the schemas in `src/shared/unifiedSearchContracts.ts`.
+Current selected-result/action authority is required; a display title alone does
+not authorize playback.
 
 ### Album Actions
 
@@ -563,8 +444,9 @@ does not itself execute a transport or queue command.
 | `album-action:cancel` | `AlbumActionCancelRequest` | `AlbumActionCancelAck` | none |
 | `album-action:execute` | `AlbumActionExecuteRequest` | `AlbumActionExecuteAck` | none |
 
-All three client commands require acknowledgment callbacks. `begin` binds a
-catalog `albumLocalId`, current `zoneId`, tab, and browse-session generation; a
+All three client commands require acknowledgment callbacks. `begin` binds the
+current zone, tab and generation to either an exact live row `ref` or a retained
+album `pageId` and `versionId` (optionally one validated track selector). A
 successful resolution event returns bounded choices with opaque `actionId`
 values. `execute` accepts only one such `actionId`—display labels and semantic
 names grant no execution authority. Its acknowledgment distinguishes not
@@ -579,9 +461,9 @@ and imported in the frontend as `@shared/albumActionContracts`.
 
 ## Error Handling
 
-HTTP errors use an `ErrorResponse`. `details` is present for typed Roon and
-catalog errors, but is optional for validation, rate-limit, generic, and
-not-found responses:
+Generic HTTP errors use an `ErrorResponse`. `details` may identify a typed Roon
+error; validation, rate-limit and not-found responses may omit it. Live-library
+routes use the contract-specific response shapes described above:
 
 ```json
 {
@@ -593,10 +475,9 @@ not-found responses:
 ### HTTP Status Codes
 
 - `200` - Success
-- `202` - Background catalog refresh accepted
 - `400` - Bad Request (invalid parameters)
-- `404` - Not Found (route, image, or catalog artist not found)
-- `409` - Catalog revision conflict; reload catalog state
+- `404` - Not Found (route or image not found)
+- `409` - Stale library reference or navigation-settings revision conflict
 - `429` - API rate limit exceeded
 - `500` - Internal Server Error
 - `503` - Service Unavailable (core not paired)
@@ -609,10 +490,6 @@ not-found responses:
 - `IMAGE_NOT_FOUND` - Image key invalid
 - `OPERATION_FAILED` - Roon operation failed
 - `OPERATION_TIMEOUT` - Roon Core completion callback timed out
-- `INVALID_QUERY` - Catalog query, limit, identifier, or revision is invalid
-- `REVISION_CONFLICT` - Catalog changed since the caller's revision
-- `CATALOG_ARTIST_NOT_FOUND` - Artist is absent from an available complete catalog
-- `PERSISTENCE_DEGRADED` - Catalog persistence cannot safely accept the operation
 
 ---
 
@@ -629,8 +506,10 @@ one file:
 - `src/shared/searchTypes.ts` — shared Roon-to-controller search type mapping
 - `src/shared/recentlyPlayed.ts` — shared recently-played identity and deduplication
   helpers
-- `src/shared/catalogContracts.ts` — catalog REST descriptors, responses,
-  placement evidence, parsers, and bounds
+- `src/shared/libraryRootsContracts.ts`, `libraryOpenContracts.ts` and
+  `libraryPreviewContracts.ts` — live library reads and exact row references
+- `src/shared/libraryAlbumContracts.ts` — retained live album-page reads
+- `src/shared/navigationSettings.ts` — persisted navigation preferences
 - `src/shared/albumActionContracts.ts` — album-action wire contract
 
 Frontend code imports these modules through the `@shared/<module>` alias.

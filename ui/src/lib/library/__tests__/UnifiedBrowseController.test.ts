@@ -77,6 +77,22 @@ describe('UnifiedBrowseController', () => {
   expect(JSON.stringify(get(controller).snapshot)).not.toContain('fresh-tracks');
  });
 
+ it('stops a superseded complete read at the next batch boundary', async () => {
+  const items = Array.from({ length: 275 }, (_, index) => row(`Track ${index}`, `track-${index}`));
+  let release!: (result: BrowseResult) => void;
+  const delayed = new Promise<BrowseResult>(resolve => { release = resolve; });
+  const browse = vi.fn<ClassicBrowseApiTransaction['browse']>(async () => page(items.slice(0, 100), { totalCount: 275 }));
+  const browseLoad = vi.fn<ClassicBrowseApiTransaction['browseLoad']>(async options => options.offset === 100 ? delayed : page(items.slice(200), { offset: 200, totalCount: 275 }));
+  const controller = createUnifiedBrowseController(dependencies({ browse, browseLoad } as unknown as ClassicBrowseApiTransaction));
+  const loading = controller.restore(CLAIM, { context: { hierarchy: 'browse' }, history: [], forward: [] }, undefined, { complete: true });
+  await vi.waitFor(() => expect(browseLoad).toHaveBeenCalledTimes(1));
+  controller.reset();
+  release(page(items.slice(100, 200), { offset: 100, totalCount: 275 }));
+  await expect(loading).resolves.toBe(false);
+  expect(browseLoad).toHaveBeenCalledTimes(1);
+  expect(get(controller).phase).toBe('idle');
+ });
+
  it('does not publish a partial collection after an incomplete page', async () => {
   const browse = vi.fn<ClassicBrowseApiTransaction['browse']>(async options => options.itemKey
    ? page(Array.from({ length: 100 }, (_, index) => row(`Track ${index}`, `track-${index}`)), { title: 'Tracks', level: 1, totalCount: 150 })
@@ -229,77 +245,42 @@ describe('UnifiedBrowseController', () => {
 		expect(get(controller).notice).toContain('ambiguous');
 	});
 
-	it('pages to Roon’s reported total without persisting an offset', async () => {
-		const first = Array.from({ length: 100 }, (_, index) => row(`Row ${index}`, `key-${index}`));
-		const second = Array.from({ length: 100 }, (_, index) =>
-			row(`Row ${index + 100}`, `key-${index + 100}`)
-		);
+	it.each(['browse', 'search'] as const)('loads the complete %s list before ready, preserving tail identity', async hierarchy => {
+		const items = Array.from({ length: 275 }, (_, index) => row(`Row ${index}`, `key-${index}`));
 		const transaction = {
-			browse: vi.fn(async () => page(first, { totalCount: 54_082 })),
-			browseLoad: vi.fn(async () => page(second, { offset: 100, totalCount: 54_082 })),
-			browsePop: vi.fn(),
-			browseSearch: vi.fn()
+			browse: vi.fn(async () => page(items.slice(0, 100), { title: 'Results', totalCount: 275 })),
+			browseLoad: vi.fn(async (options: Parameters<ClassicBrowseApiTransaction['browseLoad']>[0]) => {
+				const offset = options.offset ?? 0;
+				return page(items.slice(offset, offset + 100), { title: 'Results', offset, totalCount: 275 });
+			})
 		} as unknown as ClassicBrowseApiTransaction;
 		const controller = createUnifiedBrowseController(dependencies(transaction));
-
-		await controller.restore(CLAIM, {
-			context: { hierarchy: 'browse' },
-			history: [],
-			forward: []
-		});
-		await expect(controller.loadMore(CLAIM)).resolves.toBe(true);
-
-		expect(get(controller).result?.items).toHaveLength(200);
-		expect(get(controller).result).toMatchObject({ count: 54_082, totalCount: 54_082, offset: 0 });
-		expect(transaction.browseLoad).toHaveBeenCalledWith({
-			hierarchy: 'browse',
-			offset: 100,
-			count: 100
-		});
-		expect(get(controller).snapshot).toEqual({
-			context: { hierarchy: 'browse' },
-			history: [],
-			forward: []
-		});
+		const snapshot: BrowseHistorySnapshot = { context: hierarchy === 'search' ? { hierarchy, query: 'needle' } : { hierarchy }, history: [], forward: [] };
+		await expect(controller.restore(CLAIM, snapshot)).resolves.toBe(true);
+		expect(get(controller).result?.items).toEqual(items);
+		expect(get(controller).result?.items[274]).toBe(items[274]);
+		expect(transaction.browseLoad).toHaveBeenLastCalledWith({ hierarchy, offset: 200, count: 75 });
+		expect(get(controller).snapshot).toEqual(snapshot);
 	});
 
-	it('retains loaded rows and retries after a transient paging failure', async () => {
-		const first = Array.from({ length: 100 }, (_, index) => row(`Row ${index}`, `key-${index}`));
-		const second = Array.from({ length: 100 }, (_, index) =>
-			row(`Row ${index + 100}`, `key-${index + 100}`)
-		);
+	it('fails a complete read atomically and retries from a fresh root', async () => {
+		const items = Array.from({ length: 200 }, (_, index) => row(`Row ${index}`, `key-${index}`));
 		const transaction = {
-			browse: vi.fn(async () => page(first, { totalCount: 300 })),
-			browseLoad: vi
-				.fn()
-				.mockRejectedValueOnce(new Error('temporary timeout'))
-				.mockResolvedValueOnce(page(second, { offset: 100, totalCount: 300 })),
-			browsePop: vi.fn(),
-			browseSearch: vi.fn()
+			browse: vi.fn(async () => page(items.slice(0, 100), { title: 'Results', totalCount: 200 })),
+			browseLoad: vi.fn().mockRejectedValueOnce(new Error('temporary timeout'))
+				.mockResolvedValueOnce(page(items.slice(100), { title: 'Results', offset: 100, totalCount: 200 }))
 		} as unknown as ClassicBrowseApiTransaction;
 		const controller = createUnifiedBrowseController(dependencies(transaction));
-
-		await controller.restore(CLAIM, {
-			context: { hierarchy: 'browse' },
-			history: [],
-			forward: []
-		});
-		await expect(controller.loadMore(CLAIM)).resolves.toBe(false);
-
-		expect(get(controller)).toMatchObject({
-			phase: 'error',
-			error: 'temporary timeout',
-			result: { items: first }
-		});
-
-		await expect(controller.loadMore(CLAIM)).resolves.toBe(true);
-		expect(get(controller)).toMatchObject({ phase: 'ready', error: null });
-		expect(get(controller).result?.items).toHaveLength(200);
-		expect(transaction.browseLoad).toHaveBeenCalledTimes(2);
+		const snapshot: BrowseHistorySnapshot = { context: { hierarchy: 'browse' }, history: [], forward: [] };
+		await expect(controller.restore(CLAIM, snapshot)).resolves.toBe(false);
+		expect(get(controller)).toMatchObject({ phase: 'error', error: 'temporary timeout', result: null });
+		await expect(controller.restore(CLAIM, snapshot)).resolves.toBe(true);
+		expect(get(controller).result?.items).toEqual(items);
+		expect(transaction.browse).toHaveBeenCalledTimes(2);
 	});
 
-	it('drills a visible row without scanning the rest of a 54,082-row level', async () => {
-		const visible = Array.from({ length: 100 }, (_, index) =>
+	it('drills a row after validating the complete parent list', async () => {
+		const visible = Array.from({ length: 54_082 }, (_, index) =>
 			row(index === 72 ? 'Target folder' : `Row ${index}`, `key-${index}`, {
 				hint: 'list',
 				isLoadable: true
@@ -308,11 +289,11 @@ describe('UnifiedBrowseController', () => {
 		const browse = vi.fn<ClassicBrowseApiTransaction['browse']>(async (options) =>
 			options.itemKey === 'key-72'
 				? page([row('Child', 'child')], { title: 'Target folder', level: 1 })
-				: page(visible, { title: 'Tracks', totalCount: 54_082 })
+				: page(visible.slice(0, 100), { title: 'Tracks', totalCount: 54_082 })
 		);
 		const transaction = {
 			browse,
-			browseLoad: vi.fn(),
+			browseLoad: vi.fn(async (options: Parameters<ClassicBrowseApiTransaction['browseLoad']>[0]) => { const offset = options.offset ?? 0; return page(visible.slice(offset, offset + (options.count ?? 100)), { title: 'Tracks', offset, totalCount: 54_082 }); }),
 			browsePop: vi.fn(),
 			browseSearch: vi.fn()
 		} as unknown as ClassicBrowseApiTransaction;
@@ -328,9 +309,9 @@ describe('UnifiedBrowseController', () => {
 		expect(get(controller).result?.title).toBe('Target folder');
 		expect(get(controller).snapshot.history[0]).toMatchObject({
 			breadcrumb: { title: 'Target folder' },
-			restoreCount: 100
+			restoreCount: 54_082
 		});
-		expect(transaction.browseLoad).not.toHaveBeenCalled();
+		expect(get(controller).result?.items).toHaveLength(1);
 	});
 });
 
@@ -418,7 +399,7 @@ describe('UnifiedBrowseActionController', () => {
 	});
 
 	it('resolves actions for a visible row in a 54,082-row level', async () => {
-		const visible = Array.from({ length: 100 }, (_, index) =>
+		const visible = Array.from({ length: 54_082 }, (_, index) =>
 			row(index === 37 ? 'Heroes' : `Track ${index}`, `track-${index}`, {
 				hint: 'action_list',
 				itemType: 'track'
@@ -587,8 +568,29 @@ describe('exact public Browse action selection', () => {
 });
 
 
-describe('partial track list after an inline action', () => {
-	it('restores the visible prefix and parent cursor before loading another page', async () => {
+describe('search action ambiguity across the complete root', () => {
+	it('refuses an equally matching tail duplicate before probing either action menu', async () => {
+		const original = row('Same track', undefined, { subtitle: 'Same artist', hint: 'action_list', itemType: 'track' });
+		const rows = Array.from({ length: 275 }, (_, index) => row(`Other ${index}`, `other-${index}`));
+		rows[3] = { ...original, itemKey: 'first-duplicate' };
+		rows[274] = { ...original, itemKey: 'tail-duplicate' };
+		const browse = vi.fn<ClassicBrowseApiTransaction['browse']>(async options => options.itemKey
+			? page([row('Queue', 'wrong-queue', { hint: 'action', isPlayable: true })])
+			: page(rows.slice(0, 100), { totalCount: 275 }));
+		const browseLoad = vi.fn<ClassicBrowseApiTransaction['browseLoad']>(async options => {
+			const offset = options.offset ?? 0;
+			return page(rows.slice(offset, offset + 100), { offset, totalCount: 275 });
+		});
+		const controller = createUnifiedBrowseActionController(dependencies({ browse, browseLoad } as unknown as ClassicBrowseApiTransaction));
+		await expect(controller.open(CLAIM, { kind: 'search', query: 'Same track', item: { ...original, resultType: 'track' } }, 'zone-a')).resolves.toBe(false);
+		expect(browseLoad).toHaveBeenCalledTimes(2);
+		expect(browse.mock.calls.some(([options]) => options.itemKey !== undefined)).toBe(false);
+		expect(get(controller).available.queue).toBe(false);
+	});
+});
+
+describe('complete track list after an inline action', () => {
+	it('keeps every exact row loaded while an inline action changes the cursor', async () => {
 		const tracks = Array.from({ length: 350 }, (_, index) => row(`Track ${index}`, `track-${index}`, { itemType: 'track', hint: 'action_list' }));
 		let cursor = 'root';
 		const loads: number[] = [];
@@ -614,15 +616,13 @@ describe('partial track list after an inline action', () => {
 		const actions = createUnifiedBrowseActionController(deps);
 		const snapshot: BrowseHistorySnapshot = { context: { hierarchy: 'browse' }, history: [{ hierarchy: 'browse', breadcrumb: { title: 'Recordings' } }], forward: [] };
 		await controller.restore(CLAIM, snapshot, 'zone-a');
-		await controller.loadMore(CLAIM, 'zone-a');
 		const selected = get(controller).result!.items[137];
 		await actions.open(CLAIM, { kind: 'browse', snapshot, item: selected }, 'zone-a');
 		await actions.execute(CLAIM, 'queue', 'zone-a');
 		expect(cursor).toBe('actions');
-		expect(get(controller).result?.items).toEqual(tracks.slice(0, 200));
+		expect(get(controller).result?.items).toEqual(tracks);
 		expect(get(controller).result?.count).toBe(350);
-		await controller.loadMore(CLAIM, 'zone-a');
-		expect(get(controller).result?.items).toEqual(tracks.slice(0, 300));
-		expect(loads).toEqual([100, 100, 200]);
+		expect(get(controller).result?.items).toEqual(tracks);
+		expect(loads).toEqual([100, 200, 300]);
 	});
 });

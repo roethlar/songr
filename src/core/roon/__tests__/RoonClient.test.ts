@@ -479,46 +479,35 @@ describe("RoonClient — legacy config.json migration", () => {
   });
 });
 
-describe("RoonClient — Core address derivation (install-finish Slice 1)", () => {
-  function pairedCore(over: Record<string, unknown> = {}): unknown {
-    return {
-      core_id: "deadbeef-0000-4000-8000-000000000000",
-      display_name: "Q",
-      display_version: "2.0",
-      // node-roon-api's websocket transport reports the address it
-      // connected to (loopback-normalized for same-host Cores).
-      moo: { transport: { host: "10.1.10.59" } },
-      services: {},
-      ...over,
-    };
-  }
-
-  it("exposes the paired Core's broker host and id, cleared on unpair", async () => {
+describe("RoonClient — public pairing boundary", () => {
+  it("pairs using public Core fields without reading SDK connection internals", async () => {
     const tokenPath = await makeTokenPath();
-    const client = new RoonClient({ tokenPath, logger: stubLogger });
-    client.start();
-    expect(client.getCoreAddress()).toBeNull();
+    try {
+      const client = new RoonClient({ tokenPath, logger: stubLogger });
+      client.start();
+      const browse = {};
+      const transport = {};
+      const core = {
+        core_id: "core-public",
+        display_name: "Public Core",
+        display_version: "2.0",
+        services: { RoonApiBrowse: browse, RoonApiTransport: transport },
+      };
+      Object.defineProperty(core, "moo", {
+        get() { throw new Error("SDK connection internals must not be read"); },
+      });
 
-    capturedOptions.core_paired(pairedCore());
-    expect(client.getCoreAddress()).toEqual({
-      host: "10.1.10.59",
-      uniqueId: "deadbeef-0000-4000-8000-000000000000",
-    });
-
-    capturedOptions.core_unpaired();
-    expect(client.getCoreAddress()).toBeNull();
-  });
-
-  it("answers null when the paired Core reports no transport address", async () => {
-    const tokenPath = await makeTokenPath();
-    const client = new RoonClient({ tokenPath, logger: stubLogger });
-    client.start();
-
-    capturedOptions.core_paired(pairedCore({ moo: undefined }));
-    expect(client.getCoreAddress()).toBeNull();
-    // The pairing itself is unaffected.
-    expect(client.getCoreInfo()?.id).toBe(
-      "deadbeef-0000-4000-8000-000000000000"
-    );
+      expect(() => capturedOptions.core_paired(core)).not.toThrow();
+      expect(client.getCoreInfo()).toEqual({
+        id: "core-public", displayName: "Public Core", displayVersion: "2.0",
+      });
+      expect(client.getBrowse()).toBe(browse);
+      expect(client.getTransport()).toBe(transport);
+      capturedOptions.core_unpaired();
+      expect(client.getCoreInfo()).toBeNull();
+      expect(client.getBrowse()).toBeNull();
+    } finally {
+      await fsp.rm(path.dirname(tokenPath), { recursive: true, force: true });
+    }
   });
 });

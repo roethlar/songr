@@ -44,9 +44,8 @@ fi
 # rendered manifest sitting in the caller's cwd, and exited 0. Absolute,
 # always — and an empty source is an error, never a quiet no-op.
 #
-# Fixed once directly in the public repo (438c78e) and lost again when the
-# next export regenerated that tree from this one, which is why it is here
-# now: the private tree is the only source the export honours.
+# Keep this validation in the canonical publishing script so every channel
+# update uses the same absolute source path.
 from=$(cd "$from" && pwd)
 if [ -z "$(cd "$from" && find . -type f -print -quit)" ]; then
   echo "no files under $from" >&2

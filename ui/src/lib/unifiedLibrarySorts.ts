@@ -12,25 +12,13 @@ import type {
 	UnifiedArtistsSort,
 	UnifiedGenresSort
 } from '$lib/stores/unifiedLibraryPrefsStore';
-import type { CatalogPartialDate } from '@shared/catalogContracts';
 
-/**
- * Pure sorting/menu logic for the Unified Library scope views (plan §4
- * slice 5; release-year sort enabled in Slice 4 of
- * `.agents/plans/native-read-features.md`). Sort menus carry
- * disabled-with-reason entries verbatim; when the native date features are
- * unavailable the release-year entry renders exactly as it did before the
- * native module existed.
- */
+/** Sorting for the live Library; saved unsupported date orders fall back to A–Z. */
 
 export const NO_RELEASE_DATES_REASON =
 	'Roon does not expose release dates to controllers, so year ordering would be a guess.';
 
-/**
- * Honest fallback for a restored Recently added page whose native date
- * features have since dropped away (the capability's own reason wins when
- * the index carries one; same rule as the release-year menu).
- */
+/** A restored Recently added address cannot fabricate unavailable import dates. */
 export const NO_IMPORT_DATES_REASON =
 	'Roon does not expose import dates to controllers, so recently-added ordering would be a guess.';
 
@@ -40,9 +28,6 @@ export interface SortMenuEntry {
 	/** Present exactly when the entry renders disabled. */
 	readonly disabledReason?: string;
 }
-
-/** Verbatim from the approved prototype's album sort menu. */
-export const NO_GENRE_SORT_REASON = 'Roon caps genre pages; no full album-genre map';
 
 export const ARTIST_SORT_MENU: readonly SortMenuEntry[] = Object.freeze([
 	{ id: 'az', label: 'A to Z' },
@@ -57,55 +42,7 @@ export const GENRE_SORT_MENU: readonly SortMenuEntry[] = Object.freeze([
 	{ id: 'most-albums', label: 'Most albums' }
 ]);
 
-/**
- * The date-feature gate the menus degrade against: the capability state
- * machine's answer, carried on the catalog index. `reason` is the
- * capability's own honest reason when it supplied one; otherwise the menu
- * falls back to `NO_RELEASE_DATES_REASON`, the pre-native presentation.
- */
-export interface DateFeatureGate {
-	readonly available: boolean;
-	readonly reason?: string;
-}
-
-const UNAVAILABLE_GATE: DateFeatureGate = Object.freeze({ available: false });
-
-const RELEASE_YEAR_ENABLED_ENTRIES: readonly SortMenuEntry[] = Object.freeze([
-	{ id: 'year-asc', label: 'Oldest first' },
-	{ id: 'year-desc', label: 'Newest first' }
-]);
-
-function releaseYearEntry(gate: DateFeatureGate): SortMenuEntry {
-	return {
-		id: 'release-year',
-		label: 'Release year',
-		disabledReason: gate.reason ?? NO_RELEASE_DATES_REASON
-	};
-}
-
-/** Albums scope menu; the release-year slot mirrors the pre-native layout. */
-export function albumSortMenu(gate: DateFeatureGate = UNAVAILABLE_GATE): readonly SortMenuEntry[] {
-	return Object.freeze([
-		{ id: 'az', label: 'A to Z' },
-		{ id: 'za', label: 'Z to A' },
-		{ id: 'by-artist', label: 'By artist' },
-		{ id: 'shuffle', label: 'Shuffle' },
-		...(gate.available ? RELEASE_YEAR_ENABLED_ENTRIES : [releaseYearEntry(gate)]),
-		{ id: 'by-genre', label: 'By genre', disabledReason: NO_GENRE_SORT_REASON }
-	]);
-}
-
-/**
- * The live Albums list's menu (`.agents/plans/library-live-view.md` Slice 2).
- *
- * NO RELEASE-YEAR ENTRY AND NO GENRE ENTRY, whatever the date features say —
- * the same ruling the drill menus carry (Slice 8d). The Albums scope is Roon's
- * own root now, and a row of it renders a title and a credit line and nothing
- * else. There is no date on it to order by and no genre on it to group by, and
- * this is structural rather than a matter of timing: an entry that said "not
- * right now" would be waiting for something that is never coming. An offered
- * sort that cannot order is a fabricated affordance, so it is absent.
- */
+/** Public album rows provide names and credits, without dates or a complete genre map. */
 export function liveAlbumSortMenu(): readonly SortMenuEntry[] {
 	return Object.freeze([
 		{ id: 'az', label: 'A to Z' },
@@ -115,19 +52,7 @@ export function liveAlbumSortMenu(): readonly SortMenuEntry[] {
 	]);
 }
 
-/**
- * Genre drill album menu.
- *
- * NO RELEASE-YEAR ENTRY, at any gate setting (Slice 8d). These cards come from
- * a live genre drill, and a drill row renders a title and a credit line and
- * nothing else — no dates. The entry used to appear whenever the date features
- * were available, which was true of the CATALOG and false of these cards: the
- * menu offered an ordering it could not perform, and every card sorted equal.
- * An offered sort that cannot order is a fabricated affordance, so it is gone
- * rather than shown disabled — a disabled entry says "not right now", and this
- * one is not a matter of timing. It comes back if and when the drill itself
- * returns a date.
- */
+/** The genre drill offers only orderings supported by its current rows. */
 export function genreDrillSortMenu(): readonly SortMenuEntry[] {
 	return Object.freeze([
 		{ id: 'az', label: 'A to Z' },
@@ -197,70 +122,6 @@ export function sortArtists(
 	}
 }
 
-/**
- * Release-year sort key (Slice 4 pinned semantics): an album's original
- * release date, falling back to its release date; year-only dates (month/day
- * 0) order within their year; undated albums last in BOTH directions; ties
- * break by the same normalized title key the alphabetical sorts use
- * (ascending in both directions, so the tie-break never depends on input
- * order).
- *
- * Described in product terms rather than by the extended layer's own field
- * spellings, which boundary §4 denylists — the note on those rules says
- * retained comparators may pin the semantics but never the protocol names.
- */
-function releaseDateOf(entry: LibraryAlbumEntry): CatalogPartialDate | undefined {
-	return entry.originalReleaseDate ?? entry.releaseDate;
-}
-
-function compareReleaseYear(
-	left: LibraryAlbumEntry,
-	right: LibraryAlbumEntry,
-	direction: 1 | -1
-): number {
-	const leftDate = releaseDateOf(left);
-	const rightDate = releaseDateOf(right);
-	if (leftDate === undefined && rightDate === undefined) {
-		return compareLibrarySearchKeys(left.searchKey, right.searchKey);
-	}
-	if (leftDate === undefined) return 1;
-	if (rightDate === undefined) return -1;
-	const diff =
-		leftDate.year - rightDate.year ||
-		leftDate.month - rightDate.month ||
-		leftDate.day - rightDate.day;
-	if (diff !== 0) return direction * diff;
-	return compareLibrarySearchKeys(left.searchKey, right.searchKey);
-}
-
-/**
- * Recently-added ordering (Slice 5 pinned semantics): library-added timestamp
- * descending (most recently added first); albums without one go last; ties —
- * including the all-undated tail — break by the same normalized title key the
- * alphabetical sorts use, so the order never depends on input order. The
- * timestamps are canonical ISO (`YYYY-MM-DDTHH:MM:SS.mmmZ`, pinned by the
- * index contract), so code-point comparison is chronological comparison.
- *
- * Named for the product concept, not the wire key it reads: boundary §4
- * denylists the extended layer's spelling of that field, and an exported
- * function embedding the spelling would put it in every caller too.
- */
-export function sortAlbumsByRecentlyAdded(
-	entries: readonly LibraryAlbumEntry[]
-): LibraryAlbumEntry[] {
-	return [...entries].sort((left, right) => {
-		if (left.importDate === undefined && right.importDate === undefined) {
-			return compareLibrarySearchKeys(left.searchKey, right.searchKey);
-		}
-		if (left.importDate === undefined) return 1;
-		if (right.importDate === undefined) return -1;
-		if (left.importDate !== right.importDate) {
-			return left.importDate < right.importDate ? 1 : -1;
-		}
-		return compareLibrarySearchKeys(left.searchKey, right.searchKey);
-	});
-}
-
 export function sortAlbums(
 	entries: readonly LibraryAlbumEntry[],
 	sort: UnifiedAlbumsSort,
@@ -279,9 +140,9 @@ export function sortAlbums(
 				);
 			});
 		case 'year-asc':
-			return [...entries].sort((a, b) => compareReleaseYear(a, b, 1));
 		case 'year-desc':
-			return [...entries].sort((a, b) => compareReleaseYear(a, b, -1));
+			// Migrate saved date sorts to the supported alphabetical order.
+			return [...entries];
 		case 'shuffle':
 			return seededShuffle(entries, shuffleSeed);
 	}

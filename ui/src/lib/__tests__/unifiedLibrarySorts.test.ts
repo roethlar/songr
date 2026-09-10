@@ -1,18 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { LetterBucket, LibraryAlbumEntry, LibraryArtistEntry } from '$lib/libraryEntries';
 import {
-	albumSortMenu,
+	liveAlbumSortMenu,
 	artistDrillSortMenu,
 	ARTIST_SORT_MENU,
 	genreDrillSortMenu,
 	GENRE_SORT_MENU,
 	isChronologicalAlbumSort,
-	NO_RELEASE_DATES_REASON,
 	namedCountBuckets,
 	reverseBuckets,
 	seededShuffle,
 	sortAlbums,
-	sortAlbumsByRecentlyAdded,
 	sortArtists,
 	sortNamedCounts
 } from '$lib/unifiedLibrarySorts';
@@ -43,41 +41,8 @@ describe('sort menus', () => {
 		]);
 	});
 
-	it('keeps release-year present but disabled with the verified reason when date features are unavailable', () => {
-		const releaseYear = albumSortMenu({ available: false }).find(
-			(entry) => entry.id === 'release-year'
-		);
-		expect(releaseYear).toBeDefined();
-		expect(releaseYear?.disabledReason).toBe(NO_RELEASE_DATES_REASON);
-	});
 
-	it('prefers the capability state machine reason over the default when one is carried', () => {
-		const reason = 'no native catalog snapshot is available';
-		const releaseYear = albumSortMenu({ available: false, reason }).find(
-			(entry) => entry.id === 'release-year'
-		);
-		expect(releaseYear?.disabledReason).toBe(reason);
-	});
 
-	it('replaces the disabled release-year entry with the two chronological orders when available', () => {
-		const menu = albumSortMenu({ available: true });
-		expect(menu.map((entry) => entry.id)).toEqual([
-			'az',
-			'za',
-			'by-artist',
-			'shuffle',
-			'year-asc',
-			'year-desc',
-			'by-genre'
-		]);
-		expect(menu.find((entry) => entry.id === 'year-asc')).toMatchObject({
-			label: 'Oldest first'
-		});
-		expect(menu.find((entry) => entry.id === 'year-desc')).toMatchObject({
-			label: 'Newest first'
-		});
-		expect(menu.every((entry) => entry.id !== 'release-year')).toBe(true);
-	});
 
 	/**
 	 * Slice 8d: both drill menus lost the release-year slot outright, at every
@@ -99,14 +64,6 @@ describe('sort menus', () => {
 		]);
 	});
 
-	it('only the album menu carries disabled entries when date features are unavailable', () => {
-		const disabled = [
-			...ARTIST_SORT_MENU,
-			...albumSortMenu({ available: false }),
-			...GENRE_SORT_MENU
-		].filter((entry) => entry.disabledReason !== undefined);
-		expect(disabled.map((entry) => entry.id)).toEqual(['release-year', 'by-genre']);
-	});
 
 	it('marks exactly the year orders as chronological for the rail rule', () => {
 		expect(isChronologicalAlbumSort('year-asc')).toBe(true);
@@ -177,195 +134,12 @@ describe('sortAlbums', () => {
 	});
 });
 
-describe('sortAlbums — release year (Slice 4)', () => {
-	function dated(
-		title: string,
-		dates?: {
-			original?: readonly [number, number, number];
-			release?: readonly [number, number, number];
-		}
-	): LibraryAlbumEntry {
-		const entry = album(title, 'Artist');
-		return {
-			...entry,
-			// Match the store's searchKey: article-stripped normalized title.
-			searchKey: `${title.toLowerCase().replace(/^(the |a |an )/, '')} — artist`,
-			...(dates?.original
-				? {
-						originalReleaseDate: {
-							year: dates.original[0],
-							month: dates.original[1],
-							day: dates.original[2]
-						}
-					}
-				: {}),
-			...(dates?.release
-				? {
-						releaseDate: {
-							year: dates.release[0],
-							month: dates.release[1],
-							day: dates.release[2]
-						}
-					}
-				: {})
-		};
-	}
-
-	const titles = (entries: readonly LibraryAlbumEntry[]): string[] =>
-		entries.map((entry) => entry.title);
-
-	it('orders by originalReleaseDate, ascending and descending', () => {
-		const entries = [
-			dated('Middle', { original: [1975, 6, 1] }),
-			dated('Earliest', { original: [1959, 8, 17] }),
-			dated('Latest', { original: [1997, 9, 22] })
-		];
-		expect(titles(sortAlbums(entries, 'year-asc', 1))).toEqual([
-			'Earliest',
-			'Middle',
-			'Latest'
-		]);
-		expect(titles(sortAlbums(entries, 'year-desc', 1))).toEqual([
-			'Latest',
-			'Middle',
-			'Earliest'
-		]);
-		// The input order is never mutated.
-		expect(entries[0].title).toBe('Middle');
-	});
-
-	it('prefers originalReleaseDate over releaseDate and falls back to releaseDate', () => {
-		const entries = [
-			// Original 1970 must win over the 1990 reissue date.
-			dated('Reissue', { original: [1970, 1, 1], release: [1990, 1, 1] }),
-			// No original: the release date is the fallback key.
-			dated('Fallback', { release: [1965, 5, 5] }),
-			dated('Between', { original: [1968, 3, 3] })
-		];
-		expect(titles(sortAlbums(entries, 'year-asc', 1))).toEqual([
-			'Fallback',
-			'Between',
-			'Reissue'
-		]);
-	});
-
-	it('orders year-only dates inside their own year', () => {
-		const entries = [
-			dated('Dated June', { original: [1975, 6, 1] }),
-			dated('Year Only', { original: [1975, 0, 0] }),
-			dated('Earlier Year', { original: [1974, 11, 31] }),
-			dated('Later Year', { original: [1976, 1, 1] })
-		];
-		expect(titles(sortAlbums(entries, 'year-asc', 1))).toEqual([
-			'Earlier Year',
-			'Year Only',
-			'Dated June',
-			'Later Year'
-		]);
-		expect(titles(sortAlbums(entries, 'year-desc', 1))).toEqual([
-			'Later Year',
-			'Dated June',
-			'Year Only',
-			'Earlier Year'
-		]);
-	});
-
-	it('places undated albums last in BOTH directions', () => {
-		const entries = [
-			dated('Undated B'),
-			dated('Old', { original: [1960, 1, 1] }),
-			dated('Undated A'),
-			dated('New', { original: [2000, 1, 1] })
-		];
-		expect(titles(sortAlbums(entries, 'year-asc', 1))).toEqual([
-			'Old',
-			'New',
-			'Undated A',
-			'Undated B'
-		]);
-		expect(titles(sortAlbums(entries, 'year-desc', 1))).toEqual([
-			'New',
-			'Old',
-			'Undated A',
-			'Undated B'
-		]);
-	});
-
-	it('breaks date ties by the normalized title key, independent of input order', () => {
-		const first = [
-			dated('Zebra Tie', { original: [1975, 6, 1] }),
-			dated('The Alpha Tie', { original: [1975, 6, 1] })
-		];
-		const reversed = [...first].reverse();
-		// "The Alpha Tie" sorts by its article-stripped key (alpha…), before
-		// "Zebra Tie", exactly like the alphabetical sorts.
-		expect(titles(sortAlbums(first, 'year-asc', 1))).toEqual([
-			'The Alpha Tie',
-			'Zebra Tie'
-		]);
-		expect(titles(sortAlbums(reversed, 'year-asc', 1))).toEqual([
-			'The Alpha Tie',
-			'Zebra Tie'
-		]);
-		// The tie-break direction is stable: descending flips the date key,
-		// never the title tie-break, so the order stays deterministic.
-		expect(titles(sortAlbums(reversed, 'year-desc', 1))).toEqual([
-			'The Alpha Tie',
-			'Zebra Tie'
-		]);
-	});
-});
-
-describe('sortAlbumsByRecentlyAdded — recently added (Slice 5)', () => {
-	function imported(title: string, importDate?: string): LibraryAlbumEntry {
-		const entry = album(title, 'Artist');
-		return {
-			...entry,
-			// Match the store's searchKey: article-stripped normalized title.
-			searchKey: `${title.toLowerCase().replace(/^(the |a |an )/, '')} — artist`,
-			...(importDate !== undefined ? { importDate } : {})
-		};
-	}
-
-	const titles = (entries: readonly LibraryAlbumEntry[]): string[] =>
-		entries.map((entry) => entry.title);
-
-	it('orders by importDate descending, newest first', () => {
-		const entries = [
-			imported('Middle', '2026-07-20T10:00:00.000Z'),
-			imported('Newest', '2026-07-24T09:30:00.000Z'),
-			imported('Oldest', '2026-07-18T12:00:00.000Z')
-		];
-		expect(titles(sortAlbumsByRecentlyAdded(entries))).toEqual(['Newest', 'Middle', 'Oldest']);
-		// The input order is never mutated.
-		expect(entries[0].title).toBe('Middle');
-	});
-
-	it('places albums without an importDate last, titled among themselves', () => {
-		const entries = [
-			imported('Undated B'),
-			imported('Imported', '2026-07-24T09:30:00.000Z'),
-			imported('Undated A'),
-			imported('Older', '2026-07-18T12:00:00.000Z')
-		];
-		expect(titles(sortAlbumsByRecentlyAdded(entries))).toEqual([
-			'Imported',
-			'Older',
-			'Undated A',
-			'Undated B'
-		]);
-	});
-
-	it('breaks equal timestamps by the normalized title key, independent of input order', () => {
-		const first = [
-			imported('Zebra Tie', '2026-07-20T10:00:00.000Z'),
-			imported('The Alpha Tie', '2026-07-20T10:00:00.000Z')
-		];
-		const reversed = [...first].reverse();
-		// "The Alpha Tie" sorts by its article-stripped key (alpha…), before
-		// "Zebra Tie", exactly like the alphabetical sorts.
-		expect(titles(sortAlbumsByRecentlyAdded(first))).toEqual(['The Alpha Tie', 'Zebra Tie']);
-		expect(titles(sortAlbumsByRecentlyAdded(reversed))).toEqual(['The Alpha Tie', 'Zebra Tie']);
+describe('saved unsupported album sorts', () => {
+	it('keeps supported menu choices and migrates stored date orders to alphabetical', () => {
+		const entries = [album('Alpha', 'Artist'), album('Beta', 'Artist')];
+		expect(liveAlbumSortMenu().map(entry => entry.id)).toEqual(['az', 'za', 'by-artist', 'shuffle']);
+		expect(sortAlbums(entries, 'year-asc', 1)).toEqual(entries);
+		expect(sortAlbums(entries, 'year-desc', 1)).toEqual(entries);
 	});
 });
 

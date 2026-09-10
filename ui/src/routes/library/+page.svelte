@@ -20,7 +20,7 @@
 		type LibraryModeLifecycle
 	} from '$lib/libraryModeActivationContext';
 	import { claimLibraryViewHost } from '$lib/stores/libraryViewHostStore';
-	import type { LibraryView } from '$lib/stores/libraryViewStore';
+	import type { LibraryView } from '$lib/libraryView';
 	import UnifiedLibraryMode from './UnifiedLibraryMode.svelte';
 
 	let mounted = false;

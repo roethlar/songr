@@ -3,11 +3,12 @@
 	import { readable } from 'svelte/store';
 	import type { LibraryAlbumTrack } from '@shared/libraryAlbumContracts';
 	import type { AlbumActionSemantic } from '@shared/albumActionContracts';
-	import { normalizeCatalogText } from '@shared/catalogContracts';
+	import { prepareLibraryGrid } from '$lib/preparedLibraryGrid';
+	import { normalizeLibraryText } from '@shared/libraryText';
 	import { imageUrl } from '$lib/imageUrl';
 	import { monogram } from '$lib/monogram';
 	import { libraryArtwork } from '$lib/actions/libraryArtwork';
-	import { trackTitleCarriesOrdinal } from '$lib/trackTitle';
+	import { albumTrackNumber } from '$lib/trackTitle';
 	import { shouldHandleLibraryAnchorClick } from '$lib/libraryPageNavigation';
 	import type {
 		LibraryAlbumController,
@@ -35,12 +36,12 @@
 	}
 
 	type AlbumDisplayState = Pick<LibraryAlbumState,
-		'phase' | 'activeTab' | 'title' | 'artist' | 'versions' | 'degraded' |
+		'phase' | 'activeTab' | 'title' | 'artist' | 'versions' |
 		'selectedVersionId' | 'actionsAvailable' | 'albumActionsAvailable' |
 		'orderedTracks' | 'live' | 'error'>;
 	const emptyDisplay: AlbumDisplayState = {
 		phase: 'idle', activeTab: 'details', title: null, artist: null,
-		versions: [], degraded: false, selectedVersionId: null,
+		versions: [], selectedVersionId: null,
 		actionsAvailable: false, albumActionsAvailable: false,
 		orderedTracks: [], live: null, error: null
 	};
@@ -119,10 +120,7 @@
 		initialTrackInfoTitle = null
 	}: Props = $props();
 
-	const PAGE_SIZE = 100;
-
-	let page = $state(0);
-	let trackList: HTMLOListElement | null = $state(null);
+	let trackList: HTMLElement | null = $state(null);
 	/**
 	 * The live public track target (ri5-2): the child view renders from
 	 * the page's own exact data.
@@ -143,24 +141,19 @@
 	const selectedVersion = $derived(
 		sheet.versions.find((version) => version.versionId === sheet.selectedVersionId) ?? null
 	);
-	const pageCount = $derived(Math.max(1, Math.ceil(sheet.orderedTracks.length / PAGE_SIZE)));
-	const pageTracks = $derived(sheet.orderedTracks.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE));
-	const suppressRowIndex = $derived(
-		Boolean(publicPage) || (pageTracks.length > 0 && pageTracks.every((track) => trackTitleCarriesOrdinal(track.title)))
-	);
 	const focusedTrackPosition = $derived.by(() => {
 		if (!focusSongTitle) return -1;
-		const normalizedTitle = normalizeCatalogText(focusSongTitle);
+		const normalizedTitle = normalizeLibraryText(focusSongTitle);
 		if (!normalizedTitle) return -1;
 		const exactMatches: number[] = [];
 		sheet.orderedTracks.forEach((track, position) => {
-			if (normalizeCatalogText(track.title) === normalizedTitle) exactMatches.push(position);
+			if (normalizeLibraryText(track.title) === normalizedTitle) exactMatches.push(position);
 		});
 		if (exactMatches.length > 0) return exactMatches.length === 1 ? exactMatches[0] : -1;
 
 		const ordinalMatches: number[] = [];
 		sheet.orderedTracks.forEach((track, position) => {
-			const withoutOrdinal = normalizeCatalogText(track.title).replace(/^\d+\.\s+/, '');
+			const withoutOrdinal = normalizeLibraryText(track.title).replace(/^\d+\.\s+/, '');
 			if (withoutOrdinal === normalizedTitle) ordinalMatches.push(position);
 		});
 		return ordinalMatches.length === 1 ? ordinalMatches[0] : -1;
@@ -183,7 +176,6 @@
 		void sheet.orderedTracks;
 		void activationGeneration;
 		const focusPosition = focusedTrackPosition;
-		page = focusPosition >= 0 ? Math.floor(focusPosition / PAGE_SIZE) : 0;
 		trackInfo = null;
 		if (focusPosition >= 0) {
 			void tick().then(() => {
@@ -357,14 +349,6 @@
 		<div class="pright">
 			<div class="pa" data-testid="unified-album-artist">{displayArtist}</div>
 
-			{#if sheet.degraded}
-				<!-- Non-blocking: the page below is real catalog data and behaves
-				     exactly as the extended-bound page does. The notice only says
-				     where it came from. -->
-				<p class="degraded-notice" data-testid="unified-album-degraded">
-					Live browse isn't answering — showing your library's catalog data.
-				</p>
-			{/if}
 
 			{#if sheet.versions.length > 1}
 				<!-- The tab strip earns its place only when there is a choice
@@ -426,7 +410,6 @@
 				<div class="tl">
 					<p class="status" data-testid="unified-album-loading">Opening album page…</p>
 				</div>
-				{#if !publicPage}<div class="stub">Finding the versions Roon currently exposes.</div>{/if}
 			{:else if sheet.phase === 'failed' || sheet.phase === 'canceled'}
 				<div class="tl">
 					<p class="status error" data-testid="unified-album-error">{collectionFailureMessage ??
@@ -436,7 +419,6 @@
 						<button type="button" class="retry" onclick={onRetry} data-testid="unified-album-retry">Try again</button>
 					{/if}
 				</div>
-				{#if !publicPage}<div class="stub">Reopen the page to restore live version authority.</div>{/if}
 			{:else if sheet.activeTab === 'versions'}
 				<ul class="version-list tl" data-testid="unified-album-versions">
 					{#each sheet.versions as version, index (version.versionId)}
@@ -472,12 +454,10 @@
 						</li>
 					{/each}
 				</ul>
-				<div class="stub">Artwork is shown only to help recognize a row.</div>
 			{:else if sheet.phase === 'loading-detail'}
 				<div class="tl">
 					<p class="status" data-testid="unified-album-detail-loading">Loading {selectedVersion && (sheet.versions.length > 1 || selectedVersion.editionText) ? versionLabel(selectedVersion, sheet.versions.indexOf(selectedVersion)) : 'album'}…</p>
 				</div>
-				<div class="stub">Loading this version's exact track list.</div>
 			{:else if sheet.phase === 'details'}
 				{#if selectedVersion}
 					<div class="version-heading" data-testid="unified-album-selected-version">
@@ -487,15 +467,16 @@
 					<span>{versionFacts(selectedVersion).join(' · ')}</span>
 					</div>
 				{/if}
-				<ol class="tl tracks" class:public-tracks={Boolean(publicPage)} data-testid="unified-album-tracks" start={page * PAGE_SIZE + 1} bind:this={trackList}>
-					{#each pageTracks as track, offset (track.index)}
-						<li
+				<div role="list" class="tl tracks" class:public-tracks={Boolean(publicPage)} data-testid="unified-album-tracks" use:prepareLibraryGrid={[sheet.orderedTracks, activationGeneration]} bind:this={trackList}>
+					{#each sheet.orderedTracks as track, offset (track.index)}
+						{@const number = publicPage ? null : albumTrackNumber(track)}
+						<div role="listitem"
 							class="tr"
 							class:song-focus={track.index === focusedTrackIndex}
 							data-testid="unified-track-row-{track.index}"
 							data-song-highlight={track.index === focusedTrackIndex ? 'true' : undefined}
 						>
-							{#if !suppressRowIndex}<span class="tn mono">{page * PAGE_SIZE + offset + 1}</span>{/if}
+							{#if number !== null}<span class="tn mono">{number}</span>{/if}
 							<span class="tnm">{track.title}</span>
 							{#if onOpenTrackInfo && (sheet.live != null || sheet.versions.length === 1)}
 								{@const href = hrefForTrack?.(track.title) ?? null}
@@ -507,7 +488,7 @@
 									class="tinfo"
 									data-testid="unified-track-info-{track.index}"
 									onclick={(event: MouseEvent) =>
-										followTrackInfo(event, href, page * PAGE_SIZE + offset, track.title)}
+										followTrackInfo(event, href, offset, track.title)}
 								>Info</svelte:element>
 							{/if}
 							{#if publicPage}
@@ -528,17 +509,10 @@
 									onclick={() => pickTarget({ index: track.index, title: track.title }, 'queue')}
 								>Queue</button>
 							{/if}
-						</li>
+						</div>
 					{/each}
-				</ol>
+				</div>
 
-				{#if pageCount > 1}
-					<nav class="pager" data-testid="unified-album-pager" aria-label="Track pages">
-						<button type="button" disabled={page === 0} onclick={() => (page = Math.max(0, page - 1))}>Previous</button>
-						<span class="page-label">Page {page + 1} of {pageCount}</span>
-						<button type="button" disabled={page >= pageCount - 1} onclick={() => (page = Math.min(pageCount - 1, page + 1))}>Next</button>
-					</nav>
-				{/if}
 					{#if sheet.live != null || sheet.versions.length === 1}
 						{#if trackInfo !== null}
 							<!-- Exact-track child view (Slice 5): the page's OWN exact track
@@ -559,8 +533,6 @@
 					{/if}
 				{#if publicPage?.footer}
 					{@render publicPage.footer()}
-				{:else}
-					<div class="stub">{sheet.orderedTracks.length} tracks loaded from your Core.</div>
 				{/if}
 			{/if}
 		</div>
@@ -619,15 +591,6 @@
 	.version-copy small.error {
 		opacity: 1;
 		color: var(--error, #e66);
-	}
-	.degraded-notice {
-		margin: 8px 0 0;
-		padding: 7px 10px;
-		border: 1px solid var(--line-subtle);
-		border-radius: 6px;
-		background: var(--songr-surface-11);
-		color: var(--soft);
-		font-size: 12px;
 	}
 	.album-tabs {
 		display: flex;
@@ -744,20 +707,11 @@
 		margin-bottom: 0;
 		padding-left: 0;
 	}
+	.tracks { display: grid; grid-template-columns: minmax(0, 1fr); --library-chunk-overflow: 280px; }
 	.tr.song-focus {
 		border-color: color-mix(in srgb, var(--accent) 70%, transparent);
 		background: color-mix(in srgb, var(--accent) 18%, var(--songr-surface-11));
 		box-shadow: inset 3px 0 0 var(--accent);
-	}
-	.pager {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		margin-top: 8px;
-	}
-	.page-label {
-		font-size: 12px;
-		opacity: 0.7;
 	}
 	.ghost {
 		opacity: 0.7;

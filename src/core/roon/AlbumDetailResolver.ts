@@ -1,9 +1,9 @@
 import { ALBUM_ACTION_MAX_CHOICES } from "../../shared/albumActionContracts";
 import { ALBUM_DETAIL_MAX_TRACKS } from "../../shared/libraryAlbumContracts";
 import {
-  CATALOG_DISPLAY_TEXT_MAX_LENGTH,
-  normalizeCatalogText,
-} from "../../shared/catalogContracts";
+  LIBRARY_DISPLAY_TEXT_MAX_LENGTH,
+  normalizeLibraryText,
+} from "../../shared/libraryText";
 import { BrowseItem, BrowseResult } from "../../shared/types";
 import { CoordinatedBrowseSession } from "./BrowseSessionCoordinator";
 
@@ -31,7 +31,7 @@ export class AlbumDetailResolverError extends Error {
 function canonicalDisplayText(value: unknown): string | null {
   if (
     typeof value !== "string" ||
-    value.length > CATALOG_DISPLAY_TEXT_MAX_LENGTH
+    value.length > LIBRARY_DISPLAY_TEXT_MAX_LENGTH
   ) {
     return null;
   }
@@ -78,14 +78,14 @@ export class AlbumDetailResolver {
       offset: 0,
       pageSize: MAX_DETAIL_ROWS,
     });
-    return this.readDetail(detail, normalizeCatalogText(expectedTitle));
+    return this.readDetail(detail, normalizeLibraryText(expectedTitle));
   }
 
   private readDetail(detail: BrowseResult, normalizedTitle: string): string[] {
     const headerTitle = canonicalDisplayText(detail.title);
     if (
       !headerTitle ||
-      normalizeCatalogText(headerTitle) !== normalizedTitle
+      normalizeLibraryText(headerTitle) !== normalizedTitle
     ) {
       throw new AlbumDetailResolverError(
         "DETAIL_MISMATCH",
@@ -118,14 +118,14 @@ export class AlbumDetailResolver {
       );
     }
     const typed = structural.filter(
-      (item) => normalizeCatalogText(item.itemType ?? "") === "track"
+      (item) => normalizeLibraryText(item.itemType ?? "") === "track"
     );
     const untypedShape = structural.filter(
       (item) =>
         item.hint === "action_list" &&
-        normalizeCatalogText(item.title) !== "play album" &&
+        normalizeLibraryText(item.title) !== "play album" &&
         Boolean(item.subtitle) &&
-        normalizeCatalogText(item.itemType ?? "") !== "track"
+        normalizeLibraryText(item.itemType ?? "") !== "track"
     );
     if (typed.length > 0 && untypedShape.length > 0) {
       throw new AlbumDetailResolverError(

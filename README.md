@@ -1,5 +1,3 @@
-> **Releases temporarily withdrawn:** Songr release downloads have been withdrawn while the codebase is audited and UI consistency issues are corrected. There is currently no recommended release to install. Existing npm versions are marked withdrawn; container and third-party index removals are still being completed.
-
 # Songr
 
 Web-based controller for a local Roon Core, built with Node.js + SvelteKit.
@@ -141,7 +139,6 @@ Copy `.env.example` to `.env` and adjust as needed.
 | `LOG_LEVEL` | Pino log level. `trace` enables raw Roon payload dumps for debugging | `info` |
 | `ROON_TOKEN_PATH` | Roon pairing-state file (paired_core_id + per-core tokens) | `./config/roon-token.json` |
 | `IMAGE_CACHE_PATH` | Artwork disk cache | `./data/image-cache` |
-| `CATALOG_PATH` | Where an earlier install's saved catalog store sits, so it can be removed at start; Songr keeps no library model on disk (the legacy `TIMELINE_CATALOG_PATH` key is still honored) | `./data/catalog` |
 | `IMAGE_CACHE_MAX_BYTES` | Disk cache cap (bytes); LRU eviction when exceeded | `10737418240` (10 GB) |
 | `RECENTLY_PLAYED_PATH` | JSON file for "Recently played on this controller" persistence | `./data/recently-played.json` |
 | `RECENTLY_PLAYED_CAP` | Max entries kept in the rolling list (1-1000) | `50` |

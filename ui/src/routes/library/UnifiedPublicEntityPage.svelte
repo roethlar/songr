@@ -14,7 +14,6 @@
 		onBack,
 		onItem,
 		hrefForItem,
-		onLoadMore,
 		actions
 	}: {
 		state: UnifiedBrowseState;
@@ -22,7 +21,6 @@
 		onBack: () => void;
 		onItem: (item: BrowseItem) => void;
 		hrefForItem: (item: BrowseItem) => string | null;
-		onLoadMore: () => void;
 		actions: BrowseRowActions;
 	} = $props();
 
@@ -34,8 +32,6 @@
 	const imageKey = $derived(selected?.imageKey);
 	const backLabel = $derived(state.snapshot.history.at(-2)?.breadcrumb.title ?? 'Library');
 	const ready = $derived(state.phase === 'ready' && !result?.isError && result?.message === undefined);
-	const total = $derived(result?.totalCount ?? result?.count ?? 0);
-	const canLoadMore = $derived(Boolean(result && result.items.length < total));
 	const failure = $derived(state.error ?? (result?.isError ? result.message ?? 'This page could not be loaded.' : null));
 	const tracks = $derived(presentation.contentItems.map((item, index) => ({ index, title: item.title })));
 	const albumPhase = $derived(failure && !result ? 'failed' : result ? 'details' : 'opening');
@@ -100,14 +96,6 @@
 	{/if}
 {/snippet}
 
-{#snippet footer()}
-	{#if canLoadMore}
-		<button type="button" class="load-more" disabled={state.phase === 'loading'} onclick={onLoadMore}>
-			Load more
-		</button>
-	{/if}
-{/snippet}
-
 {#snippet trackControls(index: number)}
 	{@const item = presentation.contentItems[index]}
 	{#if item}
@@ -120,7 +108,7 @@
 		publicPage={{
 			title, artist: subtitle, imageKey,
 			phase: albumPhase, error: failure, tracks,
-			controls: bulkControls, trackControls, feedback, footer
+			controls: bulkControls, trackControls, feedback
 		}}
 		{backLabel}
 		{onBack}
@@ -131,7 +119,7 @@
 		{albums}
 		overlayPhase="idle"
 		discographyKnown={ready}
-		truncated={canLoadMore}
+		truncated={false}
 		missingMessage={failure}
 		{backLabel}
 		{onBack}
@@ -152,7 +140,6 @@
 				{hrefForAlbum}
 				albumTestId="unified-public-album"
 			/>
-			{@render footer()}
 		{/snippet}
 	</UnifiedArtistPage>
 {/if}
@@ -186,18 +173,5 @@
 	.public-bulk > button:disabled {
 		cursor: default;
 		opacity: 1;
-	}
-	.load-more {
-		margin-top: 14px;
-		padding: 6px 12px;
-		border: 1px solid var(--line-subtle);
-		border-radius: 4px;
-		background: transparent;
-		color: var(--soft);
-		cursor: pointer;
-	}
-	.load-more:disabled {
-		opacity: 0.5;
-		cursor: default;
 	}
 </style>

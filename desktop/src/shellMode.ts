@@ -14,8 +14,7 @@
  * Remote mode deliberately has **no fallback to local**. The owner rejected a
  * shell that quietly starts a second engine when the configured one is
  * unreachable (plan §1): a machine with two engines has two Roon extensions,
- * two catalog crawls and two sets of settings, and the user cannot tell which
- * one they are looking at. Unreachable therefore means the error page, and
+ * two sets of settings, and the user cannot tell which one they are looking at. Unreachable therefore means the error page, and
  * retry means "try that server again".
  */
 

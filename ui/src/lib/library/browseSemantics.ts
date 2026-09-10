@@ -77,7 +77,7 @@ function concreteMatchScore(candidate: BrowseItem, original: BrowseItem): number
 
 /**
  * Select the best live row for a keyless search descriptor. Optional fields
- * are wildcards, so exact concrete agreement wins before stable first-match.
+ * are wildcards, so exact concrete agreement wins only when the best row is unique.
  */
 export function selectBrowseSearchItem(
 	items: readonly BrowseItem[],
@@ -87,11 +87,10 @@ export function selectBrowseSearchItem(
 		(candidate) => candidate.itemKey && browseSearchItemMatches(candidate, original)
 	);
 	if (candidates.length <= 1) return candidates[0];
-	return candidates.reduce((best, candidate) =>
-		concreteMatchScore(candidate, original) > concreteMatchScore(best, original)
-			? candidate
-			: best
-	);
+	const scores = candidates.map(candidate => concreteMatchScore(candidate, original));
+	const bestScore = Math.max(...scores);
+	const best = candidates.filter((_, index) => scores[index] === bestScore);
+	return best.length === 1 ? best[0] : undefined;
 }
 
 /** Find the live category stub for one grouped, keyless search result. */

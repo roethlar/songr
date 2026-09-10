@@ -8,7 +8,7 @@
 // the release loudly instead of publishing a manifest with "@SHA256_...@" in
 // the hash field.
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,19 +41,7 @@ function assetPlaceholders(version) {
     [`Songr.Setup.${version}.exe`]: 'SHA256_EXE_X64',
     [`songr_${version}_amd64.deb`]: 'SHA256_DEB_AMD64',
     [`songr_${version}_arm64.deb`]: 'SHA256_DEB_ARM64',
-    [`Songr-${version}.AppImage`]: 'SHA256_APPIMAGE_X64',
   };
-}
-
-/**
- * Extensions copied through verbatim rather than read as UTF-8 text and
- * placeholder-substituted. Reading a binary file (the Flathub icon) as utf8
- * and writing it back out would corrupt it -- this is the guard against that,
- * not a style choice.
- */
-const BINARY_EXTENSIONS = new Set(['.png']);
-function isBinary(path) {
-  return BINARY_EXTENSIONS.has(path.slice(path.lastIndexOf('.')));
 }
 
 /** Reads `<sha256>  <name>` lines, the shasum/sha256sum output format. */
@@ -104,11 +92,6 @@ function outputPlan(version) {
     ['winget/roethlar.Songr.yaml', `${wingetDir}/roethlar.Songr.yaml`],
     ['winget/roethlar.Songr.installer.yaml', `${wingetDir}/roethlar.Songr.installer.yaml`],
     ['winget/roethlar.Songr.locale.en-US.yaml', `${wingetDir}/roethlar.Songr.locale.en-US.yaml`],
-    ['flatpak/io.github.roethlar.songr.yml', 'flatpak/io.github.roethlar.songr.yml'],
-    ['flatpak/songr.sh', 'flatpak/songr.sh'],
-    ['flatpak/io.github.roethlar.songr.desktop', 'flatpak/io.github.roethlar.songr.desktop'],
-    ['flatpak/io.github.roethlar.songr.metainfo.xml', 'flatpak/io.github.roethlar.songr.metainfo.xml'],
-    ['flatpak/io.github.roethlar.songr.png', 'flatpak/io.github.roethlar.songr.png'],
   ];
 }
 
@@ -125,7 +108,7 @@ function main() {
   // Guard against a template being added and silently never rendered.
   // README.md is documentation, not a template, and is exempt.
   const known = new Set(plan.map(([from]) => from));
-  for (const dir of ['homebrew', 'scoop', 'aur', 'winget', 'flatpak']) {
+  for (const dir of ['homebrew', 'scoop', 'aur', 'winget']) {
     for (const name of readdirSync(join(here, dir))) {
       if (name === 'README.md') continue;
       const rel = `${dir}/${name}`;
@@ -133,55 +116,23 @@ function main() {
     }
   }
 
-  // Each template renders independently: one target held back by an
-  // unresolved placeholder (a real case today -- @AUR_MAINTAINER@ pending D5
-  // in the plan) must not stop every OTHER target from publishing. The first
-  // version of this loop let one substitute() throw abort the whole run, which
-  // would have meant Homebrew, Scoop and WinGet could never auto-publish
-  // until an unrelated AUR decision was made -- caught before it shipped.
-  const skipped = [];
-  for (const [from, to] of plan) {
-    if (isBinary(from)) {
-      // No placeholders possible in a binary file -- it always "renders".
-      if (args.check) continue;
-      const target = join(resolve(args.out ?? 'rendered'), to);
-      mkdirSync(dirname(target), { recursive: true });
-      copyFileSync(join(here, from), target);
-      process.stdout.write(`${to}\n`);
-      continue;
-    }
-    let rendered;
-    try {
-      rendered = substitute(readFileSync(join(here, from), 'utf8'), values, from);
-    } catch (error) {
-      skipped.push({ to, message: error.message });
-      process.stderr.write(`skip ${to}: ${error.message}\n`);
-      continue;
-    }
-    if (args.check) continue;
-    const target = join(resolve(args.out ?? 'rendered'), to);
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, rendered);
-    process.stdout.write(`${to}\n`);
-  }
-
-  const rendered = plan.length - skipped.length;
+  // Validate the complete supported set before creating any publishable output.
+  // A missing file or unresolved placeholder is a failed release preparation.
+  const rendered = plan.map(([from, to]) => ({
+    to,
+    contents: substitute(readFileSync(join(here, from), 'utf8'), values, from),
+  }));
   if (args.check) {
-    process.stdout.write(`ok: ${rendered}/${plan.length} templates render for ${version}\n`);
-    // --check is the CI pre-flight and local dry-run path: it exists to catch
-    // exactly this before a release runs, so unlike a real render it fails
-    // when anything is left unresolved.
-    if (skipped.length) process.exit(1);
+    process.stdout.write(`ok: ${rendered.length}/${plan.length} templates render for ${version}\n`);
     return;
   }
-  process.stdout.write(`rendered ${rendered}/${plan.length} templates for ${version}\n`);
-  if (skipped.length) {
-    process.stdout.write(`skipped (see stderr for why): ${skipped.map((s) => s.to).join(', ')}\n`);
+  for (const { to, contents } of rendered) {
+    const target = join(resolve(args.out ?? 'rendered'), to);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, contents);
+    process.stdout.write(`${to}\n`);
   }
-  // A real render only fails the process outright if NOTHING could be
-  // published -- a partial release (some targets held back) is the intended,
-  // expected steady state, not an error.
-  if (rendered === 0) process.exit(1);
+  process.stdout.write(`rendered ${rendered.length}/${plan.length} templates for ${version}\n`);
 }
 
 main();

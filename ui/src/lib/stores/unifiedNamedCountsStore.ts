@@ -1,5 +1,6 @@
 import { writable, type Readable } from 'svelte/store';
-import type { BrowseItem } from '@shared/types';
+import type { BrowseItem, BrowseResult } from '@shared/types';
+import { collectLibraryCollectionLevel, MAX_COLLECTION_ITEMS } from '$lib/library/LibraryDestinations';
 import { CLASSIC_BROWSE_PAGE_SIZE_MAX } from '@shared/classicBrowseContracts';
 import { withClassicBrowseRoleTransaction } from '../api/client';
 import { pluralize } from '../pluralize';
@@ -18,7 +19,7 @@ import {
  */
 
 export const NAMED_COUNTS_PAGE_SIZE = CLASSIC_BROWSE_PAGE_SIZE_MAX;
-export const NAMED_COUNTS_MAX_ITEMS = 10_000;
+export const NAMED_COUNTS_MAX_ITEMS = MAX_COLLECTION_ITEMS;
 /** The literal build-v5 genre-card display bound. */
 export const GENRE_PAGE_BOUND = 60;
 
@@ -26,6 +27,8 @@ export interface NamedCountEntry {
 	readonly label: string;
 	/** Parsed from Roon's subtitle ("123 Albums"); 0 when absent. */
 	readonly albumCount: number;
+	/** Exact public count caption; no album/composition inference. */
+	readonly countLabel?: string;
 	readonly itemKey: string | null;
 	readonly imageKey: string | null;
 }
@@ -68,6 +71,7 @@ function toEntry(item: BrowseItem): NamedCountEntry {
 	return {
 		label: item.title,
 		albumCount: parseAlbumCount(item.subtitle),
+		...(item.subtitle?.trim() ? { countLabel: item.subtitle } : {}),
 		itemKey: item.itemKey ?? null,
 		imageKey: item.imageKey ?? null
 	};
@@ -77,13 +81,14 @@ function toEntry(item: BrowseItem): NamedCountEntry {
 export interface NamedCountsTransaction {
 	browse(options: {
 		hierarchy: 'genres' | 'composers';
+		popAll: true;
 		pageSize: number;
-	}): Promise<{ totalCount?: number; count: number; items: BrowseItem[] }>;
+	}): Promise<BrowseResult>;
 	browseLoad(options: {
 		hierarchy: 'genres' | 'composers';
 		offset: number;
 		count: number;
-	}): Promise<{ items: BrowseItem[] }>;
+	}): Promise<BrowseResult>;
 }
 
 export async function drainNamedCounts(
@@ -92,20 +97,17 @@ export async function drainNamedCounts(
 ): Promise<BrowseItem[]> {
 	const root = await transaction.browse({
 		hierarchy,
+		popAll: true,
 		pageSize: NAMED_COUNTS_PAGE_SIZE
 	});
-	const total = Math.min(root.totalCount ?? root.count, NAMED_COUNTS_MAX_ITEMS);
-	const collected: BrowseItem[] = [...root.items].slice(0, NAMED_COUNTS_MAX_ITEMS);
-	while (collected.length < total) {
-		const page = await transaction.browseLoad({
-			hierarchy,
-			offset: collected.length,
-			count: Math.min(NAMED_COUNTS_PAGE_SIZE, total - collected.length)
-		});
-		if (page.items.length === 0) break; // Roon returned short; stop honestly.
-		collected.push(...page.items);
-	}
-	return collected.slice(0, total);
+	const model = await collectLibraryCollectionLevel(
+		{ browse: () => Promise.resolve(root), browseLoad: options => transaction.browseLoad({
+			hierarchy, offset: options.offset ?? 0, count: options.count ?? NAMED_COUNTS_PAGE_SIZE
+		}) },
+		root, { context: { hierarchy: 'browse' }, history: [], forward: [] }, {}, hierarchy
+	);
+	if (!model.complete) throw new Error(model.diagnostic?.message ?? 'The complete collection could not be loaded.');
+	return model.items;
 }
 
 export interface NamedCountsStore extends Readable<NamedCountsState> {

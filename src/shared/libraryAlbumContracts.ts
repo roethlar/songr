@@ -21,14 +21,6 @@ export const LIBRARY_ALBUM_ERROR_MAX_LENGTH = 1024;
 export const LIBRARY_ALBUM_MAX_TRACKS = ALBUM_DETAIL_MAX_TRACKS;
 export const LIBRARY_ALBUM_MAX_VERSIONS = 32;
 
-/**
- * Bounded extra window the server may spend building a catalog-backed album
- * page after live browse timed out. It is an absolute cap measured from the
- * page's own resolving deadline, never a fresh window, and the client's open
- * safety timer is armed strictly beyond it.
- */
-export const DEGRADE_WINDOW_MS = 10_000;
-
 export const LIBRARY_ALBUM_OPEN_ERROR_CODES = [
   "INVALID_REQUEST",
   "BACKPRESSURE",
@@ -178,11 +170,6 @@ export interface LibraryAlbumVersionsEvent {
   artist?: string;
   title: string;
   versions: readonly LibraryAlbumVersionSummary[];
-  /**
-   * Present only when live browse timed out and the page was built from the
-   * locally cached catalog instead. Never `false` — absent means live.
-   */
-  degraded?: true;
 }
 
 export interface LibraryAlbumResolvedEvent {
@@ -697,12 +684,10 @@ export function normalizeLibraryAlbumVersionsEvent(
     const record = plainDataRecord(value);
     if (
       !record ||
-      // `degraded` is the one permitted extra key; every other unknown key is
-      // still rejected outright.
       !hasOnlyKeys(
         record,
         ["requestId", "operationId", "generation", "title", "versions"],
-        ["degraded", "artist"]
+        ["artist"]
       ) ||
       record.requestId !== expected.requestId ||
       record.operationId !== expected.operationId ||
@@ -723,9 +708,6 @@ export function normalizeLibraryAlbumVersionsEvent(
             : { artist: record.artist as string }),
           title: record.title,
           versions,
-          // Only the literal marker survives; `false` and anything else is
-          // dropped rather than carried as a truthy value.
-          ...(record.degraded === true ? { degraded: true as const } : {}),
         }
       : null;
   } catch {

@@ -3,8 +3,8 @@
 Source of truth for every package-manager manifest Songr publishes. Each
 registry keeps its manifest in its *own* repository — a Homebrew tap, a Scoop
 bucket, `microsoft/winget-pkgs`, the AUR git remote — and those copies are
-written by CI, never by hand. Editing a published manifest directly will be
-overwritten by the next release.
+generated from these templates by the release procedure. Editing a published
+manifest without updating its template will be overwritten by the next release.
 
 ## Layout
 
@@ -34,8 +34,27 @@ the uploaded artifacts.
 ## Rendering
 
 ```bash
-node packaging/render.mjs --version 1.1.4 --sums SHA256SUMS --date 2026-08-08 --out rendered
+node packaging/render.mjs --version "$VERSION" --sums SHA256SUMS --date "$RELEASE_DATE" --check
+node packaging/render.mjs --version "$VERSION" --sums SHA256SUMS --date "$RELEASE_DATE" --out rendered
 ```
 
-`--check` renders to memory and fails if any placeholder is left unsubstituted,
-which is what CI runs before it pushes anything.
+Set `VERSION` and `RELEASE_DATE` to the existing release being prepared. Both
+commands validate every supported template before writing any output; a missing
+file, checksum or substitution fails the operation. `--check` writes nothing.
+The supported set is six manifests: Homebrew, Scoop, AUR and three WinGet files.
+Flathub is not a supported publication target.
+
+Both release workflows run the check before rendering. Canonical release
+artifacts require signing verification; package credentials are reported
+separately, and unavailable credentials do not turn invalid templates into
+successful partial output. Publication remains disabled during withdrawal.
+
+Run the local packaging regression checks without building or publishing:
+
+```bash
+node --test packaging/render.test.mjs packaging/release-workflow.test.mjs
+```
+
+These checks use the repository's installed development dependencies (`npm ci`).
+They render temporary manifests and check workflow gates; they do not install,
+sign or publish an application.

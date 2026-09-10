@@ -27,7 +27,6 @@
 		NO_IMPORT_DATES_REASON,
 		seededShuffle,
 		sortAlbums,
-		sortAlbumsByRecentlyAdded,
 		sortArtists,
 		sortNamedCounts
 	} from '$lib/unifiedLibrarySorts';
@@ -196,9 +195,6 @@
 	const surpriseTiles = $derived(
 		seededShuffle(albums, surpriseSeed).slice(0, SURPRISE_SAMPLE).map(albumTile)
 	);
-
-	/** Slice 5: library-added timestamp descending from the catalog snapshot, no live reads. */
-	const recentlyAddedTiles = $derived(sortAlbumsByRecentlyAdded(albums).map(albumTile));
 
 	const recentTiles = $derived(
 		recent.entries.map(
@@ -410,6 +406,8 @@
 		{/if}
 	{:else if selectedScope === 'recently-played'}
 		{@render albumTiles(recentTiles)}
+	{:else if selectedScope === 'playlists' || selectedScope === 'most-played'}
+		<p class="hint" data-testid="unified-retired-scope">{selectedScope === 'playlists' ? 'Playlists are unavailable because Roon does not identify which playlists this controller can open.' : 'Most played is unavailable because Roon does not provide a complete play history to this controller.'} Choose another Library page above.</p>
 	{:else if selectedScope === 'recently-added'}
 		<!-- A restored address outliving the feature: the honest reason, never a
 		     guessed order. Roon's public browse API exposes no import date, and

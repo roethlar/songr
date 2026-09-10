@@ -28,7 +28,6 @@ import { LibraryReadPacing } from "../core/library/LibraryReadPacing";
 import { LiveLibrarySession } from "../core/library/LiveLibrarySession";
 import { CoreLifecycle } from "./CoreLifecycle";
 import { attachListeningHandshake } from "./listeningHandshake";
-import { removeRetiredCatalogStore } from "./removeRetiredCatalogStore";
 
 export interface ServerContext {
   readonly httpServer: http.Server;
@@ -61,12 +60,6 @@ export const startServer = (
   config: AppConfig,
   logger: Logger
 ): ServerContext => {
-  // An upgrading install still has the saved catalog on disk. It is removed
-  // here, once, before anything else starts: nothing reads it any more, and
-  // leaving megabytes of a retired library model in the data directory would
-  // invite a future reader to believe it were state.
-  removeRetiredCatalogStore(config.retiredCatalogPath, logger);
-
   // Instantiate RoonClient
   const roonClient = new RoonClient({
     tokenPath: config.roonTokenPath,

@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to publish (e.g. v1.1.4)"
+        description: "Existing signed release tag to publish"
         required: true
 
 permissions:
@@ -52,6 +52,7 @@ jobs:
             gh release upload "$tag" SHA256SUMS --repo "$repo"
           fi
           date=$(gh release view "$tag" --repo "$repo" --json publishedAt --jq '.publishedAt[0:10]')
+          node packaging/render.mjs --version "$version" --sums SHA256SUMS --date "$date" --check
           node packaging/render.mjs --version "$version" --sums SHA256SUMS --date "$date" --out rendered
           {
             echo "SONGR_VERSION=$version"
@@ -73,22 +74,8 @@ jobs:
               echo "::notice title=Skipping a package manager::$name is not set"
             fi
           done
-      - name: Detect which manifests actually rendered
-        # render.mjs renders each target independently and skips one held back
-        # by an unresolved placeholder without failing the other targets. A
-        # skipped target has no output directory, so this is checked before
-        # spending a credential trying to publish it.
-        run: |
-          set -euo pipefail
-          [ -d rendered/homebrew ] && echo "HAVE_RENDERED_HOMEBREW=true" >> "$GITHUB_ENV"
-          [ -d rendered/scoop ] && echo "HAVE_RENDERED_SCOOP=true" >> "$GITHUB_ENV"
-          if [ -f rendered/aur/PKGBUILD ]; then
-            echo "HAVE_RENDERED_AUR=true" >> "$GITHUB_ENV"
-          else
-            echo "::notice title=Skipping AUR::the PKGBUILD template did not render, see the render step's log"
-          fi
       - name: Push the Homebrew cask
-        if: env.HAVE_HOMEBREW_TAP_DEPLOY_KEY == 'true' && env.HAVE_RENDERED_HOMEBREW == 'true'
+        if: env.HAVE_HOMEBREW_TAP_DEPLOY_KEY == 'true'
         env:
           DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
@@ -99,7 +86,7 @@ jobs:
             --from rendered/homebrew \
             --message "songr ${SONGR_VERSION}"
       - name: Push the Scoop manifest
-        if: env.HAVE_SCOOP_BUCKET_DEPLOY_KEY == 'true' && env.HAVE_RENDERED_SCOOP == 'true'
+        if: env.HAVE_SCOOP_BUCKET_DEPLOY_KEY == 'true'
         env:
           DEPLOY_KEY: ${{ secrets.SCOOP_BUCKET_DEPLOY_KEY }}
         run: |
@@ -119,7 +106,7 @@ jobs:
           installers-regex: '^Songr\.Setup\..*\.exe$'
           token: ${{ secrets.WINGET_TOKEN }}
       - name: Publish to the AUR
-        if: env.HAVE_AUR_SSH_PRIVATE_KEY == 'true' && env.HAVE_RENDERED_AUR == 'true'
+        if: env.HAVE_AUR_SSH_PRIVATE_KEY == 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
         with:
           pkgname: songr-bin

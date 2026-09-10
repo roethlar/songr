@@ -18,7 +18,7 @@ import {
 	buildUnifiedLibraryPageState,
 	buildUnifiedRootPageState
 } from '$lib/libraryPageState';
-import type { LibraryView } from '$lib/stores/libraryViewStore';
+import type { LibraryView } from '$lib/libraryView';
 import { compareLibrarySearchKeys, type LetterBucket } from '$lib/libraryEntries';
 import type {
 	LibraryAlbumController,
@@ -57,7 +57,7 @@ import {
 	__getNavigationLog,
 	__resetNavigation
 } from '../../../test/app-stubs/navigation';
-import { NO_GENRE_SORT_REASON, NO_IMPORT_DATES_REASON, NO_RELEASE_DATES_REASON } from '$lib/unifiedLibrarySorts';
+import { NO_IMPORT_DATES_REASON, NO_RELEASE_DATES_REASON } from '$lib/unifiedLibrarySorts';
 import type {
 	unifiedComposersStore,
 	unifiedGenresStore,

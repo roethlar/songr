@@ -37,7 +37,7 @@
 	{/if}
 	<button type="button" class="row-more" bind:this={moreButton} aria-label="More actions for {item.title}"
 		aria-haspopup="menu" aria-expanded={Boolean(menu)} disabled={!menu && disabled}
-		onclick={() => menu ? actions?.onCloseMore() : actions?.onMore(item)}>⋯</button>
+		onclick={() => { moreButton?.focus(); if (menu) actions?.onCloseMore(); else actions?.onMore(item); }}>⋯</button>
 	{#if menu}
 		<div class="row-menu" role="menu" aria-label="Actions for {item.title}">
 			{#if menuBusy}<span role="status">{menu.state.phase === 'executing' ? 'Working…' : 'Loading…'}</span>{/if}
@@ -63,7 +63,7 @@
 	.row-controls:focus-within .tgo, .row-controls:focus-within .tq, .prominent .tgo, .prominent .tq { opacity: 1; }
 	.row-more { border: 0; background: transparent; color: var(--soft); padding: 3px 7px; font: inherit; border-radius: 4px; }
 	.row-menu { position: absolute; right: 0; top: 100%; z-index: 20; display: flex; flex-direction: column;
-		min-width: 130px; max-width: min(320px, 85vw); padding: 4px; background: var(--control); border: 1px solid var(--line);
+		max-height: 260px; overflow-y: auto; min-width: 130px; max-width: min(320px, 85vw); padding: 4px; background: var(--control); border: 1px solid var(--line);
 		border-radius: 5px; box-shadow: 0 4px 12px var(--songr-scrim); }
 	.row-menu button { text-align: left; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; padding: 7px 10px; border-radius: 3px; }
 	.row-menu button:hover { background: var(--hover-subtle); }

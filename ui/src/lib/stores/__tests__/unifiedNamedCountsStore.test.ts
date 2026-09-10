@@ -26,15 +26,15 @@ function fakeTransaction(total: number, options?: { shortAfter?: number }): {
 		transaction: {
 			browse: async ({ pageSize }) => {
 				const items = all.slice(0, pageSize);
-				return { totalCount: total, count: items.length, items };
+				return { level: 0, offset: 0, title: 'Named', totalCount: total, count: total, items };
 			},
 			browseLoad: async ({ offset, count }) => {
 				calls.offsets.push(offset);
 				calls.counts.push(count);
 				if (options?.shortAfter !== undefined && offset >= options.shortAfter) {
-					return { items: [] };
+					return { level: 0, offset, title: 'Named', totalCount: total, count: total, items: [] };
 				}
-				return { items: all.slice(offset, offset + count) };
+				return { level: 0, offset, title: 'Named', totalCount: total, count: total, items: all.slice(offset, offset + Math.min(count, 100)) };
 			}
 		}
 	};
@@ -100,19 +100,17 @@ describe('drainNamedCounts', () => {
 		expect(items[729].title).toBe('G729');
 		expect(calls.offsets).toEqual([100, 200, 300, 400, 500, 600, 700]);
 		// Final page asks only for the remainder.
-		expect(calls.counts).toEqual([100, 100, 100, 100, 100, 100, 30]);
+		expect(calls.counts).toEqual([630, 530, 430, 330, 230, 130, 30]);
 		expect(new Set(items.map((i) => i.title)).size).toBe(730);
 	});
 
-	it('stops honestly when Roon returns short pages', async () => {
+	it('refuses incomplete responses instead of calling their prefix complete', async () => {
 		const { transaction } = fakeTransaction(730, { shortAfter: 400 });
-		const items = await drainNamedCounts(transaction, 'genres');
-		expect(items).toHaveLength(400);
+		await expect(drainNamedCounts(transaction, 'genres')).rejects.toThrow('before every item was loaded');
 	});
 
-	it('caps runaway totals at NAMED_COUNTS_MAX_ITEMS', async () => {
+	it('refuses oversized collections without publishing a truncated prefix', async () => {
 		const { transaction } = fakeTransaction(NAMED_COUNTS_MAX_ITEMS + NAMED_COUNTS_PAGE_SIZE);
-		const items = await drainNamedCounts(transaction, 'genres');
-		expect(items).toHaveLength(NAMED_COUNTS_MAX_ITEMS);
+		await expect(drainNamedCounts(transaction, 'genres')).rejects.toThrow('too large');
 	});
 });

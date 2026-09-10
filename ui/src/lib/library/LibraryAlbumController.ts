@@ -7,7 +7,6 @@ import {
 	normalizeLibraryAlbumSelectRequest,
 	normalizeLibraryAlbumVersionFailedEvent,
 	normalizeLibraryAlbumVersionsEvent,
-	DEGRADE_WINDOW_MS,
 	type LibraryAlbumCorrelation,
 	type LibraryAlbumOpenRequest,
 	type LibraryAlbumOpenTarget,
@@ -64,8 +63,6 @@ export interface LibraryAlbumState {
 	readonly artist: string | null;
 	readonly title: string | null;
 	readonly versions: readonly LibraryAlbumVersionState[];
-	/** True when the server built this page from catalog data, not live browse. */
-	readonly degraded: boolean;
 	readonly selectedVersionId: string | null;
 	readonly actionsAvailable: boolean;
 	/**
@@ -164,13 +161,8 @@ interface ActivePage {
 
 const ACK_TIMEOUT_MS = 5_000;
 export const RESOLVING_TIMEOUT_MS = 30_000;
-/**
- * Transport slack only, never used by the server. The backend's worst-case
- * terminal event lands by `resolvingDeadlineAt + DEGRADE_WINDOW_MS`; arming
- * the client's open safety timer beyond that keeps listeners attached long
- * enough for a degraded publication emitted just under the cap to arrive.
- */
-export const DEGRADE_DELIVERY_SLACK_MS = 2_000;
+/** Allow the terminal event to arrive after the server resolving deadline. */
+export const RESOLVING_DELIVERY_SLACK_MS = 2_000;
 
 function boundedDuration(value: number, label: string): number {
 	if (!Number.isSafeInteger(value) || value <= 0 || value > 5 * 60_000) {
@@ -486,7 +478,6 @@ export class LibraryAlbumController {
 			artist: null,
 			title: null,
 			versions: Object.freeze([]) as readonly LibraryAlbumVersionState[],
-			degraded: false,
 			selectedVersionId: null,
 			actionsAvailable: false,
 			orderedTracks: Object.freeze([]) as readonly LibraryAlbumTrack[],
@@ -594,13 +585,10 @@ export class LibraryAlbumController {
 			resolvingDeadlineAt: ack.data.resolvingDeadlineAt,
 			transitionedAt: this.#now()
 		});
-		// The server may spend one bounded degrade window past its own
-		// deadline building a catalog-backed page, so the client safety net
-		// must outlast that plus delivery. It stays a safety net: the backend
-		// remains the source of the terminal outcome.
+		// The backend owns the terminal outcome; allow its delivery before timing out.
 		this.#armTimer(
 			page,
-			this.#resolvingTimeoutMs + DEGRADE_WINDOW_MS + DEGRADE_DELIVERY_SLACK_MS,
+			this.#resolvingTimeoutMs + RESOLVING_DELIVERY_SLACK_MS,
 			() => this.#handleOpenTimeout(page)
 		);
 	}
@@ -661,7 +649,6 @@ export class LibraryAlbumController {
 			artist: event.artist ?? null,
 			title: event.title,
 			versions,
-			degraded: event.degraded === true,
 			selectedVersionId: null,
 			code: null,
 			error: null,

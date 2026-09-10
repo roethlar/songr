@@ -51,7 +51,7 @@ export const DEFAULT_BROWSE_SESSION_LIMITS: Readonly<BrowseSessionLimits> =
     maxActionsPerCore: 4,
     maxPhysicalSessionsPerCore: DEFAULT_ACTIVE_SESSION_CAPACITY * 2,
     maxPublishedItemKeysPerRole: 8_192,
-    // Classic Browse loads up to 100,000 collection rows for local sorting.
+    // Browse, Search and Explore load up to 100,000 rows for local sorting.
     // Preserve all their exact tokens, plus the ordinary role allowance for
     // ancestor rows and action lists. Root resets/refreshes reclaim the whole
     // generation; a full generation refuses new rows instead of evicting them.
@@ -882,7 +882,7 @@ export class BrowseSessionCoordinator {
     if (distinctRawKeys.size > limit) {
       throw this.backpressure("The Classic result exceeds the item-key authority limit");
     }
-    if (role === "classic-browse") {
+    if (this.retainsCompleteClassicCollection(channel)) {
       const retained = channel.publishedItemKeys?.rawToToken;
       let combinedCount = retained?.size ?? 0;
       for (const raw of distinctRawKeys) {
@@ -2113,8 +2113,16 @@ export class BrowseSessionCoordinator {
     return channel;
   }
 
+  private retainsCompleteClassicCollection(channel: ChannelRecord): boolean {
+    return channel.role === "classic-browse" ||
+      channel.role === "classic-search" ||
+      channel.role === "classic-explore";
+  }
+
   private classicPublishedItemLimit(channel: ChannelRecord): number {
-    return this.limits.maxPublishedItemKeysPerRole + (channel.role === "classic-browse"
+    // Every complete collection keeps its own exact tokens plus bounded room
+    // for navigation and advertised actions in the same generation.
+    return this.limits.maxPublishedItemKeysPerRole + (this.retainsCompleteClassicCollection(channel)
       ? this.limits.maxPublishedBrowseCollectionItemKeys : 0);
   }
 
@@ -2143,11 +2151,11 @@ export class BrowseSessionCoordinator {
       }
       return existing;
     }
-    if (channel.role === "classic-browse" &&
+    if (this.retainsCompleteClassicCollection(channel) &&
         authority.tokenToRaw.size >= this.classicPublishedItemLimit(channel)) {
       throw this.backpressure("The Classic collection exceeds the item-key authority limit");
     }
-    while (channel.role !== "classic-browse" &&
+    while (!this.retainsCompleteClassicCollection(channel) &&
            authority.tokenToRaw.size >= this.limits.maxPublishedItemKeysPerRole) {
       const oldestToken = authority.tokenToRaw.keys().next().value;
       if (!oldestToken) break;

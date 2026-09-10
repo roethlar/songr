@@ -1,5 +1,5 @@
 import { writable, type Readable } from 'svelte/store';
-import type { LibraryView } from './libraryViewStore';
+import type { LibraryView } from '$lib/libraryView';
 
 export interface LibraryViewHostState {
 	readonly activeMode: LibraryView | null;

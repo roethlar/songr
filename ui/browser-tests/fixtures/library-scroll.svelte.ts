@@ -44,7 +44,6 @@ import { setSelectedZone } from '../../src/lib/stores/selectedZoneStore';
 import { setZonesSnapshot } from '../../src/lib/stores/zonesStore';
 import { __getNavigationLog, __resetNavigation } from '../../src/test/app-stubs/navigation';
 import { page as navigationPage } from '../../src/test/app-stubs/state.svelte';
-import type { CatalogStatus } from '@shared/catalogContracts';
 import { encodeLibraryRoute } from '../../src/lib/libraryRoute';
 import { libraryEntryPageState, libraryRouteFromPageState } from '../../src/lib/libraryRouteState';
 import {
@@ -130,26 +129,11 @@ function bucketsFor(names: readonly { name?: string; title?: string }[]) {
 	return buckets;
 }
 
-const status: CatalogStatus = {
-	coreId: 'browser-fixture-core',
-	freshness: 'fresh',
-	persistence: 'healthy',
-	refresh: 'idle',
-	available: true,
-	complete: true,
-	revision: 1,
-	artistCount: ARTIST_COUNT,
-	albumCount: ALBUM_COUNT,
-	updatedAt: '2026-08-01T00:00:00.000Z',
-	lastCompleteScanAt: '2026-08-01T00:00:00.000Z'
-};
-
 // ---- Roon's own two roots, as the fixture serves them ----------------
 //
 // `.agents/plans/library-live-view.md` Slice 2: the Artists and Albums lists
 // are Roon's roots, and every page under them is Roon's own level. The same
-// 400 rows the catalog index describes are served here as live rows, so the
-// list this fixture scrolls is the one the surface actually renders.
+// Rows are served through the same live-root shape that the surface renders.
 
 let liveGeneration = 'fixture-gen-1';
 
@@ -869,9 +853,6 @@ mount(UnifiedLibraryMode, {
 		favoritesDataStore: favoritesStore as never,
 		loadFavoritesData: (async () => {}) as never,
 		removeFavoriteData: (async () => {}) as never,
-		loadMostPlayedData: (async () => {}) as never,
-		loadPlaylistsData: (async () => {}) as never,
-		fetchStatus: (async () => status) as never,
 		fetchFn: fixtureFetch,
 		getSocketClient: (() => connectionSocket) as never
 	}

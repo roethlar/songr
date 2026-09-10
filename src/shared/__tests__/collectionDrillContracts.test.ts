@@ -1,4 +1,4 @@
-import { CATALOG_DISPLAY_TEXT_MAX_LENGTH } from "../catalogContracts";
+import { LIBRARY_DISPLAY_TEXT_MAX_LENGTH } from "../libraryText";
 import {
   COLLECTION_DRILL_MAX_ALBUMS,
   COLLECTION_DRILL_SOURCE_CONTRACT,
@@ -471,7 +471,7 @@ describe("canonicalCollectionDrillText", () => {
       expect(canonicalCollectionDrillText(value)).toBeNull();
     }
     expect(
-      canonicalCollectionDrillText("x".repeat(CATALOG_DISPLAY_TEXT_MAX_LENGTH + 1))
+      canonicalCollectionDrillText("x".repeat(LIBRARY_DISPLAY_TEXT_MAX_LENGTH + 1))
     ).toBeNull();
   });
 });

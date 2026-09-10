@@ -108,57 +108,33 @@ When you first start the Roon Controller, it will show status: `discovering`. Th
 
 ---
 
-## Library Catalog Diagnostics
+## Library and playback
 
-### "The artist catalog is not ready yet" or a limited library listing
+### A library page is unavailable or has changed
 
-The Library uses a controller-owned catalog scoped to the currently paired
-Core. Check its state without caching the result:
+Songr reads the current Core through Roon's public API. It does not keep a
+separate library catalog. Check the connection first:
 
 ```bash
-curl http://localhost:3333/api/catalog/status
+curl http://localhost:3333/api/core
 ```
 
-- `available: false` with `freshness: "empty"`: start the background scan with
-  `curl -X POST http://localhost:3333/api/catalog/refresh`.
-- `refresh: "running"`: the scan is asynchronous. Wait and poll `/status`;
-  repeated refresh requests join the same scan.
-- `freshness: "stale"` with `available: true`: a prior complete snapshot is
-  still available, but use **Refresh catalog** before relying on current
-  library membership.
-- `persistence: "degraded"`: artist loading and refresh are intentionally
-  blocked. Check backend logs and make sure the service account can read and
-  write `CATALOG_PATH` (default `./data/catalog`), then restart after
-  correcting the filesystem problem.
+If the Core reconnected or changed, wait for pairing and reopen the page so its
+references come from the current connection. Use the page's Retry or Refresh
+control after a read failure. An error is not evidence that the library is empty.
+There is no catalog scan or `/api/catalog/refresh` operation to run.
 
-A Core change creates a different catalog scope. Wait for the new Core to pair,
-then scan or search again rather than expecting identifiers from the previous
-Core to carry over.
+### An action is unavailable, rejected, or has an unknown outcome
 
-### Album action is unavailable, rejected, or has an unknown outcome
+Select the intended zone and use an explicit Play, Queue or More action. The
+page and zone must remain current while Songr resolves Roon's advertised choices.
+Opening More or canceling discovery does not start playback.
 
-The Library resolves the actions Roon currently offers for one resolved album
-and one current zone. The Core connection, browse session, album resolution,
-and zone must remain current while that happens.
-
-- Dropping an album on a zone or choosing **Send to…** opens a chooser; it does
-  not start playback or alter the queue by itself.
-- Canceling while actions are resolving or being chosen sends no playback or
-  queue action.
-- After an action is selected and the chooser says it is sending, execution is
-  server-owned. The controller does not cancel or retry it automatically.
-- If the result is **Outcome unknown**, inspect that zone and its queue in Roon
-  before trying again. Retrying blindly can duplicate a queue addition or
-  repeat a playback command.
-- If the album, Core, session, or target zone changed, settle the connection and
-  reopen the album's action menu to resolve a fresh set of actions.
-
-### An album's year is missing
-
-The catalog records a year only when it has proven original-release-date
-evidence. An edition or reissue date is not used as a substitute; albums
-without that evidence stay undated rather than receiving a guessed year.
-Refresh the catalog if the library metadata changed.
+If Songr reports an expired selection, reopen its page before trying again. If
+it reports **Outcome unknown**, check that zone and its queue in Roon before
+retrying: the earlier command may already have executed, and repeating it could
+add the track twice. Missing metadata or an ambiguous result is not resolved by
+choosing the first similarly named item.
 
 ---
 
@@ -167,16 +143,17 @@ Refresh the catalog if the library metadata changed.
 ### "npm run build fails"
 
 **Check**:
-1. All dependencies installed: `npm install`
+1. Restore the committed dependencies: `npm ci` and `npm --prefix ui ci`
 2. TypeScript version compatible: `npm list typescript`
 3. Review build errors for missing types
 
 ### "Tests failing"
 
 **Solutions**:
-1. Clear Jest cache: `npx jest --clearCache`
-2. Reinstall test dependencies: `npm install --save-dev jest ts-jest @types/jest`
-3. Check test file imports match source structure
+1. Read the first failing assertion or compilation error
+2. Restore dependencies from the committed lockfile with `npm ci`
+3. Run backend tests with `npm test -- --runInBand`; do not replace pinned test
+   dependencies or discard a failing check to make it pass
 
 ### "Frontend not connecting to backend"
 

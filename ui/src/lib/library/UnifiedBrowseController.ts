@@ -1,5 +1,5 @@
 import { writable, type Readable } from 'svelte/store';
-import { loadCompleteLibraryCollection } from './LibraryDestinations';
+import { collectLibraryCollectionLevel, loadCompleteLibraryCollection } from './LibraryDestinations';
 
 import {
 	CLASSIC_BROWSE_PAGE_SIZE_MAX,
@@ -30,7 +30,6 @@ import {
 } from '$lib/stores/classicBrowseSessionStore';
 import type { UnifiedSongActionSemantic } from '@shared/unifiedSearchContracts';
 
-const BROWSE_RESTORE_MAX_ITEMS = 10_000;
 const ACTION_MAX_ROWS = 32;
 const ACTION_MAX_DEPTH = 4;
 
@@ -68,7 +67,6 @@ export interface UnifiedBrowseController extends Readable<UnifiedBrowseState> {
 	): Promise<boolean>;
 	back(claim: ClassicBrowseSessionClaim, zoneId?: string): Promise<boolean>;
 	forward(claim: ClassicBrowseSessionClaim, zoneId?: string): Promise<boolean>;
-	loadMore(claim: ClassicBrowseSessionClaim, zoneId?: string): Promise<boolean>;
 	reset(snapshot?: BrowseHistorySnapshot): void;
 }
 
@@ -101,45 +99,31 @@ function rootOptions(snapshot: BrowseHistorySnapshot, zoneId?: string) {
 	} as const;
 }
 
-function mergeResult(base: BrowseResult, items: readonly BrowseItem[]): BrowseResult {
-	return {
-		...base,
-		offset: 0,
-		items: [...items]
-	};
-}
-
+/** Validate and drain one current public list; no action or prompt is entered. */
 async function collectResultItems(
 	transaction: ClassicBrowseApiTransaction,
 	result: BrowseResult,
 	hierarchy: 'browse' | 'search',
-	zoneId?: string,
-	targetCount?: number
+	zoneId?: string
 ): Promise<BrowseItem[]> {
-	const total = result.totalCount ?? result.count;
-	if (!Number.isSafeInteger(total) || total < 0) {
-		throw new Error('Browse level reported an invalid size');
-	}
-	if (targetCount === undefined && total > BROWSE_RESTORE_MAX_ITEMS) {
-		throw new Error('Browse level is too large to restore unambiguously');
-	}
-	const desired = Math.min(total, targetCount ?? total);
-	const collected = [...result.items];
-	let offset = result.offset + result.items.length;
-	while (offset < desired) {
-		const page = await transaction.browseLoad({
-			hierarchy,
-			...(zoneId ? { zoneId } : {}),
-			offset,
-			count: Math.min(CLASSIC_LOAD_COUNT_MAX, desired - offset)
-		});
-		if (page.items.length === 0) {
-			throw new Error('Browse level ended before its reported total');
-		}
-		collected.push(...page.items);
-		offset += page.items.length;
-	}
-	return collected.slice(0, desired);
+	const snapshot: BrowseHistorySnapshot = hierarchy === 'search'
+		? { context: { hierarchy: 'search', query: '' }, history: [], forward: [] }
+		: emptyBrowseSnapshot();
+	const model = await collectLibraryCollectionLevel(transaction, result, snapshot, { zoneId });
+	if (!model.complete) throw new Error(model.diagnostic?.message ?? 'The complete list could not be loaded.');
+	return model.items;
+}
+
+async function completeResolution(
+	transaction: ClassicBrowseApiTransaction,
+	resolved: PathResolution,
+	zoneId?: string
+): Promise<PathResolution> {
+	const result = resolved.result;
+	if (result.action === 'message' || result.message !== undefined || result.isError || result.listHint === 'action_list'
+		|| (result.action !== undefined && result.action !== 'list')) return resolved;
+	const items = await collectResultItems(transaction, result, resolved.snapshot.context.hierarchy, zoneId);
+	return { ...resolved, result: { ...result, offset: 0, items } };
 }
 
 async function findUniqueBreadcrumb(
@@ -147,15 +131,13 @@ async function findUniqueBreadcrumb(
 	result: BrowseResult,
 	breadcrumb: BrowseBreadcrumb,
 	hierarchy: 'browse' | 'search',
-	zoneId?: string,
-	targetCount?: number
+	zoneId?: string
 ): Promise<{ match?: BrowseItem; reason?: string }> {
 	const items = await collectResultItems(
 		transaction,
 		result,
 		hierarchy,
-		zoneId,
-		targetCount
+		zoneId
 	);
 	const matches = items.filter((candidate) => browseBreadcrumbMatches(candidate, breadcrumb));
 	if (matches.length === 1 && matches[0].itemKey) return { match: matches[0] };
@@ -188,14 +170,13 @@ async function resolvePath(
 			result,
 			step.breadcrumb,
 			hierarchy,
-			zoneId,
-			step.restoreCount
+			zoneId
 		);
-		if (!located.match?.itemKey) {
+		if (!located.match?.itemKey || located.match.inputPrompt || browseItemOpensActions(located.match)) {
 			return {
 				result,
 				snapshot: { context: normalized.context, history: resolved, forward: [] },
-				notice: `Restore stopped: ${located.reason ?? 'the path changed'}.`
+				notice: `Restore stopped: ${located.reason ?? 'this row requires an explicit action'}.`
 			};
 		}
 		result = await transaction.browse({
@@ -243,20 +224,35 @@ export function createUnifiedBrowseController(
 		const target = cloneSnapshot(snapshot);
 		requestFence += 1;
 		const token = requestFence;
-		// A first-class collection keeps its requested address through loading
-		// and failure, so reconnect/reload cannot replace it with a Browse parent.
-		const previousSnapshot = options?.complete ? target : state.snapshot;
-		publish({
-			phase: 'loading',
-			result: null,
-			snapshot: previousSnapshot,
-			notice: null,
-			error: null
-		});
+		const previousSnapshot = state.snapshot;
+		let admitted = false;
 		try {
 			const resolved = await runTransaction(roleFor(target), claim, async (transaction) => {
-				if (!options?.complete) return resolvePath(transaction, target, zoneId);
-				const model = await loadCompleteLibraryCollection(transaction, target, { zoneId });
+				if (token !== requestFence || !isClaimCurrent(claim)) throw new ClassicBrowseSupersededError();
+				publish({ phase: 'loading', result: null, snapshot: previousSnapshot, notice: null, error: null });
+				const assertCurrent = (): void => {
+					if (token !== requestFence || !isClaimCurrent(claim)) throw new ClassicBrowseSupersededError();
+				};
+				const readTransaction: ClassicBrowseApiTransaction = { ...transaction,
+					browse: async request => {
+						assertCurrent();
+						const result = await transaction.browse(request);
+						assertCurrent();
+						if (!admitted) {
+							admitted = true;
+							publish({ phase: 'loading', result: null, snapshot: target, notice: null, error: null });
+						}
+						return result;
+					},
+					browseLoad: async request => {
+						assertCurrent();
+						const result = await transaction.browseLoad(request);
+						assertCurrent();
+						return result;
+					}
+				};
+				if (!options?.complete || target.context.hierarchy === 'search') return completeResolution(readTransaction, await resolvePath(readTransaction, target, zoneId), zoneId);
+				const model = await loadCompleteLibraryCollection(readTransaction, target, { zoneId });
 				if (!model.complete && !(model.result.action === 'message' || model.result.message !== undefined || model.result.isError === true)) {
 					throw new Error(model.diagnostic?.message ?? 'The complete collection could not be loaded.');
 				}
@@ -271,7 +267,7 @@ export function createUnifiedBrowseController(
 				publish({
 					phase: 'idle',
 					result: null,
-					snapshot: previousSnapshot,
+					snapshot: admitted ? target : previousSnapshot,
 					notice: null,
 					error: null
 				});
@@ -280,7 +276,7 @@ export function createUnifiedBrowseController(
 			publish({
 				phase: 'error',
 				result: null,
-				snapshot: previousSnapshot,
+				snapshot: admitted ? target : previousSnapshot,
 				notice: null,
 				error: error instanceof Error ? error.message : 'Browse failed'
 			});
@@ -395,51 +391,6 @@ export function createUnifiedBrowseController(
 		);
 	}
 
-	async function loadMore(
-		claim: ClassicBrowseSessionClaim,
-		zoneId?: string
-	): Promise<boolean> {
-		if (!state.result || (state.phase !== 'ready' && state.phase !== 'error')) return false;
-		const targetCount = Math.min(
-			state.result.items.length + CLASSIC_BROWSE_PAGE_SIZE_MAX,
-			state.result.totalCount ?? state.result.count
-		);
-		if (targetCount <= state.result.items.length) return false;
-		const snapshot = cloneSnapshot(state.snapshot);
-		requestFence += 1;
-		const token = requestFence;
-		publish({ ...state, phase: 'loading', notice: null, error: null });
-		try {
-			const resolved = await runTransaction(roleFor(snapshot), claim, async (transaction) => {
-				const path = await resolvePath(transaction, snapshot, zoneId);
-				const items = await collectResultItems(
-					transaction,
-					path.result,
-					snapshot.context.hierarchy,
-					zoneId,
-					targetCount
-				);
-				return { ...path, result: mergeResult(path.result, items.slice(0, targetCount)) };
-			});
-			if (token !== requestFence || !isClaimCurrent(claim)) return false;
-			publish({ phase: 'ready', error: null, ...resolved });
-			return true;
-		} catch (error) {
-			if (token !== requestFence) return false;
-			publish({
-				...state,
-				phase: error instanceof ClassicBrowseSupersededError ? 'idle' : 'error',
-				error:
-					error instanceof ClassicBrowseSupersededError
-						? null
-						: error instanceof Error
-							? error.message
-							: 'Browse paging failed'
-			});
-			return false;
-		}
-	}
-
 	function reset(snapshot: BrowseHistorySnapshot = emptyBrowseSnapshot()): void {
 		requestFence += 1;
 		publish({
@@ -459,7 +410,6 @@ export function createUnifiedBrowseController(
 		openSearchResult,
 		back,
 		forward,
-		loadMore,
 		reset
 	};
 }
@@ -555,9 +505,10 @@ async function resolveSearchActionSource(
 		popAll: true,
 		pageSize: CLASSIC_BROWSE_PAGE_SIZE_MAX
 	});
-	let target = selectBrowseSearchItem(page.items, source.item);
+	const rootItems = await collectResultItems(transaction, page, 'search', zoneId);
+	let target = selectBrowseSearchItem(rootItems, source.item);
 	if (!target) {
-		const category = findBrowseSearchCategoryRow(page.items, source.item);
+		const category = findBrowseSearchCategoryRow(rootItems, source.item);
 		if (category?.itemKey) {
 			page = await transaction.browse({
 				hierarchy: 'search',

@@ -8,7 +8,7 @@ import {
 	type LibraryRowReference,
 	type LibrarySessionRetiredEvent
 } from '@shared/libraryRootsContracts';
-import { normalizeCatalogText } from '@shared/catalogContracts';
+import { normalizeLibraryText } from '@shared/libraryText';
 import { fetchLibraryRoots, refreshLibraryRoots } from '../api/client';
 import {
 	compareLibrarySearchKeys,
@@ -221,7 +221,7 @@ export function liveAlbumEntry(row: LibraryRootRow): LibraryAlbumEntry {
 		id: `live:${row.ref.token}`,
 		title: row.title,
 		artist,
-		searchKey: `${librarySortKey(row.title)} ${normalizeCatalogText(artist)}`,
+		searchKey: `${librarySortKey(row.title)} ${normalizeLibraryText(artist)}`,
 		...(row.imageKey !== undefined ? { imageKey: row.imageKey } : {}),
 		liveRef: row.ref
 	};
@@ -243,7 +243,7 @@ export function filterLiveEntries<T extends { searchKey: string }>(
 ): T[] {
 	const trimmed = query.trim();
 	if (trimmed.length === 0) return [...entries];
-	const normalized = normalizeCatalogText(trimmed);
+	const normalized = normalizeLibraryText(trimmed);
 	const lowered = trimmed.toLowerCase();
 	return entries.filter(
 		(entry) => entry.searchKey.includes(normalized) || text(entry).toLowerCase().includes(lowered)

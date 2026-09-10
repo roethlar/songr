@@ -1,4 +1,4 @@
-import type { LibraryView } from '$lib/stores/libraryViewStore';
+import type { LibraryView } from '$lib/libraryView';
 
 export type AppShellPresentation = 'unified' | 'neutral';
 export type TransportPresentation = 'unified' | 'hidden';

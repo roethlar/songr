@@ -3,7 +3,7 @@
 # D5 in .agents/plans/package-managers.md, RULED 2026-08-08 by the owner
 # directly. This is the first place this repository has ever published a
 # real email address attached to the owner's real name;
-# product/package.json's public author field remains the bare string
+# The published package's author field remains the bare string
 # "roethlar", unaffected.
 #
 # Repackages the upstream .deb, which is what electron-builder produces. Three

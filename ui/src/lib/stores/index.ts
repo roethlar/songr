@@ -10,18 +10,6 @@ export {
 	getPinnedZone
 } from './selectedZoneStore';
 export {
-	browseStore,
-	setBrowseResult,
-	appendBrowseItems,
-	setBrowseLoading,
-	setBrowseError,
-	setSearchLoading,
-	setSearchError,
-	setSearchResults,
-	clearSearchResults,
-	resetBrowse
-} from './browseStore';
-export {
 	commandFeedbackStore,
 	commandFeedbackQueue,
 	pushCommandFeedback,

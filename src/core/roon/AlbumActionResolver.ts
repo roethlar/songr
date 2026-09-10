@@ -6,7 +6,7 @@ import {
   AlbumActionSemantic,
   AlbumActionTrackSelector,
 } from "../../shared/albumActionContracts";
-import { normalizeCatalogText } from "../../shared/catalogContracts";
+import { normalizeLibraryText } from "../../shared/libraryText";
 import { BrowseItem, BrowseResult } from "../../shared/types";
 import { CoordinatedBrowseSession } from "./BrowseSessionCoordinator";
 import { CollectionDrillResolver } from "./CollectionDrillResolver";
@@ -128,9 +128,9 @@ export function createAlbumVersionDetailDigest(
   return createHash("sha256")
     .update(
       JSON.stringify([
-        normalizeCatalogText(title),
-        normalizeCatalogText(artist),
-        orderedTrackTitles.map(normalizeCatalogText),
+        normalizeLibraryText(title),
+        normalizeLibraryText(artist),
+        orderedTrackTitles.map(normalizeLibraryText),
       ])
     )
     .digest("hex");
@@ -204,8 +204,8 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
     });
     this.assertComplete(detail, MAX_DETAIL_ROWS, "ALBUM_AMBIGUOUS");
     if (
-      normalizeCatalogText(detail.title ?? "") !==
-      normalizeCatalogText(resolution.rendering.exactTitle)
+      normalizeLibraryText(detail.title ?? "") !==
+      normalizeLibraryText(resolution.rendering.exactTitle)
     ) {
       throw new AlbumActionResolutionError(
         "ALBUM_CHANGED",
@@ -287,7 +287,7 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
       );
     }
     const row = rows[track.index];
-    if (normalizeCatalogText(row.title) !== normalizeCatalogText(track.title)) {
+    if (normalizeLibraryText(row.title) !== normalizeLibraryText(track.title)) {
       throw new AlbumActionResolutionError(
         "TRACK_MISMATCH",
         "The live track at the selected index no longer matches its title"
@@ -299,14 +299,14 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
   private trackRows(items: readonly BrowseItem[]): BrowseItem[] {
     const structural = this.structuralRows(items);
     const typed = structural.filter(
-      (item) => normalizeCatalogText(item.itemType ?? "") === "track"
+      (item) => normalizeLibraryText(item.itemType ?? "") === "track"
     );
     const untypedShape = structural.filter(
       (item) =>
         item.hint === "action_list" &&
-        normalizeCatalogText(item.title) !== "play album" &&
+        normalizeLibraryText(item.title) !== "play album" &&
         Boolean(item.subtitle) &&
-        normalizeCatalogText(item.itemType ?? "") !== "track"
+        normalizeLibraryText(item.itemType ?? "") !== "track"
     );
     if (typed.length > 0 && untypedShape.length > 0) {
       throw new AlbumActionResolutionError(
@@ -321,7 +321,7 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
         "The album track list exceeded its resolution bound"
       );
     }
-    if (candidates.some((item) => normalizeCatalogText(item.title).length === 0)) {
+    if (candidates.some((item) => normalizeLibraryText(item.title).length === 0)) {
       throw new AlbumActionResolutionError(
         "ALBUM_AMBIGUOUS",
         "The album exposed an empty track title"
@@ -334,8 +334,8 @@ export class AlbumActionResolver implements AlbumActionResolverPort {
     const rows = this.structuralRows(detail.items).filter(
       (item) =>
         item.hint === "action_list" &&
-        normalizeCatalogText(item.title) === "play album" &&
-        normalizeCatalogText(item.itemType ?? "") !== "track"
+        normalizeLibraryText(item.title) === "play album" &&
+        normalizeLibraryText(item.itemType ?? "") !== "track"
     );
     if (rows.length !== 1) {
       throw new AlbumActionResolutionError(

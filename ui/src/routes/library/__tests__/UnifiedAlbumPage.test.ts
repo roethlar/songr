@@ -423,19 +423,6 @@ describe('UnifiedAlbumPage', () => {
 		);
 	});
 
-	it('names catalog-backed data on a degraded page, and stays silent otherwise', async () => {
-		const harness = makeHarness(resolvedState());
-		expect(screen.queryByTestId('unified-album-degraded')).toBeNull();
-
-		harness.sheetStore.update((state) => ({ ...state, degraded: true }));
-		await waitFor(() =>
-			expect(screen.getByTestId('unified-album-degraded')).toHaveTextContent(
-				"Live browse isn't answering"
-			)
-		);
-		// Non-blocking: the tracks the catalog supplied still render.
-		expect(screen.getByTestId('unified-album-tracks')).toBeInTheDocument();
-	});
 
 	it('surfaces failures with a retry affordance', async () => {
 		const harness = makeHarness(
@@ -537,23 +524,13 @@ describe('UnifiedAlbumPage', () => {
 		expect(harness.onBeginAction).not.toHaveBeenCalled();
 	});
 
-	it('pages long track lists and resets paging when a new album resolves', async () => {
+	it('keeps long track lists continuous and replaces them when another album resolves', async () => {
 		const harness = makeHarness(resolvedState(250));
-
-		const pager = screen.getByTestId('unified-album-pager');
-		expect(pager).toHaveTextContent('Page 1 of 3');
-		expect(screen.getByTestId('unified-album-tracks')).toHaveAttribute('start', '1');
-		expect(screen.queryByTestId('unified-track-action-100')).toBeNull();
-
-		await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-		expect(pager).toHaveTextContent('Page 2 of 3');
-		expect(screen.getByTestId('unified-album-tracks')).toHaveAttribute('start', '101');
-		expect(screen.getByTestId('unified-track-action-100')).toBeInTheDocument();
-
-		// A different (shorter) resolution cannot inherit a stale page index.
+		expect(screen.queryByTestId('unified-album-pager')).toBeNull();
+		expect(screen.getByTestId('unified-track-action-249')).toBeInTheDocument();
 		harness.sheetStore.set(resolvedState(1));
 		await screen.findByText('Track 1');
-		expect(screen.queryByTestId('unified-album-pager')).toBeNull();
+		expect(screen.queryByTestId('unified-track-action-249')).toBeNull();
 		expect(screen.getByTestId('unified-track-action-0')).toBeInTheDocument();
 	});
 
@@ -575,7 +552,7 @@ describe('UnifiedAlbumPage', () => {
 		);
 
 		const row = await screen.findByTestId('unified-track-row-150');
-		expect(screen.getByTestId('unified-album-pager')).toHaveTextContent('Page 2 of 3');
+		expect(screen.queryByTestId('unified-album-pager')).toBeNull();
 		expect(row).toHaveClass('song-focus');
 		expect(row).toHaveAttribute('data-song-highlight', 'true');
 		await waitFor(() => {
@@ -604,7 +581,7 @@ describe('UnifiedAlbumPage', () => {
 			'Home'
 		);
 
-		expect(screen.getByTestId('unified-album-pager')).toHaveTextContent('Page 1 of 3');
+		expect(screen.queryByTestId('unified-album-pager')).toBeNull();
 		expect(screen.getByTestId('unified-track-row-0')).not.toHaveClass('song-focus');
 		expect(document.querySelector('[data-song-highlight="true"]')).toBeNull();
 	});

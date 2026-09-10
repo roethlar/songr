@@ -2,7 +2,7 @@ import type {
 	LibraryPageState,
 	LibraryViewActivationCause
 } from '$lib/libraryPageState';
-import type { LibraryView } from '$lib/stores/libraryViewStore';
+import type { LibraryView } from '$lib/libraryView';
 
 export interface CommittedLibraryModeActivation {
 	readonly cause: LibraryViewActivationCause;

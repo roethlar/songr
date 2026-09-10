@@ -178,13 +178,20 @@ function preparePendingGrids(): void {
 			const children = Array.from(grid.node.children);
 			const assignmentChanged = columns !== grid.columns || children.length !== grid.children.length ||
 				children.some((child, index) => child !== grid.children[index]);
-			grid.shadow ??= grid.node.attachShadow({ mode: 'open', slotAssignment: 'manual' });
+			if (!grid.shadow) {
+				grid.shadow = grid.node.attachShadow({ mode: 'open', slotAssignment: 'manual' });
+				const style = grid.node.ownerDocument.createElement('style');
+				// An explicitly opened row menu stays above adjacent paint chunks.
+				// Focus changes only stacking; scrolling does not mutate the DOM.
+				style.textContent = '[data-prepared-library-chunk]:focus-within{z-index:1}';
+				grid.shadow.append(style);
+			}
 			const chunkSize = columns * ROWS_PER_CHUNK;
 			const count = Math.ceil(children.length / chunkSize);
 			while (grid.chunks.length < count) {
 				const box = grid.node.ownerDocument.createElement('div');
 				box.setAttribute('data-prepared-library-chunk', '');
-				box.style.cssText = 'display:grid;grid-column:1/-1;gap:inherit;overflow-clip-margin:24px;';
+				box.style.cssText = 'display:grid;grid-column:1/-1;gap:inherit;overflow-clip-margin:var(--library-chunk-overflow,24px);';
 				const slot = grid.node.ownerDocument.createElement('slot');
 				slot.style.display = 'contents';
 				box.append(slot);

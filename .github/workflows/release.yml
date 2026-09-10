@@ -5,11 +5,9 @@
 # packaging script (desktop/scripts/package-app.mjs), which builds the server,
 # the web UI, and the shell, stages the engine payload, and invokes
 # electron-builder. Everything after `--` is handed to electron-builder, which
-# is how one runner produces both architectures. Signing is secrets-gated per
-# platform — mac via a Developer ID cert (CSC_LINK) + notarization, windows
-# via Azure Trusted Signing — and each falls back to an unsigned build when
-# its secrets are absent; the README documents the unsigned first-launch
-# steps each platform then needs.
+# is how one runner produces both architectures. Canonical release signing is
+# required: macOS uses Developer ID and notarization; Windows uses Azure Trusted Signing. Missing credentials or
+# failed verification stop artifact publication.
 name: release-assets
 
 on:
@@ -24,6 +22,7 @@ permissions:
 jobs:
   build:
     name: ${{ matrix.name }}
+    if: github.repository == 'roethlar/songr'
     strategy:
       # One platform failing must not cancel the others' uploads.
       fail-fast: false
@@ -89,12 +88,11 @@ jobs:
           MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
           MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
         run: |
-          # Same empty-but-defined-secret trap as the "Build and package"
-          # step below: a missing secret still reaches here as a defined,
-          # empty env var, so it is tested rather than assumed.
+          set -euo pipefail
+          # A release must stop before building when its identity is unavailable.
           if [ -z "$MAC_CERT_P12" ]; then
-            echo "::notice title=Unsigned macOS release::MAC_CERT_P12 is empty; nothing to import"
-            exit 0
+            echo "::error::MAC_CERT_P12 is required for a macOS release"
+            exit 1
           fi
           certificate="$RUNNER_TEMP/developer-id.p12"
           keychain="$RUNNER_TEMP/songr-signing.keychain-db"
@@ -112,11 +110,8 @@ jobs:
           rm -f "$certificate"
 
       - name: Build and package
-        # macOS signing + notarization activate automatically when the repo
-        # carries the secrets; without them the build is unsigned, exactly as
-        # local builds are. MAC_CERT_P12 is a base64 Developer ID Application
-        # certificate export; APPLE_APP_SPECIFIC_PASSWORD comes from
-        # appleid.apple.com for the notarization submission.
+        # macOS signs and notarizes during packaging. Windows is signed below
+        # with TrustedSigning, then verified before any installer is uploaded.
         env:
           CSC_LINK: ${{ secrets.MAC_CERT_P12 }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
@@ -134,11 +129,24 @@ jobs:
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
         run: |
-          # A missing repo secret renders as an EMPTY-BUT-DEFINED env var, and
-          # electron-builder treats any defined CSC_LINK as a signing request
-          # ("empty password will be used for code signing", then failure —
-          # the first icon-release mac job died exactly there). Drop empties,
-          # and make the secretless path explicitly unsigned.
+          set -euo pipefail
+          case "${{ runner.os }}" in
+            macOS)
+              required="CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID"
+              ;;
+            Windows)
+              required="AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERT_PROFILE"
+              ;;
+            *) required="" ;;
+          esac
+          for name in $required; do
+            if [ -z "$(printenv "$name")" ]; then
+              echo "::error::$name is required for a signed ${{ runner.os }} release"
+              exit 1
+            fi
+          done
+          # Drop unrelated empty credentials so Linux packaging does not treat
+          # an empty CSC_LINK as a request to import a signing identity.
           for v in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID \
                    AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET \
                    AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERT_PROFILE; do
@@ -146,11 +154,7 @@ jobs:
           done
           EXTRA=""
           if [ "${{ runner.os }}" = "macOS" ]; then
-            if [ -n "${CSC_LINK:-}" ]; then
-              EXTRA="--config.mac.notarize=true"
-            else
-              EXTRA="--config.mac.identity=null"
-            fi
+            EXTRA="--config.mac.notarize=true --config.forceCodeSigning=true"
           fi
           # Windows signing does NOT go through electron-builder's own
           # win.azureSignOptions: that path calls into Azure's dlib/signtool
@@ -161,18 +165,9 @@ jobs:
           # today — is used instead, as a step after packaging. The Windows
           # build itself always runs unsigned here.
           npm --prefix desktop run package -- ${{ matrix.target }} -- ${{ matrix.arches }} $EXTRA
-          echo "SIGNING_EXTRA=$EXTRA" >> "$GITHUB_ENV"
-          # `secrets` is not a recognized named-value inside a step `if:`
-          # expression (GitHub Actions rejected it outright, both signing
-          # steps below failing to parse at all) -- routing presence
-          # through GITHUB_ENV, same as SIGNING_EXTRA already does.
-          if [ -n "${AZURE_CLIENT_SECRET:-}" ] && [ -n "${AZURE_SIGNING_ENDPOINT:-}" ] \
-             && [ -n "${AZURE_SIGNING_ACCOUNT:-}" ] && [ -n "${AZURE_CERT_PROFILE:-}" ]; then
-            echo "AZURE_SIGNING_ENABLED=true" >> "$GITHUB_ENV"
-          fi
 
       - name: Sign Windows executable
-        if: runner.os == 'Windows' && env.AZURE_SIGNING_ENABLED == 'true'
+        if: runner.os == 'Windows'
         shell: pwsh
         env:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -217,7 +212,7 @@ jobs:
         # dmg passes the identical spctl check because tauri signs its dmg
         # container; electron-builder does not, so this step signs the dmg
         # itself before submitting it, going around that default.
-        if: runner.os == 'macOS' && env.SIGNING_EXTRA == '--config.mac.notarize=true'
+        if: runner.os == 'macOS'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -250,9 +245,9 @@ jobs:
         # "signing with signtool.exe" even when no azureSignOptions flags were
         # ever passed (this happened for real: the v1.1.2 release shipped an
         # exe electron-builder logged as signed, with no verification to catch
-        # that it was never actually Azure Trusted Signing). Only assert when
-        # this run's own gate actually injected the Azure flags.
-        if: runner.os == 'Windows' && env.AZURE_SIGNING_ENABLED == 'true'
+        # that it was never actually Azure Trusted Signing). Every Windows
+        # release must pass this check before upload.
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $exe = Get-ChildItem -Path desktop/release/artifacts -Filter '*.exe' -File | Select-Object -First 1
@@ -268,7 +263,7 @@ jobs:
         # electron-builder signs/notarizes each .app; the preceding step signs,
         # notarizes and staples each wrapping DMG. Reject a missing architecture
         # or a mislabeled executable before attaching either release asset.
-        if: runner.os == 'macOS' && !contains(env.SIGNING_EXTRA, 'identity=null')
+        if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           version=$(node -p "require('./desktop/package.json').version")
@@ -315,9 +310,8 @@ jobs:
   # GITHUB_TOKEN, and GitHub raises no workflow-triggering events from
   # GITHUB_TOKEN — a release-triggered workflow would simply never run.
   #
-  # Every destination is secret-gated and skips cleanly when its credential is
-  # absent, the same shape the signing steps use. Note the trap those steps
-  # already record: a missing secret arrives as an EMPTY BUT DEFINED env var,
+  # Package credentials are detected separately from required artifact signing.
+  # A missing secret arrives as an empty but defined environment variable,
   # and `secrets` is not a recognized named-value inside a step `if:`, so
   # presence has to route through GITHUB_ENV rather than an `if:` expression.
   #
@@ -359,6 +353,7 @@ jobs:
             gh release upload "$tag" SHA256SUMS --repo "$repo"
           fi
           date=$(gh release view "$tag" --repo "$repo" --json publishedAt --jq '.publishedAt[0:10]')
+          node packaging/render.mjs --version "$version" --sums SHA256SUMS --date "$date" --check
           node packaging/render.mjs --version "$version" --sums SHA256SUMS --date "$date" --out rendered
           {
             echo "SONGR_VERSION=$version"
@@ -382,23 +377,8 @@ jobs:
             fi
           done
 
-      - name: Detect which manifests actually rendered
-        # render.mjs renders each target independently and skips one held back
-        # by an unresolved placeholder without failing the other targets. A
-        # skipped target has no output directory, so this is checked before
-        # spending a credential trying to publish it.
-        run: |
-          set -euo pipefail
-          [ -d rendered/homebrew ] && echo "HAVE_RENDERED_HOMEBREW=true" >> "$GITHUB_ENV"
-          [ -d rendered/scoop ] && echo "HAVE_RENDERED_SCOOP=true" >> "$GITHUB_ENV"
-          if [ -f rendered/aur/PKGBUILD ]; then
-            echo "HAVE_RENDERED_AUR=true" >> "$GITHUB_ENV"
-          else
-            echo "::notice title=Skipping AUR::the PKGBUILD template did not render, see the render step's log"
-          fi
-
       - name: Push the Homebrew cask
-        if: env.HAVE_HOMEBREW_TAP_DEPLOY_KEY == 'true' && env.HAVE_RENDERED_HOMEBREW == 'true'
+        if: env.HAVE_HOMEBREW_TAP_DEPLOY_KEY == 'true'
         env:
           DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
@@ -410,7 +390,7 @@ jobs:
             --message "songr ${SONGR_VERSION}"
 
       - name: Push the Scoop manifest
-        if: env.HAVE_SCOOP_BUCKET_DEPLOY_KEY == 'true' && env.HAVE_RENDERED_SCOOP == 'true'
+        if: env.HAVE_SCOOP_BUCKET_DEPLOY_KEY == 'true'
         env:
           DEPLOY_KEY: ${{ secrets.SCOOP_BUCKET_DEPLOY_KEY }}
         run: |
@@ -432,7 +412,7 @@ jobs:
           token: ${{ secrets.WINGET_TOKEN }}
 
       - name: Publish to the AUR
-        if: env.HAVE_AUR_SSH_PRIVATE_KEY == 'true' && env.HAVE_RENDERED_AUR == 'true'
+        if: env.HAVE_AUR_SSH_PRIVATE_KEY == 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
         with:
           pkgname: songr-bin

@@ -185,20 +185,9 @@ export interface LibraryAlbumServiceOptions {
 
 type OperationPhase =
   | "opening"
-  | "degrading"
   | "ready"
   | "terminal"
   | "quarantined";
-
-/**
- * Where an opening page stands in its live public read. Degrade is offered
- * only from `"live-read"`, which makes the deadline race deterministic: the
- * fulfillment path clears `resolutionInFlight` before its own deadline check,
- * so a flag-based test would send timer-first and fulfillment-first schedules
- * down different paths. Extended pages never leave `"idle"`, and the
- * inventory merge runs in `"merging"`, so neither can degrade.
- */
-type LiveReadStage = "idle" | "live-read" | "merging";
 
 /**
  * What a page is reading, and by whose authority.
@@ -272,7 +261,6 @@ interface LibraryAlbumOperation {
   started: boolean;
   closed: boolean;
   resolutionInFlight: boolean;
-  liveStage: LiveReadStage;
   timer: Timer | null;
   detailTimer: Timer | null;
   albumSignature: string | null;
@@ -411,7 +399,6 @@ export class LibraryAlbumService {
       started: false,
       closed: false,
       resolutionInFlight: false,
-      liveStage: "idle",
       timer: null,
       detailTimer: null,
       albumSignature: null,
@@ -706,7 +693,6 @@ export class LibraryAlbumService {
     locator: Readonly<CollectionDrillOpenLocator>
   ): Promise<void> {
     operation.resolutionInFlight = true;
-    operation.liveStage = "live-read";
     const opened = await this.coordinator.runAction(
       operation.access,
       async (session) => {
@@ -806,11 +792,10 @@ export class LibraryAlbumService {
 
   private publishVersions(
     operation: LibraryAlbumOperation,
-    heading: LibraryAlbumPageHeading,
-    degraded = false
+    heading: LibraryAlbumPageHeading
   ): void {
     if (operation.closed) return;
-    if (operation.phase !== "opening" && operation.phase !== "degrading") return;
+    if (operation.phase !== "opening") return;
     if (operation.versions.size < 1) {
       throw new LibraryAlbumPhaseError(
         "ALBUM_NOT_FOUND",
@@ -828,7 +813,6 @@ export class LibraryAlbumService {
       versions: Object.freeze(
         [...operation.versions.values()].map((version) => version.summary)
       ),
-      ...(degraded ? { degraded: true as const } : {}),
     });
     try {
       operation.sink.versions(event);
@@ -996,7 +980,7 @@ export class LibraryAlbumService {
    * The landing spot every await in a collection walk shares.
    *
    * The authority check plus the phase: a page that was closed, superseded or
-   * degraded while a drill was draining must stop, rather than finish a read
+   * canceled while a drill was draining must stop, rather than finish a read
    * nobody is waiting for. Handed to the resolver as `assertCurrent`, which
    * calls it after every browse and between every page of a level.
    */

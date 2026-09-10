@@ -16,8 +16,7 @@ export const RETRY_ENGINE_CHANNEL = 'shell:retry-engine';
  * This is the ONLY way to reach advanced settings without a tray, and network
  * serving lives there — the shell binds its engine to loopback on a random port
  * unless `serveOnNetwork` is set. The tray used to be the sole entry point, so
- * on any desktop without a StatusNotifier host (the Flatpak by ruling, GNOME
- * without an extension, bare wlroots) the setting was unreachable and a user
+ * on any desktop without a StatusNotifier host (GNOME without an extension or bare wlroots) the setting was unreachable and a user
  * could not expose the server at all.
  *
  * Deliberately a command and nothing more: it opens a window and carries no

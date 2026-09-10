@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEGRADE_WINDOW_MS } from '@shared/libraryAlbumContracts';
 import { COLLECTION_DRILL_SOURCE_CONTRACT } from '@shared/collectionDrillContracts';
 import {
-	DEGRADE_DELIVERY_SLACK_MS,
+	RESOLVING_DELIVERY_SLACK_MS,
 	LibraryAlbumController,
 	RESOLVING_TIMEOUT_MS,
 	type LibraryAlbumSocket,
@@ -11,7 +10,7 @@ import {
 } from '../LibraryAlbumController';
 
 /** The client's open safety net, armed strictly beyond the server's cap. */
-const OPEN_TIMEOUT_MS = 30_000 + DEGRADE_WINDOW_MS + DEGRADE_DELIVERY_SLACK_MS;
+const OPEN_TIMEOUT_MS = 30_000 + RESOLVING_DELIVERY_SLACK_MS;
 
 /**
  * Since Slice 4 an album page is opened by the drill locator that found the
@@ -574,35 +573,34 @@ describe('LibraryAlbumController', () => {
 		});
 	});
 
-	it('arms the open safety net strictly beyond the server degrade cap', () => {
+	it('arms the open safety net strictly beyond the server resolving deadline', () => {
 		const { socket, controller, timers } = makeHarness();
 		controller.open(openInput());
 		socket.emission('library-album:open').ack(successAck(REQUEST_A, OPERATION_A));
 
 		const armed = timers.filter((timer) => !timer.cleared && !timer.fired);
 		expect(armed).toHaveLength(1);
-		expect(armed[0].ms).toBe(RESOLVING_TIMEOUT_MS + DEGRADE_WINDOW_MS + DEGRADE_DELIVERY_SLACK_MS);
-		// The server's worst-case terminal event lands by its own deadline plus
-		// one degrade window; the client must still be listening after that.
-		expect(armed[0].ms).toBeGreaterThan(RESOLVING_TIMEOUT_MS + DEGRADE_WINDOW_MS);
+		expect(armed[0].ms).toBe(RESOLVING_TIMEOUT_MS + RESOLVING_DELIVERY_SLACK_MS);
+		// The client must still be listening while the terminal event is delivered.
+		expect(armed[0].ms).toBeGreaterThan(RESOLVING_TIMEOUT_MS);
 	});
 
-	it('accepts a degraded versions event arriving inside the delivery slack window', () => {
+	it('accepts a versions event arriving inside the delivery slack window', () => {
 		const { socket, controller } = makeHarness();
 		controller.open(openInput());
 		socket.emission('library-album:open').ack(successAck(REQUEST_A, OPERATION_A));
 
 		// Nothing has fired the safety net yet, so the listeners are attached.
 		expect(socket.handlerCount('library-album:versions')).toBe(1);
-		socket.serverEmit('library-album:versions', versionsEvent({ degraded: true }));
+		socket.serverEmit('library-album:versions', versionsEvent());
 
 		const page = controller.snapshot();
-		expect(page).toMatchObject({ phase: 'versions', degraded: true });
+		expect(page).toMatchObject({ phase: 'versions' });
 		expect(page.versions.map((version) => version.versionId)).toEqual([VERSION_A, VERSION_B]);
 
-		// The next page open clears it: degraded never leaks across pages.
+		// A subsequent open starts a new resolving state.
 		controller.open(openInput());
-		expect(controller.snapshot()).toMatchObject({ phase: 'opening', degraded: false });
+		expect(controller.snapshot()).toMatchObject({ phase: 'opening' });
 	});
 
 	it('surfaces a terminal failure inside the same window as RESOLUTION_TIMEOUT', () => {
@@ -617,7 +615,6 @@ describe('LibraryAlbumController', () => {
 		expect(controller.snapshot()).toMatchObject({
 			phase: 'failed',
 			code: 'RESOLUTION_TIMEOUT',
-			degraded: false
 		});
 	});
 

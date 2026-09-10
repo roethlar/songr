@@ -92,7 +92,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		namedCountBuckets,
 		reverseBuckets,
 		sortAlbums,
-		type DateFeatureGate,
 		type SortMenuEntry
 	} from '$lib/unifiedLibrarySorts';
 	import {
@@ -154,9 +153,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	} from '$lib/library/AlbumActionController';
 	import type { AlbumActionSemantic } from '@shared/albumActionContracts';
 	import {
-		CATALOG_ARTIST_ALBUMS_MAX_LIMIT,
-		normalizeCatalogText
-	} from '@shared/catalogContracts';
+		normalizeLibraryText
+	} from '@shared/libraryText';
 	import type {
 		UnifiedSongActionSemantic,
 		UnifiedSongAlbumRelationship,
@@ -461,12 +459,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	/** First-class item page over the scope/collection context. */
 	let itemTarget = $state<UnifiedItemTarget | null>(null);
 	/**
-	 * Durable rendering route for a transitional catalog-backed item page.
-	 * The route is captured from the row the reader clicked; it never contains
-	 * the catalog id that happens to feed the current render.
-	 */
-	let legacyItemRoute: LibraryRoute | null = null;
-	/**
 	 * The originating artist's display name when the open item page is an
 	 * ALBUM opened from that artist's page (issue #6): `itemBackLabel`
 	 * prefers this over the scope/collection fallback because the actual
@@ -627,24 +619,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	const roots = $derived($rootsStore);
 	const favorites = $derived($favoritesDataStore);
 
-	// ---- Which of the two sources THIS surface reads (Slice 2) ---------
-	//
-	// `.agents/plans/library-live-view.md` moved the Artists and Albums lists,
-	// the pages under them, and the smart-filter page onto Roon's own roots.
-	// Everything else — the genre and composer drills, the catalog item pages a
-	// restored address can still name — reads the catalog index until its own
-	// slice moves it.
-	//
-	// This is ONE answer, derived once, because the alternative is a surface
-	// whose rows come from one source and whose count, rail and readiness come
-	// from the other. That is how a list of 1,679 artists ends up under the
-	// heading "0 TOTAL": not a wrong number, but two sources disagreeing in
-	// public.
-	//
-	// TYPING DOES NOT CHANGE THE SOURCE. The smart-filter page runs over the
-	// live roots this surface already holds, so `filterText` is not a clause
-	// here: a reader who types a count filter and clears it again is looking at
-	// the same list throughout, and the filter counts what the list shows.
+	// Counts, filters and list rows all derive from the same current Roon roots.
 	const liveScopeActive = $derived(
 		(scope === 'artists' || scope === 'albums') &&
 			(itemTarget === null || itemTarget.kind === 'live')
@@ -674,9 +649,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		return 'idle';
 	});
 	const surfaceError = $derived(roots.error);
-	/**
-	 * The chip row: Recently added exists only while date features do.
-	 */
+	/** Available public destinations plus server-shared navigation preferences. */
 	const destinationInventory = $derived.by((): LibraryDestinationInventory => {
 		const current = $destinationsStore.inventory ?? createDefaultLibraryDestinationInventory();
 		const ids = [...new Set([
@@ -701,9 +674,11 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	const collectionRoot = $derived(scope === 'browse' && itemTarget === null
 		? pendingDestination ?? destinationInventory?.destinations.find(destination => isLibraryDestinationRoot(browseState.snapshot, destination)) ?? null
 		: null);
-	let collectionChoices = $state<Record<string, { filter: string; sort: LibraryCollectionSort; limit: number }>>({});
-	const collectionChoice = $derived(collectionChoices[collectionRoot?.id ?? ''] ?? { filter: '', sort: 'original', limit: 100 });
-	const completeCollection = $derived(collectionRoot && browseState.phase === 'ready' && browseState.result
+	let collectionChoices = $state<Record<string, { filter: string; sort: LibraryCollectionSort }>>({});
+	const collectionKey = $derived(collectionRoot?.id ?? JSON.stringify({ context: browseState.snapshot.context, history: browseState.snapshot.history.map(step => step.breadcrumb) }));
+	const collectionLabel = $derived(collectionRoot?.label ?? browseState.result?.title ?? browseState.snapshot.history.at(-1)?.breadcrumb.title ?? 'Library');
+	const collectionChoice = $derived(collectionChoices[collectionKey] ?? { filter: '', sort: 'original' });
+	const completeCollection = $derived(scope === 'browse' && itemTarget === null && browseState.phase === 'ready' && browseState.result
 		&& Number.isSafeInteger(browseState.result.totalCount) && browseState.result.offset === 0
 		&& browseState.result.count === browseState.result.totalCount
 		&& browseState.result.items.length === browseState.result.totalCount && !browseState.result.isError
@@ -712,12 +687,11 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		? { snapshot: browseState.snapshot, result: browseState.result, items: browseState.result.items,
 			totalCount: browseState.result.totalCount, complete: true } : null);
 	const browsePresentation = $derived(classifyBrowsePage(browseState, collectionRoot?.id));
+	const collectionContentItems = $derived(collectionRoot ? browsePresentation.contentItems
+		: filterRedundantBrowseItems(browseState.snapshot, [...browsePresentation.contentItems], destinationInventory));
 	const collectionMatches = $derived(completeCollection ? filterSortLibraryCollection({
-		...completeCollection, items: [...browsePresentation.contentItems], totalCount: browsePresentation.contentItems.length
+		...completeCollection, items: [...collectionContentItems], totalCount: collectionContentItems.length
 	}, collectionChoice) : null);
-	const genericBrowseItems = $derived(!collectionRoot && browseState.result
-		? filterRedundantBrowseItems(browseState.snapshot, browseState.result.items, destinationInventory) : undefined);
-	const completeReadResults = new WeakSet<BrowseResult>();
 	$effect(() => {
 		const inventory = destinationInventory;
 		navigationPrefsStore.setAvailableDestinations([...LEADING_SCOPE_CHIPS.map(item => item.id as NavigationDestinationId),
@@ -731,19 +705,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		untrack(() => { void destinationsStore.load(zoneId); });
 		return () => destinationsStore.reset();
 	});
-	$effect(() => {
-		if (browseState.phase === 'ready') pendingDestination = null;
-		const root = collectionRoot;
-		if (!root || browseState.phase !== 'ready' || !browseState.result || completeCollection ||
-			browseState.result.message !== undefined || browseState.result.isError || browseState.result.listHint === 'action_list' ||
-			(browseState.result.action !== undefined && browseState.result.action !== 'list')) return;
-		if (!Number.isSafeInteger(browseState.result.totalCount) || browseState.result.offset !== 0 ||
-			browseState.result.count !== browseState.result.totalCount ||
-			browseState.result.items.length >= (browseState.result.totalCount ?? 0)) return;
-		if (completeReadResults.has(browseState.result)) return;
-		completeReadResults.add(browseState.result);
-		untrack(() => reloadCollection(root));
-	});
+	$effect(() => { if (browseState.phase === 'ready') pendingDestination = null; });
 	function restoreBrowsePage(activeClaim: ClassicBrowseSessionClaim, snapshot: BrowseHistorySnapshot): Promise<boolean> {
 		const destination = destinationInventory.destinations.find(item => isLibraryDestinationRoot(snapshot, item));
 		pendingDestination = destination ?? null;
@@ -764,9 +726,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		else if (id === 'browse') setScope('browse', destinationInventory?.fallback.snapshot);
 		else if (scopeChips.some(item => item.id === id)) setScope(id as UnifiedLibraryScope);
 	}
-	function changeCollectionChoice(change: Partial<{ filter: string; sort: LibraryCollectionSort; limit: number }>): void {
-		if (!collectionRoot) return;
-		collectionChoices[collectionRoot.id] = { ...collectionChoice, ...change };
+	function changeCollectionChoice(change: Partial<{ filter: string; sort: LibraryCollectionSort }>): void {
+		collectionChoices[collectionKey] = { ...collectionChoice, ...change };
 	}
 
 	/**
@@ -1325,15 +1286,10 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		// that is the actual back target — not the current scope or
 		// collection drill (issue #6).
 		if (itemOriginName !== null) return itemOriginName;
-		return ALL_SCOPE_CHIPS.find((chip) => chip.id === scope)?.label ?? 'Library';
+		return ALL_SCOPE_CHIPS.find((chip) => chip.id === scope)?.label ?? (scope === 'playlists' ? 'Playlists' : scope === 'most-played' ? 'Most played' : 'Library');
 	});
 
-	/**
-	 * Revision-gated auxiliary loads must not overlap (cr-2). They share the
-	 * catalog revision and the server compares it with strict equality, so two
-	 * in flight at once means the loser is rejected with a revision conflict
-	 * even though nothing is wrong with its request.
-	 */
+	/** Serialize auxiliary session reads so one request cannot replace another cursor. */
 	let hydrationChain: Promise<unknown> = Promise.resolve();
 	function queueHydration<T>(task: () => Promise<T>): Promise<T> {
 		const settled = hydrationChain.then(task, task);
@@ -1344,21 +1300,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		return settled;
 	}
 
-	/**
-	 * Opens one live drill card, through the drill it came from.
-	 *
-	 * The card has no catalog identity and none is minted here. What it has is
-	 * its own rendering in this drill, and the locator carries exactly that
-	 * plus the collection it was rendered in — enough for the server to walk
-	 * the same path again and find the same row, unique or nothing.
-	 *
-	 * Readiness is settled BEFORE anything is mutated: a drill that has not
-	 * loaded, a row that carries no usable rendering, or a rendering that
-	 * repeats inside this same drill all return here, with no page opened and
-	 * no state touched. (The repeated case is already marked non-openable on
-	 * the card, so a click cannot normally reach it; the check stands because
-	 * this function must be right for the arguments it is handed.)
-	 */
 
 	function setPaneScrollTop(top: number): void {
 		if (!pane) return;
@@ -1537,7 +1478,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		if (item.inputPrompt || browseItemOpensActions(item)) return null;
 		const breadcrumb = browseBreadcrumbFor(item);
 		if (breadcrumb === undefined) return null;
-		return encodeLibraryRoute({
+		try { return encodeLibraryRoute({
 			kind: 'browse',
 			steps: [
 				...browseState.snapshot.history.map((step) => routeBrowseStep(step.breadcrumb)),
@@ -1547,7 +1488,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 				browseState.snapshot.context.hierarchy === 'search'
 					? browseState.snapshot.context.query
 					: null
-		});
+		}); } catch { return null; }
 	}
 
 	function routeWithTrack(route: LibraryRoute, track: string | undefined): LibraryRoute {
@@ -1587,11 +1528,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		return route === undefined ? null : encodeLibraryRoute(routeWithTrack(route, track));
 	}
 
-	/**
-	 * Transitional catalog pages already have all renderings on screen. Turn
-	 * those into the live route they will restore through; never serialize the
-	 * controller id that happened to feed the current render.
-	 */
+	/** Serialize display semantics; opaque controller authority never enters a URL. */
 	function durableRouteForState(state: UnifiedLibraryPageState): LibraryRoute | undefined {
 		return libraryRouteFromPageState(state) ?? undefined;
 	}
@@ -1727,7 +1664,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 				? (liveArtist?.name ?? null)
 				: null;
 		if (target.kind === 'live') {
-			legacyItemRoute = null;
 			albumSongFocusTitle = null;
 			// This open IS the attempt under the snapshot the reader holds, so a
 			// refusal it produces is an answer, not something to retry against the
@@ -1747,7 +1683,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			livePageController.open(liveOpen ?? { path: target.path });
 			return;
 		}
-		legacyItemRoute = null;
 		albumSongFocusTitle = albumOptions?.songFocusTitle ?? null;
 		itemTarget = target;
 		const pageGeneration = itemPageController.open(target);
@@ -1860,7 +1795,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		livePageController.reset();
 		albumSongFocusTitle = null;
 		itemTarget = null;
-		legacyItemRoute = null;
 		itemOriginName = null;
 		itemEntryRelationship = 'transient';
 		trackChildOwnsEntry = false;
@@ -2315,12 +2249,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		);
 	}
 
-	function beginLiveCollectionActions(): void {
-		const ref = livePage.target?.ref;
-		if (itemTarget?.kind !== 'live' || ref === undefined || actionZoneId === null) return;
-		const intent = referenceIntent(ref, actionZoneId, null, 'live-collection', null);
-		if (intent !== null) startSheetAction(intent);
-	}
 
 	function closeLiveRowMore(): void {
 		sheetActionGesture += 1;
@@ -2575,7 +2503,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			const title = intent.display?.title;
 			const artist = intent.display?.artist;
 			if (!title || !artist) return null;
-			const key = `${librarySortKey(title)} ${normalizeCatalogText(artist)}`;
+			const key = `${librarySortKey(title)} ${normalizeLibraryText(artist)}`;
 			const matches = roots.albums.filter((entry) => entry.searchKey === key);
 			return matches.length === 1 ? () => openLiveAlbum(matches[0]) : null;
 		}
@@ -2933,11 +2861,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			.then((restored) => publishBrowseStateAfter(restored, activeClaim));
 	}
 
-	function browseLoadMore(): void {
-		const activeClaim = claim;
-		if (!activeClaim) return;
-		void browseController.loadMore(activeClaim, sheetZones[0]?.zoneId);
-	}
 
 	$effect(() => {
 		const zoneId = actionZoneId, state = browseActionState;
@@ -3283,7 +3206,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	// leaving the library at "Idle." until a manual reload. Re-fire the load
 	// when pairing ARRIVES. The first effect run only records the state (the
 	// mount-time load owns the already-paired path), and a steady paired
-	// state never re-fires, so a genuine catalog error cannot loop.
+	// state never re-fires, so a library error cannot loop.
 	let coreWasPaired: boolean | null = null;
 	$effect(() => {
 		const paired = $isCorePaired;
@@ -3409,7 +3332,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		albumCredit = null;
 		artistView = 'all-artists';
 		creditEntryRelationship = 'transient';
-		legacyItemRoute = null;
 		itemOriginName = null;
 		itemEntryRelationship = 'transient';
 		trackChildOwnsEntry = false;
@@ -3633,24 +3555,22 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 				{#if !collectionRoot && (browsePresentation.kind === 'artist' || browsePresentation.kind === 'album')}
 					<UnifiedPublicEntityPage state={browseState} kind={browsePresentation.kind}
 						onBack={browseBack} onItem={browseItem} hrefForItem={hrefForBrowseItem}
-						onLoadMore={browseLoadMore} actions={browseRowActions} />
+						actions={browseRowActions} />
 				{:else}
 				<UnifiedBrowseView
 					state={browseState}
-					displayItems={collectionMatches?.items.slice(0, collectionChoice.limit) ?? (genericBrowseItems?.length !== browseState.result?.items.length ? genericBrowseItems : undefined)}
-					collection={collectionRoot ? {
-						id: collectionRoot.id, label: collectionRoot.label, filter: collectionChoice.filter, sort: collectionChoice.sort, ready: completeCollection !== null,
-						matchCount: collectionMatches?.matchCount ?? 0,
-						onFilter: value => changeCollectionChoice({ filter: value, limit: 100 }),
-						onSort: sort => changeCollectionChoice({ sort, limit: 100 }),
-						onShowMore: () => changeCollectionChoice({ limit: collectionChoice.limit + 100 }),
-						onRetry: () => { if (collectionRoot) reloadCollection(collectionRoot); }
+					displayItems={collectionMatches?.items ?? collectionContentItems}
+					collection={browseState.result?.listHint !== 'action_list' ? {
+						id: collectionRoot?.id, root: Boolean(collectionRoot), label: collectionLabel, filter: collectionChoice.filter, sort: collectionChoice.sort, ready: completeCollection !== null,
+						matchCount: collectionMatches?.matchCount ?? 0, totalCount: collectionMatches?.totalCount,
+						onFilter: value => changeCollectionChoice({ filter: value }),
+						onSort: sort => changeCollectionChoice({ sort }),
+						onRetry: () => { if (claim) void restoreBrowsePage(claim, browseState.snapshot); }
 					} : undefined}
 					onBack={browseBack}
 					onForward={browseForward}
 				onItem={browseItem}
 				trackActions={browseRowActions}
-				onLoadMore={browseLoadMore}
 				onSearchPrompt={() => openPalette('')}
 				hrefForItem={hrefForBrowseItem}
 					/>
@@ -3764,7 +3684,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 						{hrefForAlbum}
 						actionController={sheetActionController}
 						actionsEnabled={actionZoneId !== null}
-						onBeginActions={beginLiveCollectionActions}
 						onRowAction={beginLiveRowAction}
 						onRowMore={row => beginLiveRowAction(row, null)}
 						onCloseRowMore={closeLiveRowMore}
@@ -3846,7 +3765,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 							<button type="button" class="back" data-testid="unified-credit-back" onclick={backFromCreditGroup}>← Album artists</button>
 						{/if}
 						<h2 tabindex="-1" data-testid="unified-list-heading">{creditGroupActive && albumCredit !== null
-							? albumCreditLabel(albumCredit) : ALL_SCOPE_CHIPS.find((chip) => chip.id === scope)?.label ?? 'Library'}</h2>
+							? albumCreditLabel(albumCredit) : ALL_SCOPE_CHIPS.find((chip) => chip.id === scope)?.label ?? (scope === 'playlists' ? 'Playlists' : scope === 'most-played' ? 'Most played' : 'Library')}</h2>
 						{#if scope !== 'most-played'}
 							<span class="n mono" data-testid="unified-summary">
 								<!-- No truncation notice: Roon's roots are read whole or not at

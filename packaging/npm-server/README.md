@@ -12,7 +12,7 @@ produces via `--server-tar`) rather than a static template.
 Four of this project's runtime dependencies — `node-roon-api`,
 `node-roon-api-browse`, `node-roon-api-image`, `node-roon-api-transport` —
 are not published to the public npm registry (`npm view node-roon-api` 404s);
-the private tree vendors them under `vendor/` and depends on them via
+the repository vendors them under `vendor/` and depends on them via
 `file:` paths, which only resolve inside this repository's own checkout.
 `npm pack`/`npm publish` also strip `node_modules` by default regardless of
 `.npmignore` — confirmed empirically, not assumed.
@@ -41,7 +41,7 @@ listing were ever hand-edited.
 Given an extracted `songr-server-<version>` directory:
 
 1. Renames the package `songr` → `songr-server` (the payload's own
-   `package.json` ships as `songr`, matching `product/package.json` — correct
+   `package.json` ships as `songr`, matching the root `package.json` — correct
    for the desktop/web build, wrong as an npm package name, since it would
    claim the top-level name for what is only the headless component).
 2. Sets `bundledDependencies` to every top-level `node_modules` entry,

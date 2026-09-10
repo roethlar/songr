@@ -41,9 +41,9 @@ Nothing here is added to the repository-root or `ui/` toolchains.
 
 ## Advanced settings
 
-Two options exist, both off by default and both reachable only from the tray's
-**Advanced Settings…** item — deliberately buried, never part of onboarding
-(`.agents/plans/desktop-app.md` §1). They live in `shell-settings.json` in
+Advanced settings are available from the main Settings menu and the tray's
+**Advanced Settings…** item. Both options are off by default. They live in
+`shell-settings.json` in
 Electron's per-user `userData` directory, a versioned JSON document read once at
 startup. A file that is missing, unreadable, not JSON, or stamped with a version
 this build does not know produces the defaults and a logged warning; the app
@@ -56,7 +56,7 @@ always starts. Changes take effect on the next launch, and the page says so.
   navigation policy's allowed origin becomes that origin. If the server does not
   answer, the window shows the same error page with a retry button, and retry
   re-attempts *that server* — it never silently starts a local engine, because a
-  machine running two engines has two Roon extensions, two catalog crawls and
+  machine running two engines has two Roon extensions and
   two sets of settings, with nothing on screen to say which one you are looking
   at.
 - **Serve on the local network** (`serveOnNetwork`, `networkPort`, default
@@ -87,11 +87,11 @@ during this connection, so pressing Pause from the tray does not disable the
 tray. If nothing has played at all, the transport items are disabled. The rule
 lives in `src/trayModel.ts` and is unit-tested there.
 
-Two platform caveats: Linux tray implementations do not show tooltips, so the
-now-playing text is macOS/Windows only for now; and the icon
-(`resources/trayIconTemplate.png`, plus its `@2x`) is a **placeholder** — a
-monochrome note glyph drawn as a macOS template image. Real branding is an open
-item in `.agents/plans/desktop-app.md` §10.
+Linux tray implementations may omit tooltips. The tray glyph and application
+icons are rendered from committed SVG sources by
+`node desktop/scripts/render-icons.mjs`; macOS uses the template image and its
+`@2x` companion. Desktops without a tray can reopen the existing window by
+launching Songr again and reach advanced settings from the main Settings menu.
 
 ## Dev run
 
@@ -99,16 +99,17 @@ From the repository root, build the backend and the UI once, then start the
 shell:
 
 ```bash
-npm install                    # repository root, once
+npm ci                         # repository root, once
 npm run build                  # backend -> dist/
-npm --prefix ui install        # once
+npm --prefix ui ci             # once
 npm --prefix ui run build      # UI -> ui/build/
 
-npm --prefix desktop install   # once
+npm --prefix desktop ci        # once
 npm --prefix desktop start     # compiles desktop/src and runs Electron
 ```
 
-`npm start` here is `tsc && electron .`, so it always runs the current sources.
+`npm start` in desktop rebuilds the shell and then starts Electron, so it runs
+the current shell sources.
 The backend and UI are *not* rebuilt for you — rerun their builds after
 changing `src/` or `ui/`.
 
@@ -160,37 +161,41 @@ The packaged app runs the engine with `NODE_ENV=production`. That is not
 cosmetic either: the engine's logger reaches for a pretty-printing transport
 that is a devDependency, and a production-pruned payload does not have it.
 
-Everything is **unsigned**. On macOS that means Gatekeeper will refuse the first
-launch until it is allowed through System Settings → Privacy & Security; on
-Windows SmartScreen shows a "more info" prompt. Signing is follow-on work.
+### Signing and targets
 
-### Targets
+Local macOS packaging uses the Developer ID identity in the current keychain.
+Require signing explicitly when preparing a Mac candidate:
 
-| Target | Platform | Builds on this repository's macOS host? |
-| --- | --- | --- |
-| `dmg` | macOS | yes |
-| `AppImage` | Linux | yes, cross-built |
-| `deb` | Linux | yes, cross-built |
-| `rpm` | Linux | needs `rpmbuild` (`brew install rpm`) |
-| `nsis` | Windows | yes, cross-built |
+```bash
+npm --prefix desktop run package -- --mac -- --arm64 --config.forceCodeSigning=true --config.mac.notarize=false
+```
 
-Architecture follows the host unless you pass one (`-- --x64`). A release
-matrix across architectures belongs to the CI slice of
-`.agents/plans/desktop-app.md`, which is a separate, owner-gated step.
+The second `--` sends architecture and electron-builder options through the
+wrapper. This command creates a signed local candidate without notarization;
+public Mac releases require signing, notarization and verification of both the
+application and DMG. The canonical release workflow fails when signing inputs
+are missing. Windows releases use Azure Trusted Signing and must pass
+Authenticode verification before upload.
 
-### Naming
+| Target | Build host |
+|---|---|
+| macOS DMG, arm64 and x64 | macOS with Developer ID credentials |
+| Linux AppImage/deb, arm64 and x64 | Linux, or supported cross-build tooling on macOS |
+| Linux RPM, arm64 and x64 | Linux with `rpmbuild`; installing macOS `rpm` does not provide a Linux RPM build host |
+| Windows NSIS, x64 | Windows in release CI, with signing credentials |
+| Server tarball | `npm --prefix desktop run package -- --stage-only --server-tar` |
 
-`productName` is **Songr** and the application id is **`app.songr.desktop`**,
-the defaults stated in `.agents/plans/desktop-app.md` §10. A build made from
-this private tree appends `.private` to that id, so the owner's own build and a
-public release can be installed side by side without either shadowing the
-other. Nobody chooses that per run: the script looks for the agent governance
-directory, which is never published, so the tree decides.
+The release matrix is defined in `../.github/workflows/release.yml`. Packaging
+does not publish by itself. Release workflows remain disabled during the current
+withdrawal; no local build authorizes publication.
 
-Per-user data follows the same split by accident of how Electron names things,
-and usefully so — a dev run (`npm start`) writes under the workspace name, an
-installed build under `Songr`. Two engines sharing one data directory would
-mean two Roon extensions fighting over one set of pairing state.
+### Naming and saved data
+
+Every packaged build uses application id `app.songr.desktop`, product name
+`Songr` and runtime name `songr`. The same constants feed the shell manifest and
+Linux package names. There is no private-build identity or governance-directory
+switch. Preserve these values when preparing updates so existing desktop
+settings and pairing data stay associated with the application.
 
 ## Tests
 
@@ -209,11 +214,9 @@ all pure, and the Electron `Tray` glue in `src/tray.ts` decides nothing.
 The parent-death watchdog is tested on the backend side, in
 `src/server/__tests__/parentDisconnectWatchdog.test.ts` at the repository root.
 
-## Not here yet
+## Updates
 
-Signing, notarization and auto-update are follow-on work
-(`.agents/plans/desktop-app.md`). So is a real application icon: the artifacts
-built today carry the default Electron icon, and the tray glyph
-(`resources/trayIconTemplate.png`) is a placeholder. Media keys (slice 4) and
-first-run onboarding (slice 5) landed in `ui/`, not here, because they benefit
-plain-browser users too.
+Install a newer verified package normally. Automatic in-app updates are not
+implemented. Signing, notarization, platform icons, media controls and first-run
+setup already have current implementations; their build and verification steps
+are documented above and in the root README.

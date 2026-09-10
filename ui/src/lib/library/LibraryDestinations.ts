@@ -54,7 +54,7 @@ export interface LibraryCollectionOptions {
 	maxItems?: number;
 }
 
-const MAX_COLLECTION_ITEMS = 100_000;
+export const MAX_COLLECTION_ITEMS = 100_000;
 const MAX_LOAD_PAGES = 1_000;
 const INVENTORY_MAX_ITEMS = 1_000;
 const DESTINATIONS = [
@@ -168,17 +168,28 @@ function initialModel(result: BrowseResult, snapshot: BrowseHistorySnapshot): Li
 	};
 }
 
-async function collectLevel(
+export async function collectLibraryCollectionLevel(
 	transaction: LibraryDestinationTransaction,
 	result: BrowseResult,
 	snapshot: BrowseHistorySnapshot,
-	options: LibraryCollectionOptions
+	options: LibraryCollectionOptions = {},
+	hierarchy: string = snapshot.context.hierarchy
 ): Promise<LibraryCollectionModel> {
 	const model = initialModel(result, snapshot);
 	if (model.diagnostic) return model;
 	if (model.totalCount! > itemLimit(options)) {
 		return { ...model, complete: false, diagnostic: failure('This collection is too large to filter or sort completely.') };
 	}
+	const seenKeys = new Set<string>();
+	const rememberKeys = (items: readonly BrowseItem[]): boolean => {
+		for (const item of items) {
+			if (!item.itemKey) continue;
+			if (seenKeys.has(item.itemKey)) return false;
+			seenKeys.add(item.itemKey);
+		}
+		return true;
+	};
+	if (!rememberKeys(model.items)) return { ...model, complete: false, diagnostic: failure('Roon repeated an item while loading this collection.') };
 	let pageCount = 0;
 	while (model.items.length < model.totalCount!) {
 		if (++pageCount > MAX_LOAD_PAGES) {
@@ -186,7 +197,7 @@ async function collectLevel(
 		}
 		const offset = model.items.length;
 		const page = await transaction.browseLoad({
-			...browseOptions(options.zoneId),
+			hierarchy, ...(options.zoneId ? { zoneId: options.zoneId } : {}),
 			offset,
 			count: Math.min(CLASSIC_LOAD_COUNT_MAX, model.totalCount! - offset)
 		});
@@ -197,6 +208,7 @@ async function collectLevel(
 			|| page.level !== result.level || (page.title !== undefined && result.title !== undefined && page.title !== result.title)) {
 			return { ...model, complete: false, diagnostic: failure('The collection changed or ended before every item was loaded.') };
 		}
+		if (!rememberKeys(page.items)) return { ...model, complete: false, diagnostic: failure('Roon repeated an item while loading this collection.') };
 		model.items.push(...page.items);
 	}
 	return {
@@ -223,7 +235,7 @@ async function openPath(
 	});
 	const resolved = rootSnapshot();
 	for (const step of path.history) {
-		const parent = await collectLevel(transaction, result, resolved, { ...options, maxItems: INVENTORY_MAX_ITEMS });
+		const parent = await collectLibraryCollectionLevel(transaction, result, resolved, { ...options, maxItems: INVENTORY_MAX_ITEMS });
 		if (!parent.complete) return parent;
 		const matches = parent.items.filter((item) => browseBreadcrumbMatches(item, step.breadcrumb));
 		if (matches.length !== 1 || !safeListItem(matches[0])) {
@@ -325,7 +337,7 @@ export async function discoverLibraryDestinations(
 		const libraryResult = await transaction.browse({
 			...browseOptions(options.zoneId), itemKey: libraryRow.itemKey, pageSize: CLASSIC_BROWSE_PAGE_SIZE_MAX
 		});
-		const library = await collectLevel(transaction, libraryResult, libraryPath, { ...options, maxItems: INVENTORY_MAX_ITEMS });
+		const library = await collectLibraryCollectionLevel(transaction, libraryResult, libraryPath, { ...options, maxItems: INVENTORY_MAX_ITEMS });
 		if (!library.complete) note('Library', library);
 		else promote(libraryPath, library.items);
 	}
@@ -395,7 +407,7 @@ export async function loadCompleteLibraryCollection(
 	itemLimit(options);
 	const opened = await openPath(transaction, snapshot, options);
 	if (opened.diagnostic) return opened;
-	return collectLevel(transaction, opened.result, opened.snapshot, options);
+	return collectLibraryCollectionLevel(transaction, opened.result, opened.snapshot, options);
 }
 
 /** Filter documented display text only; preserve source order for equal names. */

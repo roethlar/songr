@@ -340,3 +340,17 @@ describe('legacy Browse excludes promoted peers and known duplicate branches', (
 		expect(filterRedundantBrowseItems(ROOT, [row('Genres', { hint: 'header' })], inventory)).toEqual([row('Genres', { hint: 'header' })]);
 	});
 });
+
+
+describe('complete-list identity validation', () => {
+	it('rejects a repeated opaque row even when offsets and totals look complete', async () => {
+		const repeated = list('Same row', 'same-key');
+		const transaction: LibraryDestinationTransaction = {
+			browse: async () => page([repeated], { title: 'Tracks', totalCount: 2 }),
+			browseLoad: async () => page([repeated], { title: 'Tracks', offset: 1, totalCount: 2 })
+		};
+		const model = await loadCompleteLibraryCollection(transaction, ROOT);
+		expect(model.complete).toBe(false);
+		expect(model.diagnostic?.message).toContain('repeated an item');
+	});
+});

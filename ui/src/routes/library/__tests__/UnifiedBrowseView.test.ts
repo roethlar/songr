@@ -47,37 +47,33 @@ function mount(state = readyState()) {
 	const onBack = vi.fn();
 	const onForward = vi.fn();
 	const onItem = vi.fn();
-	const onLoadMore = vi.fn();
 	const onSearchPrompt = vi.fn();
 	const result = render(UnifiedBrowseView, {
-		props: { state, onBack, onForward, onItem, onLoadMore, onSearchPrompt }
+		props: { state, onBack, onForward, onItem, onSearchPrompt }
 	});
-	return { ...result, onBack, onForward, onItem, onLoadMore, onSearchPrompt };
+	return { ...result, onBack, onForward, onItem, onSearchPrompt };
 }
 
 describe('UnifiedBrowseView', () => {
  it('uses the supplied collection matches and complete counts without offering network paging', async () => {
   const state = readyState();
   const match = state.result!.items[0];
-  const onItem = vi.fn(), onLoadMore = vi.fn(), onFilter = vi.fn(), onSort = vi.fn(), onShowMore = vi.fn();
+  const onItem = vi.fn(), onFilter = vi.fn(), onSort = vi.fn();
   const { rerender } = render(UnifiedBrowseView, { props: {
-   state, displayItems: [match], onItem, onLoadMore, onBack: vi.fn(), onForward: vi.fn(), onSearchPrompt: vi.fn(),
-   collection: { label: 'Tracks', filter: 'rock', sort: 'name-desc', matchCount: 51, onFilter, onSort, onShowMore, onRetry: vi.fn() }
+   state, displayItems: [match], onItem, onBack: vi.fn(), onForward: vi.fn(), onSearchPrompt: vi.fn(),
+   collection: { label: 'Tracks', filter: 'rock', sort: 'name-desc', matchCount: 51, onFilter, onSort, onRetry: vi.fn() }
   } });
   expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(1);
   expect(screen.getByTestId('unified-browse-summary')).toHaveTextContent('51 OF 102');
   expect(screen.queryByTestId('unified-browse-path')).toBeNull();
   expect(screen.queryByTestId('unified-browse-more')).toBeNull();
-  await fireEvent.click(screen.getByTestId('unified-browse-row'));
+  await fireEvent.click(screen.getByRole('button', { name: 'Open Tracks' }));
   expect(onItem).toHaveBeenCalledWith(match);
   await fireEvent.input(screen.getByRole('searchbox', { name: 'Filter Tracks' }), { target: { value: 'jazz' } });
   expect(onFilter).toHaveBeenCalledWith('jazz');
   await fireEvent.change(screen.getByRole('combobox', { name: 'Sort Tracks' }), { target: { value: 'name-asc' } });
   expect(onSort).toHaveBeenCalledWith('name-asc');
-  await fireEvent.click(screen.getByRole('button', { name: 'Show next 50' }));
-  expect(onShowMore).toHaveBeenCalledTimes(1);
-  expect(onLoadMore).not.toHaveBeenCalled();
-  await rerender({ displayItems: [], collection: { label: 'Tracks', filter: 'no matches', sort: 'original', matchCount: 0, onFilter, onSort, onShowMore, onRetry: vi.fn() } });
+  await rerender({ displayItems: [], collection: { label: 'Tracks', filter: 'no matches', sort: 'original', matchCount: 0, onFilter, onSort, onRetry: vi.fn() } });
   expect(screen.getByTestId('unified-browse-empty')).toHaveTextContent('No matches.');
   expect(screen.getByTestId('unified-browse-summary')).toHaveTextContent('0 OF 102');
  });
@@ -106,48 +102,33 @@ describe('UnifiedBrowseView', () => {
 		expect(screen.queryByTestId('unified-browse-empty')).toBeNull();
 	});
 
-	it('renders the deep hierarchy as prototype-language rows with semantic history', () => {
+	it('renders library rows with named navigation controls', () => {
 		mount();
 
 		expect(screen.getByTestId('unified-browse-title')).toHaveTextContent('Library');
 		expect(screen.getByTestId('unified-browse-summary')).toHaveTextContent('2 OF 102');
-		expect(screen.getByTestId('unified-browse-path')).toHaveTextContent('Library');
+		expect(screen.queryByTestId('unified-browse-path')).toBeNull();
 		const rows = screen.getAllByTestId('unified-browse-row');
 		expect(rows[0]).toHaveTextContent('Tracks');
 		expect(rows[0]).toHaveTextContent('12,500 tracks');
-		expect(rows[0]).toHaveTextContent('OPEN');
-		expect(rows[1]).toHaveTextContent('SEARCH');
+		expect(screen.getByRole('button', { name: 'Open Tracks' })).toBeEnabled();
+		expect(screen.getByRole('button', { name: 'Search in Search' })).toBeEnabled();
 	});
 
-	it('routes hierarchy, input-prompt, history, and paging clicks explicitly', async () => {
+	it('routes hierarchy, input-prompt, and history clicks explicitly', async () => {
 		const harness = mount();
 		const rows = screen.getAllByTestId('unified-browse-row');
 
-		await fireEvent.click(rows[0]);
+		await fireEvent.click(screen.getByRole('button', { name: 'Open Tracks' }));
 		expect(harness.onItem).toHaveBeenCalledWith(expect.objectContaining({ title: 'Tracks' }));
-		await fireEvent.click(rows[1]);
+		await fireEvent.click(screen.getByRole('button', { name: 'Search in Search' }));
 		expect(harness.onSearchPrompt).toHaveBeenCalledTimes(1);
 		await fireEvent.click(screen.getByTestId('unified-browse-back'));
 		expect(harness.onBack).toHaveBeenCalledTimes(1);
-		await fireEvent.click(screen.getByTestId('unified-browse-more'));
-		expect(harness.onLoadMore).toHaveBeenCalledTimes(1);
 	});
 
-	it('keeps loaded rows visible and exposes retry after paging fails', async () => {
-		const harness = mount(readyState({ phase: 'error', error: 'temporary timeout' }));
 
-		expect(screen.getByTestId('unified-browse-error')).toHaveTextContent(
-			'Could not load more: temporary timeout'
-		);
-		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(2);
-		const retry = screen.getByTestId('unified-browse-more');
-		expect(retry).toHaveTextContent('Retry next 100');
-
-		await fireEvent.click(retry);
-		expect(harness.onLoadMore).toHaveBeenCalledTimes(1);
-	});
-
-	it('labels playable rows as actions and never invokes them during render', async () => {
+	it('keeps unknown action-list titles inert until an explicit action is available', async () => {
 		const playable = {
 			...readyState(),
 			result: {
@@ -169,9 +150,9 @@ describe('UnifiedBrowseView', () => {
 
 		expect(harness.onItem).not.toHaveBeenCalled();
 		const row = screen.getByTestId('unified-browse-row');
-		expect(row).toHaveTextContent('ACTIONS');
+		expect(screen.getByRole('button', { name: 'More actions for Heroes' })).toBeDisabled();
 		await fireEvent.click(row);
-		expect(harness.onItem).toHaveBeenCalledTimes(1);
+		expect(harness.onItem).not.toHaveBeenCalled();
 	});
 
 	it('uses the Unified theme tokens and catches attributed style tags', async () => {
@@ -198,9 +179,9 @@ describe('explicit track controls', () => {
 		if (context === 'search') state = { ...state, snapshot: { context: { hierarchy: 'search', query: 'Same' }, history: [{ hierarchy: 'search', breadcrumb: { title: 'Tracks' } }], forward: [] } };
 		const onItem = vi.fn(), onAction = vi.fn(), onFavorite = vi.fn();
 		render(UnifiedBrowseView, { props: {
-			state, onItem, onBack: vi.fn(), onForward: vi.fn(), onLoadMore: vi.fn(), onSearchPrompt: vi.fn(),
+			state, onItem, onBack: vi.fn(), onForward: vi.fn(), onSearchPrompt: vi.fn(),
 			collection: context === 'library' ? { id: 'tracks', label: 'Tracks', filter: '', sort: 'original', matchCount: 1,
-				onFilter: vi.fn(), onSort: vi.fn(), onShowMore: vi.fn(), onRetry: vi.fn() } : undefined,
+				onFilter: vi.fn(), onSort: vi.fn(), onRetry: vi.fn() } : undefined,
 			trackActions: { enabled: true, busy: false, status: null, error: false, onAction, onFavorite, onMore: vi.fn(), onCloseMore: vi.fn() }
 		} });
 		const row = screen.getByTestId('unified-browse-row');

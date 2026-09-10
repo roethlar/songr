@@ -29,20 +29,6 @@ export interface RoonCoreInfo {
   readonly displayVersion: string;
 }
 
-/**
- * The paired Core's broker address as learned by the extension-API
- * connection (install-finish Slice 1): `host` is the address node-roon-api
- * connected to (SOOD responder IP, loopback-normalized to 127.0.0.1 when
- * the Core shares this host) and `uniqueId` is the registry `core_id`,
- * which is the Core's broker id — the identity the native handshake
- * requires. This is the derivation source for the native client's
- * zero-config connect target.
- */
-export interface RoonCoreAddress {
-  readonly host: string;
-  readonly uniqueId: string;
-}
-
 export interface RoonEvents {
   readonly coreStatus: "discovering" | "paired" | "unpaired";
   readonly coreInfo?: RoonCoreInfo;
@@ -64,7 +50,6 @@ export class RoonClient extends EventEmitter {
   private browse: any | null = null;
   private image: any | null = null;
   private pairedCore: RoonCoreInfo | null = null;
-  private pairedCoreAddress: RoonCoreAddress | null = null;
   private coreStatus: "discovering" | "paired" | "unpaired" = "discovering";
   private discoveryCores = new Map<string, DiscoveredCore>();
   private discoveryError: string | undefined;
@@ -174,15 +159,6 @@ export class RoonClient extends EventEmitter {
 
   public getCoreInfo(): RoonCoreInfo | null {
     return this.pairedCore;
-  }
-
-  /**
-   * The paired Core's broker address (see RoonCoreAddress), or null when
-   * unpaired or the connection did not report one. Consumed by the native
-   * client's deriveTarget hook.
-   */
-  public getCoreAddress(): RoonCoreAddress | null {
-    return this.pairedCoreAddress;
   }
 
   public getCoreStatus(): "discovering" | "paired" | "unpaired" {
@@ -313,19 +289,6 @@ export class RoonClient extends EventEmitter {
       displayName: core.display_name,
       displayVersion: core.display_version,
     };
-    // Derivation source for the native zero-config connect target: the
-    // address the extension-API websocket is connected to (already
-    // loopback-normalized by node-roon-api for same-host Cores) plus the
-    // registry core_id, which is the Core's broker id.
-    const transportHost = core?.moo?.transport?.host;
-    this.pairedCoreAddress =
-      typeof transportHost === "string" &&
-      transportHost.length > 0 &&
-      typeof core?.core_id === "string" &&
-      core.core_id.length > 0
-        ? { host: transportHost, uniqueId: core.core_id }
-        : null;
-
     this.transport = core.services?.RoonApiTransport ?? null;
     this.browse = core.services?.RoonApiBrowse ?? null;
     this.image = core.services?.RoonApiImage ?? null;
@@ -347,7 +310,6 @@ export class RoonClient extends EventEmitter {
     this.browse = null;
     this.image = null;
     this.pairedCore = null;
-    this.pairedCoreAddress = null;
     this.emit("core-status", { coreStatus: "unpaired" });
   }
 

@@ -327,7 +327,7 @@ function focusExistingWindow(): void {
 
 /**
  * The advanced settings page, in its own small window so opening it does not
- * throw away whatever the app window was showing. Reachable only from the tray.
+ * throw away whatever the app window was showing. Reachable from the tray and main Settings menu.
  */
 function openSettingsWindow(): void {
   if (settingsWindow !== null) {

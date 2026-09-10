@@ -479,7 +479,7 @@ describe("library album version page contracts", () => {
     ).toBeNull();
   });
 
-  it("carries only the literal degraded marker and still rejects unknown keys", () => {
+  it("rejects removed catalog fallback claims and unknown keys", () => {
     const event = {
       requestId: REQUEST_ID,
       operationId: OPERATION_ID,
@@ -488,13 +488,11 @@ describe("library album version page contracts", () => {
       title: "Album",
       versions: [version("version-01")],
     };
-    expect(
-      normalizeLibraryAlbumVersionsEvent({ ...event, degraded: true }, correlation())
-    ).toEqual({ ...event, degraded: true });
-    for (const degraded of [false, "true", 1, null]) {
+    expect(normalizeLibraryAlbumVersionsEvent(event, correlation())).toEqual(event);
+    for (const degraded of [true, false, "true", 1, null]) {
       expect(
         normalizeLibraryAlbumVersionsEvent({ ...event, degraded }, correlation())
-      ).toEqual(event);
+      ).toBeNull();
     }
     expect(
       normalizeLibraryAlbumVersionsEvent({ ...event, stableKey: "10" }, correlation())

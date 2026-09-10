@@ -43,37 +43,6 @@ const withEnv = (names: string[]) => {
   return { save, restore, clear };
 };
 
-describe("Retired catalog store path", () => {
-  const env = withEnv(["CATALOG_PATH", "TIMELINE_CATALOG_PATH"]);
-
-  beforeEach(() => {
-    env.save();
-    env.clear();
-  });
-
-  afterEach(env.restore);
-
-  it("defaults to the controller-local directory the store used", () => {
-    expect(loadConfig().retiredCatalogPath).toBe(path.resolve("./data/catalog"));
-  });
-
-  it("resolves an explicit directory an operator moved it to", () => {
-    process.env.CATALOG_PATH = "./var/catalog";
-    expect(loadConfig().retiredCatalogPath).toBe(path.resolve("./var/catalog"));
-  });
-
-  it("honors the legacy TIMELINE_CATALOG_PATH key from pre-removal deployments", () => {
-    process.env.TIMELINE_CATALOG_PATH = "./var/legacy-catalog";
-    expect(loadConfig().retiredCatalogPath).toBe(path.resolve("./var/legacy-catalog"));
-  });
-
-  it("prefers CATALOG_PATH when both keys are set", () => {
-    process.env.CATALOG_PATH = "./var/catalog";
-    process.env.TIMELINE_CATALOG_PATH = "./var/legacy-catalog";
-    expect(loadConfig().retiredCatalogPath).toBe(path.resolve("./var/catalog"));
-  });
-});
-
 describe("Port resolution", () => {
   const env = withEnv(["PORT"]);
 
@@ -147,8 +116,6 @@ describe("Config and data base directories", () => {
     "IMAGE_CACHE_PATH",
     "RECENTLY_PLAYED_PATH",
     "FAVORITES_PATH",
-    "CATALOG_PATH",
-    "TIMELINE_CATALOG_PATH",
   ]);
 
   beforeEach(() => {
@@ -168,7 +135,6 @@ describe("Config and data base directories", () => {
     );
     expect(config.favoritesPath).toBe(path.resolve("./data/favorites.json"));
     expect(config.navigationSettingsPath).toBe(path.resolve("./data/navigation-preferences.json"));
-    expect(config.retiredCatalogPath).toBe(path.resolve("./data/catalog"));
   });
 
   it("relocates the pairing token with CONFIG_DIR", () => {
@@ -192,7 +158,6 @@ describe("Config and data base directories", () => {
     expect(config.favoritesPath).toBe(
       path.join("/tmp/songr-test/data", "favorites.json")
     );
-    expect(config.retiredCatalogPath).toBe(path.join("/tmp/songr-test/data", "catalog"));
     expect(config.navigationSettingsPath).toBe(path.join("/tmp/songr-test/data", "navigation-preferences.json"));
   });
 
@@ -203,7 +168,7 @@ describe("Config and data base directories", () => {
     expect(config.roonTokenPath).toBe(
       path.join("/tmp/songr-test/config", "roon-token.json")
     );
-    expect(config.retiredCatalogPath).toBe(path.resolve("./data/catalog"));
+    expect(config.favoritesPath).toBe(path.resolve("./data/favorites.json"));
   });
 
   it("resolves a relative base dir against the working directory", () => {
@@ -227,7 +192,6 @@ describe("Config and data base directories", () => {
       "/tmp/songr-test/elsewhere/favorites.json"
     );
     // Unoverridden entries still follow the base dir.
-    expect(config.retiredCatalogPath).toBe(path.join("/tmp/songr-test/data", "catalog"));
     expect(config.navigationSettingsPath).toBe(path.join("/tmp/songr-test/data", "navigation-preferences.json"));
   });
 

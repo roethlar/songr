@@ -35,7 +35,7 @@
 		<p class="favorites-empty" data-testid="unified-favorites-loading">Loading favorites…</p>
 	{:else if state.entries.length === 0}
 		<p class="favorites-empty" data-testid="unified-favorites-empty">
-			No favorites yet — add one from a song, album, or Browse action sheet.
+			No favorites yet — choose Favorite from a song’s actions.
 		</p>
 	{:else}
 		<div class="favorites-list" data-testid="unified-favorites-list">
