@@ -13,6 +13,7 @@ export interface AppConfig {
   readonly recentlyPlayedPath: string;
   readonly recentlyPlayedCap: number;
   readonly favoritesPath: string;
+  readonly navigationSettingsPath: string;
   /**
    * Where an earlier install's saved catalog store sits, so it can be removed
    * at start (`src/server/removeRetiredCatalogStore.ts`). Nothing reads or
@@ -343,6 +344,7 @@ export const loadConfig = (): AppConfig => {
     recentlyPlayedPath,
     recentlyPlayedCap,
     favoritesPath,
+    navigationSettingsPath: path.join(dataDir, "navigation-preferences.json"),
     retiredCatalogPath,
     browseCanaryEnabled,
     browseCanaryBaselineP95Ms,

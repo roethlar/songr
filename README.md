@@ -59,13 +59,27 @@ macOS Now Playing panel have not been verified in this repository.
 
 ## Library
 
-The Library combines switchable scopes (Artists / Albums / Genres /
-Recently played / Favorites / Surprise me), a live Browse scope, instant
-palette search, per-scope sorts, and density control. Artist, album, genre,
+The Library includes Artists, Albums, Genres, Tracks, Composers, Tags,
+My Live Radio, Recently played, Favorites and Surprise me, with instant
+search, sorting, filtering and density control. Artist, album, genre,
 composer and track pages carry durable `/library/...` addresses that survive
 a reload, a fresh tab, and Back/Forward.
 
-The Artists tab has a visible **Album artists / All artists** switch. Album
+Open **Settings → Library navigation** to choose the pages on the main row and
+their order; **More** contains the rest. Choices are saved by the current Songr
+server and shared with its desktop and browser clients. The file is
+`DATA_DIR/navigation-preferences.json` (`./data/navigation-preferences.json` by
+default). Docker uses the existing `/app/data` volume; an embedded desktop engine
+uses Electron's userData/data directory. A desktop connected to a remote server
+uses that server's saved choices.
+
+**Recently played** records tracks observed while the connected Songr server
+was running and connected to Roon; it does not import Roon's earlier history.
+Desktop and browser clients of that server share this list. Select a card to
+search its recorded title (or artist when the title is missing), then choose the
+current result. Opening a card does not start playback.
+
+The Artists tab has a compact **Album / All** switch. Album
 artists is the default and groups albums by the exact credit Roon supplies;
 single-album artists stay included, collaboration credits stay together, and
 albums without a credit have their own Unknown album artist group. All artists
@@ -76,9 +90,9 @@ album/track pages can also be bookmarked or opened in a new tab.
 The list heading, count, artist-view switch, and Sort controls stay visible
 below the scope tabs while the list scrolls.
 
-Everything the Library shows comes from Roon's own public Browse API. Songr
-reads nothing from the Core that Roon does not publish, and it holds no
-library data of its own between runs.
+Songr reads the current library through Roon's public Browse API and does
+not retain a separate library catalog. Recently played and Favorites are
+stored by Songr.
 
 ## Upgrading
 

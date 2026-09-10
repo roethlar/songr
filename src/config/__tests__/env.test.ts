@@ -167,6 +167,7 @@ describe("Config and data base directories", () => {
       path.resolve("./data/recently-played.json")
     );
     expect(config.favoritesPath).toBe(path.resolve("./data/favorites.json"));
+    expect(config.navigationSettingsPath).toBe(path.resolve("./data/navigation-preferences.json"));
     expect(config.retiredCatalogPath).toBe(path.resolve("./data/catalog"));
   });
 
@@ -192,6 +193,7 @@ describe("Config and data base directories", () => {
       path.join("/tmp/songr-test/data", "favorites.json")
     );
     expect(config.retiredCatalogPath).toBe(path.join("/tmp/songr-test/data", "catalog"));
+    expect(config.navigationSettingsPath).toBe(path.join("/tmp/songr-test/data", "navigation-preferences.json"));
   });
 
   it("leaves CONFIG_DIR and DATA_DIR independent of each other", () => {
@@ -226,6 +228,7 @@ describe("Config and data base directories", () => {
     );
     // Unoverridden entries still follow the base dir.
     expect(config.retiredCatalogPath).toBe(path.join("/tmp/songr-test/data", "catalog"));
+    expect(config.navigationSettingsPath).toBe(path.join("/tmp/songr-test/data", "navigation-preferences.json"));
   });
 
   it("rejects a blank-but-present base dir the same way as other paths", () => {

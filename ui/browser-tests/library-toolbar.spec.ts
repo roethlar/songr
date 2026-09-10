@@ -36,7 +36,7 @@ test.beforeEach(async ({ page }) => {
 	await expect(page.getByTestId('unified-row').filter({ visible: true }).first()).toBeVisible();
 });
 
-test('root heading and Sort stay pinned, including wrapped scope chips and Touch density', async ({ page }, info) => {
+test('root heading and Sort stay pinned below one-row navigation and Touch density', async ({ page }, info) => {
 	await deepScroll(page);
 	await rawClick(page, 'unified-sort');
 	await expect(page.getByTestId('unified-sort')).toHaveAttribute('aria-expanded', 'true');
@@ -44,10 +44,30 @@ test('root heading and Sort stay pinned, including wrapped scope chips and Touch
 	await expect(page.getByTestId('unified-sort')).toContainText('Z to A');
 	await page.setViewportSize({ width: 390, height: 844 });
 	await page.evaluate(() => window.libraryScrollFixture.setPresentation('dark', 'pi'));
-	await expect.poll(() => page.locator(PANE).evaluate(node =>
-		parseFloat(getComputedStyle(node).getPropertyValue('--library-scopes-height'))
-	)).toBeGreaterThan(100);
+	// Width changes move pages into More; the navigation remains one row.
+	// Its measured height must still feed the sticky heading's clearance.
+	await expect(page.getByTestId('unified-scope-more')).toBeInViewport();
+	await expect.poll(() => page.locator(PANE).evaluate(node => {
+		const nav = node.querySelector<HTMLElement>('nav.scopes')!;
+		return Math.abs(parseFloat(getComputedStyle(node).getPropertyValue('--library-scopes-height'))
+			- nav.getBoundingClientRect().height);
+	})).toBeLessThan(1);
+	const navigation = await page.getByRole('navigation', { name: 'Library scope' }).evaluate(node => {
+		const bounds = node.getBoundingClientRect();
+		const buttons = Array.from(node.querySelectorAll<HTMLElement>('.scope-navigation > .sc:not(.scope-measure)'));
+		return { count: buttons.length, oneRow: buttons.every(button => {
+			const rect = button.getBoundingClientRect();
+			return Math.abs(rect.top - buttons[0].getBoundingClientRect().top) <= 1
+				&& rect.left >= bounds.left && rect.right <= bounds.right && rect.height >= 44;
+		}) };
+	});
+	expect(navigation.count).toBeGreaterThan(1);
+	expect(navigation.oneRow).toBe(true);
 	await deepScroll(page);
+	await rawClick(page, 'unified-scope-more');
+	await expect(page.getByRole('menu', { name: 'More library pages' })).toBeInViewport();
+	await expect(page.getByTestId('unified-scope-tracks')).toBeInViewport();
+	await page.keyboard.press('Escape');
 	await rawClick(page, 'unified-sort');
 	await expect(page.getByTestId('unified-sort-option-az')).toBeInViewport();
 	await rawClick(page, 'unified-sort-option-az');

@@ -26,6 +26,7 @@ export interface BrowseSessionLimits {
   maxActionsPerCore: number;
   maxPhysicalSessionsPerCore: number;
   maxPublishedItemKeysPerRole: number;
+  maxPublishedBrowseCollectionItemKeys: number;
   maxPublishedCatalogItemKeys: number;
   modeIdleMs: number;
   disconnectGraceMs: number;
@@ -50,6 +51,11 @@ export const DEFAULT_BROWSE_SESSION_LIMITS: Readonly<BrowseSessionLimits> =
     maxActionsPerCore: 4,
     maxPhysicalSessionsPerCore: DEFAULT_ACTIVE_SESSION_CAPACITY * 2,
     maxPublishedItemKeysPerRole: 8_192,
+    // Classic Browse loads up to 100,000 collection rows for local sorting.
+    // Preserve all their exact tokens, plus the ordinary role allowance for
+    // ancestor rows and action lists. Root resets/refreshes reclaim the whole
+    // generation; a full generation refuses new rows instead of evicting them.
+    maxPublishedBrowseCollectionItemKeys: 100_000,
     // The catalog channel publishes whole library roots at once, so its bound
     // is a library size rather than a page size. Measured on the owner's Core
     // 2026-09-03 (`.agents/state.md`): 5,584 rows for both roots cost 2.08 MB
@@ -712,7 +718,7 @@ export class BrowseSessionCoordinator {
     const channel = this.resolveClassicChannel(access, role);
     return this.replacePublishedItems(channel, authorityGeneration, items, {
       tokenPrefix: "classic-item",
-      limit: this.limits.maxPublishedItemKeysPerRole,
+      limit: this.classicPublishedItemLimit(channel),
       staleMessage: "A newer Classic result generation replaced this query",
       backpressureMessage:
         "The Classic result exceeds the item-key authority limit",
@@ -872,8 +878,21 @@ export class BrowseSessionCoordinator {
         .map((item) => item.itemKey)
         .filter((itemKey): itemKey is string => typeof itemKey === "string" && itemKey.length > 0)
     );
-    if (distinctRawKeys.size > this.limits.maxPublishedItemKeysPerRole) {
+    const limit = this.classicPublishedItemLimit(channel);
+    if (distinctRawKeys.size > limit) {
       throw this.backpressure("The Classic result exceeds the item-key authority limit");
+    }
+    if (role === "classic-browse") {
+      const retained = channel.publishedItemKeys?.rawToToken;
+      let combinedCount = retained?.size ?? 0;
+      for (const raw of distinctRawKeys) {
+        if (!retained?.has(raw)) combinedCount += 1;
+      }
+      // Refuse the whole page before refreshing descriptors or minting any
+      // tokens. Every earlier row remains usable even after a rejected page.
+      if (combinedCount > limit) {
+        throw this.backpressure("The Classic collection exceeds the item-key authority limit");
+      }
     }
     return {
       ...result,
@@ -2094,6 +2113,11 @@ export class BrowseSessionCoordinator {
     return channel;
   }
 
+  private classicPublishedItemLimit(channel: ChannelRecord): number {
+    return this.limits.maxPublishedItemKeysPerRole + (channel.role === "classic-browse"
+      ? this.limits.maxPublishedBrowseCollectionItemKeys : 0);
+  }
+
   private publishClassicItemKey(
     channel: ChannelRecord,
     raw: string,
@@ -2119,7 +2143,12 @@ export class BrowseSessionCoordinator {
       }
       return existing;
     }
-    while (authority.tokenToRaw.size >= this.limits.maxPublishedItemKeysPerRole) {
+    if (channel.role === "classic-browse" &&
+        authority.tokenToRaw.size >= this.classicPublishedItemLimit(channel)) {
+      throw this.backpressure("The Classic collection exceeds the item-key authority limit");
+    }
+    while (channel.role !== "classic-browse" &&
+           authority.tokenToRaw.size >= this.limits.maxPublishedItemKeysPerRole) {
       const oldestToken = authority.tokenToRaw.keys().next().value;
       if (!oldestToken) break;
       const oldestRaw = authority.tokenToRaw.get(oldestToken);
@@ -2462,6 +2491,10 @@ export class BrowseSessionCoordinator {
       if (!Number.isSafeInteger(value) || value <= 0) {
         throw new Error(`Browse session limit ${name} must be a positive integer`);
       }
+    }
+    if (!Number.isSafeInteger(limits.maxPublishedItemKeysPerRole +
+        limits.maxPublishedBrowseCollectionItemKeys)) {
+      throw new Error("The combined Classic collection authority limit must be a safe integer");
     }
     return limits;
   }

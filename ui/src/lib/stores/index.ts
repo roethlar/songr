@@ -62,6 +62,8 @@ import { loadZones } from './zonesStore';
 import { loadRecentlyPlayed } from './recentlyPlayedStore';
 import { loadFavorites } from './favoritesStore';
 import { loadHealth } from './healthStore';
+import { loadNavigationSettings } from './navigationSettingsStore';
+export { navigationSettingsStore, loadNavigationSettings, applyNavigationSettings } from './navigationSettingsStore';
 
 export async function initializeStores(fetchFn: typeof fetch): Promise<void> {
 	await Promise.all([
@@ -69,6 +71,7 @@ export async function initializeStores(fetchFn: typeof fetch): Promise<void> {
 		loadZones(fetchFn),
 		loadRecentlyPlayed(fetchFn),
 		loadFavorites(fetchFn),
-		loadHealth(fetchFn)
+		loadHealth(fetchFn),
+		loadNavigationSettings(fetchFn)
 	]);
 }

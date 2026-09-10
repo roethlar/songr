@@ -21,6 +21,8 @@ vi.mock('../../stores/libraryRootsStore', () => ({
 
 import { registerSocketHandlers } from '../register';
 import { coreDiscoveryStore, resetCoreDiscovery } from '../../stores/coreDiscoveryStore';
+import { navigationSettingsStore } from '../../stores/navigationSettingsStore';
+import { DEFAULT_NAVIGATION_SETTINGS, NAVIGATION_SETTINGS_EVENT } from '@shared/navigationSettings';
 
 // A minimal fake socket that records on/off registrations and lets tests
 // fire events synchronously. Mirrors only the surface `register.ts` uses.
@@ -84,6 +86,7 @@ beforeEach(() => {
 	}));
 	setSocketStatus('connecting');
 	resetCoreDiscovery();
+	navigationSettingsStore.reset();
 	clearCommandFeedback();
 	retirementSpies.classic.mockClear();
 	retirementSpies.library.mockClear();
@@ -243,5 +246,22 @@ describe('registerSocketHandlers — connectivity transitions', () => {
 			generation: 4
 		});
 		expect(retirementSpies.library).toHaveBeenCalledWith(libraryEvent);
+	});
+});
+
+
+describe('shared navigation socket updates', () => {
+	it('hydrates navigation on reconnect and forwards newer events until cleanup', async () => {
+		const server = { ...DEFAULT_NAVIGATION_SETTINGS, revision: 2, pinned: ['favorites'] };
+		(globalThis.fetch as any) = vi.fn(async (url: string) => ({ ok: true, json: async () => url === '/api/settings/navigation' ? server : { status: 'paired', zones: [] } }));
+		cleanup = registerSocketHandlers(); fakeSocket.fire('connect');
+		await vi.waitFor(() => expect(get(navigationSettingsStore).snapshot?.revision).toBe(2));
+		fakeSocket.fire(NAVIGATION_SETTINGS_EVENT, { ...server, revision: 3, pinned: ['surprise'] });
+		expect(get(navigationSettingsStore).snapshot?.pinned).toEqual(['surprise']);
+		fakeSocket.fire(NAVIGATION_SETTINGS_EVENT, { ...server, revision: 4, extra: true });
+		expect(get(navigationSettingsStore).snapshot?.revision).toBe(3);
+		cleanup(); expect(fakeSocket.listenerCount(NAVIGATION_SETTINGS_EVENT)).toBe(0);
+		fakeSocket.fire(NAVIGATION_SETTINGS_EVENT, { ...server, revision: 5 });
+		expect(get(navigationSettingsStore).snapshot?.revision).toBe(3);
 	});
 });

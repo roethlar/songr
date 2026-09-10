@@ -1,6 +1,7 @@
 import { fileURLToPath, URL } from 'node:url';
 
 import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { artworkFixtureServer } from './artworkServer';
 import { defineConfig, type Plugin } from 'vite';
 
 
@@ -12,8 +13,11 @@ const libraryRouteFixture: Plugin = {
 	configureServer(server) {
 		server.middlewares.use((request, _response, next) => {
 			if (request.url) {
-				const pathname = new URL(request.url, 'http://fixture.invalid').pathname;
-				if (pathname === '/library' || pathname.startsWith('/library/')) {
+				const url = new URL(request.url, 'http://fixture.invalid');
+				const pathname = url.pathname;
+				if (url.searchParams.get('shell') === '1') {
+					request.url = '/fixtures/app-shell.html';
+				} else if (pathname === '/library' || pathname.startsWith('/library/')) {
 					request.url = '/fixtures/library-scroll.html';
 				}
 			}
@@ -29,7 +33,7 @@ const libraryRouteFixture: Plugin = {
 // specs from disk.
 export default defineConfig({
 	root: fileURLToPath(new URL('.', import.meta.url)),
-	plugins: [libraryRouteFixture, svelte()],
+	plugins: [libraryRouteFixture, artworkFixtureServer(), svelte()],
 	resolve: {
 		alias: {
 			'$app/environment': fileURLToPath(

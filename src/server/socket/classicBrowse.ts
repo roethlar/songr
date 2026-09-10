@@ -197,7 +197,10 @@ export function registerClassicBrowseSocket(
         async (session): Promise<BrowseResult | SearchResult[]> => {
           if (request.operation === "browse") {
             const options = request.options as ClassicBrowseOptions;
-            const result = await session.browse({
+            // Resolve the selected row while its old authority still exists.
+            // A reset/refresh can recycle native Roon keys, so no token from
+            // that prior list may survive the operation, even if it fails.
+            const resolved = {
               ...options,
               ...(options.itemKey
                 ? {
@@ -208,7 +211,11 @@ export function registerClassicBrowseSocket(
                     ),
                   }
                 : {}),
-            });
+            };
+            if (options.popAll === true || options.refresh === true) {
+              coordinator.beginClassicPublishedItems(access, request.role);
+            }
+            const result = await session.browse(resolved);
             return coordinator.publishClassicBrowseResult(access, request.role, result);
           }
           if (request.operation === "load") {
@@ -228,7 +235,11 @@ export function registerClassicBrowseSocket(
             return coordinator.publishClassicBrowseResult(access, request.role, result);
           }
           if (request.operation === "pop") {
-            const result = await session.pop(request.options as ClassicBrowsePopOptions);
+            const options = request.options as ClassicBrowsePopOptions;
+            if (options.refresh === true) {
+              coordinator.beginClassicPublishedItems(access, request.role);
+            }
+            const result = await session.pop(options);
             return coordinator.publishClassicBrowseResult(access, request.role, result);
           }
           return browseService.searchCoordinated(

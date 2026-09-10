@@ -275,10 +275,11 @@ test('palette composer keeps live composition and recording addresses and cancel
 	await expectLiveCollection(page, 'composer', 'Philip Glass');
 	await page
 		.getByTestId('unified-live-collection-page')
-		.getByRole('button', { name: '← Browse' })
+		.getByRole('button', { name: '← Library' })
 		.click();
 	await expect(page.getByTestId('unified-live-collection-page')).toHaveCount(0);
-	await expect(page.getByTestId('unified-scope-browse')).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.getByTestId('unified-pane')).toHaveAttribute('data-scope', 'browse');
+	await expect(page.getByTestId('unified-scope-browse')).toHaveCount(0);
 	await expect
 		.poll(() => page.evaluate(() => window.libraryScrollFixture.actionExecutions))
 		.toBe(0);

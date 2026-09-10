@@ -1,4 +1,9 @@
 <script lang="ts">
+	import { libraryDestinationsStore } from '$lib/stores/libraryDestinationsStore';
+	import { createDefaultLibraryDestinationInventory, resolveLibraryDestination, DEFAULT_PUBLIC_LIBRARY_DESTINATIONS, identifyLibraryDestination, isLibraryDestinationRoot, filterSortLibraryCollection, filterRedundantBrowseItems, type LibraryDestinationInventory, type LibraryDestination, type LibraryCollectionSort } from '$lib/library/LibraryDestinations';
+	import LibraryScopeNavigation from './LibraryScopeNavigation.svelte';
+	import { navigationSettingsStore } from '$lib/stores/navigationSettingsStore';
+	import { DEFAULT_NAVIGATION_SETTINGS, type NavigationDestinationId } from '@shared/navigationSettings';
 	import RetainedLibraryPanel from './RetainedLibraryPanel.svelte';
 	import { getContext, onMount, tick, untrack } from 'svelte';
 	import { get } from 'svelte/store';
@@ -16,6 +21,7 @@
 	import {
 		buildUnifiedLibraryPageState,
 		type BrowseBreadcrumb,
+		type BrowseHistorySnapshot,
 		type UnifiedItemDetailTarget,
 		type UnifiedItemTarget,
 		type UnifiedLibraryDrillTarget,
@@ -107,6 +113,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	import type { LibraryIntent } from '$lib/libraryIntent';
 	import { parseCountFilter } from '$lib/unifiedSmartFilters';
 	import { loadRecentlyPlayed, recentlyPlayedStore } from '$lib/stores/recentlyPlayedStore';
+	import type { RecentlyPlayedEntry } from '@shared/types';
 	import { zonesStore } from '$lib/stores/zonesStore';
 	import { selectedZoneStore } from '$lib/stores/selectedZoneStore';
 	import { getSocket } from '$lib/socket/client';
@@ -158,6 +165,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	import type {
 		AddFavoriteRequest,
 		BrowseItem,
+		BrowseResult,
 		FavoriteEntry,
 		FavoriteType,
 		SearchResult
@@ -170,7 +178,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	import UnifiedPalette from './UnifiedPalette.svelte';
 	import UnifiedTrackPage from './UnifiedTrackPage.svelte';
 	import UnifiedBrowseView from './UnifiedBrowseView.svelte';
-	import UnifiedBrowseActionSheet from './UnifiedBrowseActionSheet.svelte';
+	import UnifiedPublicEntityPage from './UnifiedPublicEntityPage.svelte';
+	import { classifyBrowsePage, type BrowseRowActions } from '$lib/library/browsePresentation';
 	import UnifiedFavoritesView from './UnifiedFavoritesView.svelte';
 	import './unified-surface.css';
 	import { version as uiBuildRevision } from '$app/environment';
@@ -200,7 +209,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		{ id: 'artists', label: 'Artists' },
 		{ id: 'albums', label: 'Albums' },
 		{ id: 'genres', label: 'Genres' },
-		{ id: 'browse', label: 'Browse' },
 		{ id: 'recently-played', label: 'Recently played' },
 		{ id: 'favorites', label: 'Favorites' }
 	];
@@ -326,6 +334,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	let {
 		sessionClient = classicBrowseSessionClient,
 		prefsStore = unifiedLibraryPrefsStore,
+		navigationPrefsStore = navigationSettingsStore,
+		destinationsStore = libraryDestinationsStore,
 		genresStore = unifiedGenresStore,
 		composersStore = unifiedComposersStore,
 		paletteSearchStore = unifiedPaletteSearchStore,
@@ -356,6 +366,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	}: {
 		sessionClient?: typeof classicBrowseSessionClient;
 		prefsStore?: typeof unifiedLibraryPrefsStore;
+		navigationPrefsStore?: typeof navigationSettingsStore;
+		destinationsStore?: typeof libraryDestinationsStore;
 		genresStore?: typeof unifiedGenresStore;
 		composersStore?: typeof unifiedComposersStore;
 		paletteSearchStore?: typeof unifiedPaletteSearchStore;
@@ -490,8 +502,10 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	let paletteSelectedRowId = $state<string | null>(null);
 	let selectedSong = $state<PaletteSearchRow | null>(null);
 	let browseActionFromPalette = $state(false);
-	let browseFavoriteBusy = $state(false);
-	let browseFavoriteStatus = $state<string | null>(null);
+	let inlineTrackAction = $state<{ busy: boolean; status: string | null; error: boolean } | null>(null);
+	let inlineTrackGesture = 0;
+	let inlineTrackOwner = $state.raw<{ kind: 'browse' | 'search'; result: object; claimEpoch: number; query?: string } | null>(null);
+	let browseMenuItem = $state.raw<BrowseItem | null>(null);
 	let songFavoriteBusy = $state(false);
 	let songFavoriteStatus = $state<string | null>(null);
 	let favoriteMutationBusy = $state(false);
@@ -546,7 +560,11 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	 * a tab switch is indistinguishable from starting over.
 	 */
 	const scopeScrollTops = new Map<string, number>();
-	function listScrollKey(nextScope = scope, nextView = artistView, credit = albumCredit): string {
+	function listScrollKey(nextScope = scope, nextView = artistView, credit = albumCredit, browseSnapshot = browseState.snapshot): string {
+		if (nextScope === 'browse') {
+			const destination = destinationInventory?.destinations.find(item => isLibraryDestinationRoot(browseSnapshot, item));
+			return destination ? `collection:${destination.id}` : `browse:${JSON.stringify(browseSnapshot.history)}`;
+		}
 		return nextScope !== 'artists' ? nextScope : credit !== null
 			? `album-credit:${albumCreditKey(credit)}` : `artists:${nextView}`;
 	}
@@ -659,10 +677,98 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	/**
 	 * The chip row: Recently added exists only while date features do.
 	 */
-	const scopeChips = $derived.by((): readonly ScopeChip[] => [
-		...LEADING_SCOPE_CHIPS,
-		SURPRISE_CHIP
+	const destinationInventory = $derived.by((): LibraryDestinationInventory => {
+		const current = $destinationsStore.inventory ?? createDefaultLibraryDestinationInventory();
+		const ids = [...new Set([
+			...DEFAULT_PUBLIC_LIBRARY_DESTINATIONS.map(destination => destination.id),
+			...current.destinations.map(destination => destination.id),
+			...($navigationPrefsStore.snapshot?.order ?? []).filter(id => id.startsWith('public:'))
+		])];
+		return { ...current, destinations: ids.flatMap(id => resolveLibraryDestination(id, current) ?? []) };
+	});
+	const navigationOrder = $derived([...new Set([
+		...($navigationPrefsStore.snapshot ?? DEFAULT_NAVIGATION_SETTINGS).order,
+		...destinationInventory.destinations.map(destination => destination.id)
+	])]);
+	const scopeChips = $derived([
+		...LEADING_SCOPE_CHIPS, SURPRISE_CHIP,
+		...(destinationInventory?.destinations ?? [])
 	]);
+	let destinationConnectionEpoch = $state(0);
+	let pendingDestination = $state<LibraryDestination | null>(null);
+	const activeNavigationId = $derived(scope !== 'browse' ? scope as NavigationDestinationId
+		: pendingDestination?.id ?? (destinationInventory ? identifyLibraryDestination(browseState.snapshot, destinationInventory) : 'browse'));
+	const collectionRoot = $derived(scope === 'browse' && itemTarget === null
+		? pendingDestination ?? destinationInventory?.destinations.find(destination => isLibraryDestinationRoot(browseState.snapshot, destination)) ?? null
+		: null);
+	let collectionChoices = $state<Record<string, { filter: string; sort: LibraryCollectionSort; limit: number }>>({});
+	const collectionChoice = $derived(collectionChoices[collectionRoot?.id ?? ''] ?? { filter: '', sort: 'original', limit: 100 });
+	const completeCollection = $derived(collectionRoot && browseState.phase === 'ready' && browseState.result
+		&& Number.isSafeInteger(browseState.result.totalCount) && browseState.result.offset === 0
+		&& browseState.result.count === browseState.result.totalCount
+		&& browseState.result.items.length === browseState.result.totalCount && !browseState.result.isError
+		&& (!browseState.result.action || browseState.result.action === 'list') && browseState.result.message === undefined
+		&& browseState.result.listHint !== 'action_list'
+		? { snapshot: browseState.snapshot, result: browseState.result, items: browseState.result.items,
+			totalCount: browseState.result.totalCount, complete: true } : null);
+	const browsePresentation = $derived(classifyBrowsePage(browseState, collectionRoot?.id));
+	const collectionMatches = $derived(completeCollection ? filterSortLibraryCollection({
+		...completeCollection, items: [...browsePresentation.contentItems], totalCount: browsePresentation.contentItems.length
+	}, collectionChoice) : null);
+	const genericBrowseItems = $derived(!collectionRoot && browseState.result
+		? filterRedundantBrowseItems(browseState.snapshot, browseState.result.items, destinationInventory) : undefined);
+	const completeReadResults = new WeakSet<BrowseResult>();
+	$effect(() => {
+		const inventory = destinationInventory;
+		navigationPrefsStore.setAvailableDestinations([...LEADING_SCOPE_CHIPS.map(item => item.id as NavigationDestinationId),
+			'surprise', ...(inventory?.destinations.map(item => item.id) ?? [])]);
+	});
+	$effect(() => {
+		destinationConnectionEpoch;
+		const coreId = $coreStore.core?.id ?? roots.coreId;
+		const zoneId = sheetZones[0]?.zoneId;
+		if (!resumed || !$corePairedStore || !coreId || !getSocketClient()?.connected) return;
+		untrack(() => { void destinationsStore.load(zoneId); });
+		return () => destinationsStore.reset();
+	});
+	$effect(() => {
+		if (browseState.phase === 'ready') pendingDestination = null;
+		const root = collectionRoot;
+		if (!root || browseState.phase !== 'ready' || !browseState.result || completeCollection ||
+			browseState.result.message !== undefined || browseState.result.isError || browseState.result.listHint === 'action_list' ||
+			(browseState.result.action !== undefined && browseState.result.action !== 'list')) return;
+		if (!Number.isSafeInteger(browseState.result.totalCount) || browseState.result.offset !== 0 ||
+			browseState.result.count !== browseState.result.totalCount ||
+			browseState.result.items.length >= (browseState.result.totalCount ?? 0)) return;
+		if (completeReadResults.has(browseState.result)) return;
+		completeReadResults.add(browseState.result);
+		untrack(() => reloadCollection(root));
+	});
+	function restoreBrowsePage(activeClaim: ClassicBrowseSessionClaim, snapshot: BrowseHistorySnapshot): Promise<boolean> {
+		const destination = destinationInventory.destinations.find(item => isLibraryDestinationRoot(snapshot, item));
+		pendingDestination = destination ?? null;
+		return destination
+			? browseController.restore(activeClaim, snapshot, sheetZones[0]?.zoneId, { complete: true })
+			: browseController.restore(activeClaim, snapshot, sheetZones[0]?.zoneId);
+	}
+	function reloadCollection(destination: LibraryDestination): void {
+		const activeClaim = claim;
+		if (!activeClaim || !getSocketClient()?.connected) return;
+		pendingDestination = destination;
+		void browseController.restore(activeClaim, destination.snapshot, sheetZones[0]?.zoneId, { complete: true })
+			.then(restored => { if (restored && claim === activeClaim && scope === 'browse') replaceLibraryPageState(unifiedSemanticState()); });
+	}
+	function selectNavigationDestination(id: NavigationDestinationId): void {
+		const destination = destinationInventory?.destinations.find(item => item.id === id);
+		if (destination) setScope('browse', destination.snapshot, true);
+		else if (id === 'browse') setScope('browse', destinationInventory?.fallback.snapshot);
+		else if (scopeChips.some(item => item.id === id)) setScope(id as UnifiedLibraryScope);
+	}
+	function changeCollectionChoice(change: Partial<{ filter: string; sort: LibraryCollectionSort; limit: number }>): void {
+		if (!collectionRoot) return;
+		collectionChoices[collectionRoot.id] = { ...collectionChoice, ...change };
+	}
+
 	/**
 	 * A persisted chronological sort outlives the surface that could perform it.
 	 *
@@ -2001,7 +2107,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			return (
 				itemTarget?.kind === 'live' &&
 				livePage.phase === 'ready' &&
-				sameLibraryRef(livePage.target?.ref, intent.ref)
+				sameLibraryRef(intent.trackIndex == null ? livePage.target?.ref : livePage.level?.rows[intent.trackIndex]?.ref, intent.ref)
 			);
 		}
 		const live = sheetState.live;
@@ -2216,6 +2322,23 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		if (intent !== null) startSheetAction(intent);
 	}
 
+	function closeLiveRowMore(): void {
+		sheetActionGesture += 1;
+		sheetActionAttempt = null;
+		retrySheetActionIntent = null;
+		sheetActionRetryAvailable = false;
+		sheetActionController.cancel();
+	}
+
+	function beginLiveRowAction(row: LibraryLevelRow, semantic: UnifiedSongActionSemantic | null): void {
+		if (!getSocketClient()?.connected || itemTarget?.kind !== 'live' ||
+			livePage.phase !== 'ready' || actionZoneId === null) return;
+		const index = livePage.level?.rows.indexOf(row) ?? -1;
+		if (index < 0 || (row.kind !== 'track' && row.kind !== 'action')) return;
+		const intent = referenceIntent(row.ref, actionZoneId, semantic, 'live-collection', index);
+		if (intent !== null) startSheetAction(intent);
+	}
+
 	function maybeLoadScopeData(next: UnifiedLibraryScope): void {
 		// Genres page on the classic-explore role and needs the claim;
 		// recently played is a plain REST fetch. All are
@@ -2232,19 +2355,20 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		}
 	}
 
-	function setScope(next: UnifiedLibraryScope): void {
+	function setScope(next: UnifiedLibraryScope, browseSnapshot = browseState.snapshot, complete = false): void {
+		if (next === 'browse' && (!claim || !getSocketClient()?.connected)) return;
 		const nextArtistView = next === 'artists' ? prefs.artistView : 'all-artists';
 		const destination = buildUnifiedLibraryPageState({
 			scope: next, artistView: nextArtistView, albumCredit: null,
 			collectionDrill: null, itemTarget: null, filterText: '', density: prefs.density,
 			surpriseSeed: next === 'surprise' ? surpriseSeed + 1 : null,
-			...(nextArtistView === 'album-artists' ? {} : { browseHistory: browseState.snapshot })
+			...(nextArtistView === 'album-artists' ? {} : { browseHistory: browseSnapshot })
 		});
 		if (!preflightLibraryPageState(destination)) return;
-		if (next !== 'browse' && pushLibraryPageState(destination) === 'refused') return;
-		browseActionController.reset();
+		if ((next !== 'browse' || complete) && pushLibraryPageState(destination) === 'refused') return;
+		pendingDestination = next === 'browse' ? destinationInventory?.destinations.find(item => isLibraryDestinationRoot(browseSnapshot, item)) ?? null : null;
+		resetBrowseActions();
 		browseActionFromPalette = false;
-		browseFavoriteStatus = null;
 		favoritesStatus = null;
 		if (next === 'surprise') surpriseSeed += 1;
 		// Re-selecting the active Shuffle chip explicitly requests a new order.
@@ -2271,7 +2395,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			const leavingTop = itemTarget !== null ? itemReturnScrollTop : (pane?.scrollTop ?? 0);
 			scopeScrollTops.set(listScrollKey(), leavingTop);
 		}
-		const restoreTop = scopeScrollTops.get(listScrollKey(next, nextArtistView, null)) ?? 0;
+		const restoreTop = scopeScrollTops.get(listScrollKey(next, nextArtistView, null, browseSnapshot)) ?? 0;
 		scope = next;
 		railTarget = null;
 		filterText = '';
@@ -2288,15 +2412,21 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		if (next === 'browse') {
 			const activeClaim = claim;
 			if (!activeClaim) return;
-			void browseController.restore(activeClaim, browseState.snapshot, sheetZones[0]?.zoneId).then(
+			void browseController.restore(activeClaim, browseSnapshot, sheetZones[0]?.zoneId, { complete }).then(
 				(restored) => {
 					if (restored && claim === activeClaim && scope === 'browse') {
-						pushUnifiedSemanticState();
+						if (complete) replaceLibraryPageState(unifiedSemanticState());
+						else pushUnifiedSemanticState();
+						restorePaneScrollTop(restoreTop);
 					}
 				}
 			);
 			return;
 		}
+	}
+
+	function findRecentTrack(entry: RecentlyPlayedEntry): void {
+		openPalette(entry.title?.trim() || entry.artist?.trim() || '');
 	}
 
 	function activateFavorite(favorite: FavoriteEntry): void {
@@ -2390,9 +2520,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			resetItemPage(false);
 			restorePaletteArtistListReturnContext();
 		}
-		browseActionController.reset();
+		resetBrowseActions();
 		browseActionFromPalette = false;
-		browseFavoriteStatus = null;
 		classicSearchOwnerGeneration += 1;
 		paletteQuery = seedText;
 		paletteSelectedRowId = null;
@@ -2580,19 +2709,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		resetSongRelationship();
 	}
 
-	function favoriteTypeFor(item: BrowseItem): FavoriteType | null {
-		const resultType = (item as BrowseItem & { resultType?: SearchResult['resultType'] })
-			.resultType;
-		if (resultType === 'track' || resultType === 'album' || resultType === 'artist') {
-			return resultType;
-		}
-		const token = `${item.itemType ?? ''} ${item.hint ?? ''}`.toLowerCase();
-		if (token.includes('track') || token.includes('song')) return 'track';
-		if (token.includes('album')) return 'album';
-		if (token.includes('artist')) return 'artist';
-		return null;
-	}
-
 	function favoritePayload(item: BrowseItem, type: FavoriteType): AddFavoriteRequest {
 		return {
 			type,
@@ -2600,34 +2716,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			...(type !== 'artist' && item.subtitle ? { artist: item.subtitle } : {}),
 			...(item.imageKey ? { image_key: item.imageKey } : {})
 		};
-	}
-
-	function favoriteTypeForSource(source: UnifiedBrowseActionSource): FavoriteType | null {
-		const direct = favoriteTypeFor(source.item);
-		if (direct || source.kind !== 'browse') return direct;
-		const category = source.snapshot.history.at(-1)?.breadcrumb.title.trim().toLowerCase();
-		if (category === 'tracks' || category === 'songs') return 'track';
-		if (category === 'albums') return 'album';
-		if (category === 'artists') return 'artist';
-		return null;
-	}
-
-	async function favoriteBrowseAction(): Promise<void> {
-		const source = browseActionState.source;
-		const item = source?.item;
-		const type = source ? favoriteTypeForSource(source) : null;
-		if (!item || !type || browseFavoriteBusy) return;
-		browseFavoriteBusy = true;
-		browseFavoriteStatus = null;
-		try {
-			await addFavoriteData(fetchFn, favoritePayload(item, type));
-			browseFavoriteStatus = 'Added to favorites.';
-		} catch (error) {
-			browseFavoriteStatus =
-				error instanceof Error ? error.message : 'Could not add this favorite.';
-		} finally {
-			browseFavoriteBusy = false;
-		}
 	}
 
 	async function favoriteSong(): Promise<void> {
@@ -2653,7 +2741,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 
 	function publishBrowseStateAfter(restored: boolean, activeClaim: ClassicBrowseSessionClaim): void {
 		if (restored && claim === activeClaim && scope === 'browse') {
-			resetPaneAfterRender();
+			restorePaneScrollTop(scopeScrollTops.get(listScrollKey()) ?? 0);
 			pushUnifiedSemanticState();
 		}
 	}
@@ -2664,23 +2752,150 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		}
 	}
 
-	function openBrowseAction(item: BrowseItem): void {
-		const activeClaim = claim;
-		if (!activeClaim) return;
-		browseActionFromPalette = false;
-		browseFavoriteBusy = false;
-		browseFavoriteStatus = null;
-		void browseActionController.open(
-			activeClaim,
-			{
-				kind: 'browse',
-				snapshot: browseState.snapshot,
-				item,
-				restoreCount: browseState.result?.items.length
-			},
-			actionZoneId ?? undefined
-		);
+	function resetBrowseActions(): void {
+		inlineTrackGesture += 1;
+		inlineTrackAction = null;
+		inlineTrackOwner = null;
+		browseMenuItem = null;
+		browseActionController.reset();
 	}
+
+	function inlineActionOwnerCurrent(): boolean {
+		const owner = inlineTrackOwner;
+		if (!owner || owner.claimEpoch !== claimEpoch || !resumed) return false;
+		return owner.kind === 'search'
+			? paletteOpen && paletteQuery.trim() === owner.query && $paletteSearchStore === owner.result
+			: scope === 'browse' && itemTarget === null && browseState.result === owner.result;
+	}
+
+	$effect(() => {
+		if (inlineTrackOwner && !inlineActionOwnerCurrent()) untrack(resetBrowseActions);
+	});
+
+	function actionSource(item: BrowseItem, query?: string): UnifiedBrowseActionSource | null {
+		if (!getSocketClient()?.connected || !claim || !browseItemOpensActions(item)) return null;
+		if (query !== undefined) {
+			const current = get(paletteSearchStore);
+			if (!paletteOpen || current.query !== query || paletteQuery.trim() !== query ||
+				!current.browseGroups?.some(group => group.rows.includes(item as SearchResult))) return null;
+			return { kind: 'search', query, item: item as SearchResult };
+		}
+		const result = browseState.result;
+		if (browseState.phase !== 'ready' || !result?.items.includes(item) || !item.itemKey) return null;
+		return { kind: 'browse', snapshot: browseState.snapshot, item, restoreCount: result.items.length };
+	}
+
+	function ownInlineAction(source: UnifiedBrowseActionSource): void {
+		inlineTrackOwner = source.kind === 'search'
+			? { kind: 'search', result: get(paletteSearchStore), query: source.query, claimEpoch }
+			: { kind: 'browse', result: browseState.result!, claimEpoch };
+		browseActionFromPalette = source.kind === 'search';
+	}
+
+	async function beginInlineTrackAction(
+		item: BrowseItem, semantic: UnifiedSongActionSemantic, query?: string
+	): Promise<void> {
+		const activeClaim = claim, zoneId = actionZoneId;
+		const source = actionSource(item, query);
+		if (!activeClaim || !zoneId || !source || inlineTrackAction?.busy) return;
+		resetBrowseActions();
+		ownInlineAction(source);
+		const gesture = inlineTrackGesture;
+		const current = () => gesture === inlineTrackGesture && claim === activeClaim &&
+			actionZoneId === zoneId && inlineActionOwnerCurrent() && Boolean(getSocketClient()?.connected);
+		inlineTrackAction = { busy: true, status: `Loading actions for “${item.title}”…`, error: false };
+		const opened = await browseActionController.open(activeClaim, source, zoneId);
+		if (!current()) { if (gesture === inlineTrackGesture) resetBrowseActions(); return; }
+		if (!opened || !get(browseActionController).available[semantic]) {
+			inlineTrackAction = { busy: false, error: true,
+				status: get(browseActionController).error ?? `This action is unavailable for “${item.title}”.` };
+			browseActionController.reset(); return;
+		}
+		inlineTrackAction = { busy: true, status: `Sending action for “${item.title}”…`, error: false };
+		const executed = await browseActionController.execute(activeClaim, semantic, zoneId);
+		if (!current()) { if (gesture === inlineTrackGesture) resetBrowseActions(); return; }
+		const success = semantic === 'queue' ? 'Queued' : semantic === 'add-next' ? 'Added next' : 'Playing';
+		inlineTrackAction = { busy: false, error: !executed,
+			status: executed ? `${success}: ${item.title}` : get(browseActionController).error ?? `Could not act on “${item.title}”.` };
+		browseActionController.reset();
+	}
+
+	async function openInlineMore(item: BrowseItem, query?: string): Promise<void> {
+		const activeClaim = claim, source = actionSource(item, query);
+		if (!activeClaim || !source || inlineTrackAction?.busy) return;
+		resetBrowseActions();
+		ownInlineAction(source);
+		browseMenuItem = item;
+		inlineTrackAction = { busy: false, status: null, error: false };
+		await browseActionController.open(activeClaim, source, actionZoneId ?? undefined);
+	}
+
+	async function chooseInlineAction(item: BrowseItem): Promise<void> {
+		const activeClaim = claim, zoneId = actionZoneId;
+		if (!activeClaim || !zoneId || !browseMenuItem || !inlineActionOwnerCurrent() ||
+			!getSocketClient()?.connected || browseActionState.phase !== 'ready') return;
+		const gesture = inlineTrackGesture;
+		if (item.hint === 'action_list' && !item.isPlayable) {
+			await browseActionController.openActionList(activeClaim, item, zoneId);
+			return;
+		}
+		const title = browseMenuItem.title;
+		const executed = await browseActionController.executeItem(activeClaim, item, zoneId);
+		if (gesture !== inlineTrackGesture || !inlineActionOwnerCurrent()) return;
+		inlineTrackAction = { busy: false, error: !executed,
+			status: executed ? `${item.title}: ${title}` : get(browseActionController).error ?? 'Could not complete this action.' };
+		if (executed) { browseMenuItem = null; browseActionController.reset(); }
+	}
+
+	const browseRowActions = $derived<BrowseRowActions>({
+		enabled: actionZoneId !== null && resumed,
+		busy: (inlineTrackAction?.busy ?? false) || browseActionState.phase === 'executing',
+		status: inlineTrackAction?.status ?? null, error: inlineTrackAction?.error ?? false,
+		onAction: (item, semantic) => void beginInlineTrackAction(item, semantic),
+		onFavorite: item => void favoriteInlineTrack(item),
+		onMore: item => void openInlineMore(item), onCloseMore: resetBrowseActions,
+		menu: browseMenuItem && !browseActionFromPalette
+			? { item: browseMenuItem, state: browseActionState, onChoose: item => void chooseInlineAction(item) } : undefined
+	});
+	const paletteRowActions = $derived<BrowseRowActions>({
+		...browseRowActions,
+		onAction: (item, semantic) => void beginInlineTrackAction(item, semantic, paletteQuery.trim()),
+		onFavorite: undefined,
+		onMore: item => void openInlineMore(item, paletteQuery.trim()),
+		menu: browseMenuItem && browseActionFromPalette
+			? { item: browseMenuItem, state: browseActionState, onChoose: item => void chooseInlineAction(item) } : undefined
+	});
+
+	async function favoriteInlineTrack(item: BrowseItem): Promise<void> {
+		if (inlineTrackAction?.busy || browseState.phase !== 'ready' || !browseState.result?.items.includes(item)) return;
+		resetBrowseActions();
+		const gesture = inlineTrackGesture;
+		inlineTrackOwner = { kind: 'browse', result: browseState.result!, claimEpoch };
+		inlineTrackAction = {
+			busy: true,
+			status: `Saving “${item.title}”…`,
+			error: false
+		};
+		try {
+			await addFavoriteData(fetchFn, favoritePayload(item, 'track'));
+			if (gesture === inlineTrackGesture) {
+				inlineTrackAction = {
+					busy: false,
+					status: `Added to favorites: ${item.title}`,
+					error: false
+				};
+			}
+		} catch (error) {
+			if (gesture === inlineTrackGesture) {
+				inlineTrackAction = {
+					busy: false,
+					error: true,
+					status: error instanceof Error ? error.message : 'Could not add this favorite.'
+				};
+			}
+		}
+	}
+
 
 	function browseItem(item: BrowseItem): void {
 		const activeClaim = claim;
@@ -2689,10 +2904,10 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			openPalette('');
 			return;
 		}
-		if (browseItemOpensActions(item)) {
-			openBrowseAction(item);
-			return;
-		}
+		if (browseItemOpensActions(item)) return;
+		if (!getSocketClient()?.connected) return;
+		scopeScrollTops.set(listScrollKey(), pane?.scrollTop ?? 0);
+		resetBrowseActions();
 		void browseController
 			.openItem(activeClaim, item, sheetZones[0]?.zoneId)
 			.then((restored) => publishBrowseStateAfter(restored, activeClaim));
@@ -2700,7 +2915,9 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 
 	function browseBack(): void {
 		const activeClaim = claim;
-		if (!activeClaim) return;
+		if (!activeClaim || !getSocketClient()?.connected) return;
+		scopeScrollTops.set(listScrollKey(), pane?.scrollTop ?? 0);
+		resetBrowseActions();
 		void browseController
 			.back(activeClaim, sheetZones[0]?.zoneId)
 			.then((restored) => publishBrowseStateAfter(restored, activeClaim));
@@ -2708,7 +2925,9 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 
 	function browseForward(): void {
 		const activeClaim = claim;
-		if (!activeClaim) return;
+		if (!activeClaim || !getSocketClient()?.connected) return;
+		scopeScrollTops.set(listScrollKey(), pane?.scrollTop ?? 0);
+		resetBrowseActions();
 		void browseController
 			.forward(activeClaim, sheetZones[0]?.zoneId)
 			.then((restored) => publishBrowseStateAfter(restored, activeClaim));
@@ -2720,50 +2939,20 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		void browseController.loadMore(activeClaim, sheetZones[0]?.zoneId);
 	}
 
-	function closeBrowseAction(): void {
-		const cameFromPalette = browseActionFromPalette;
-		browseActionController.reset();
-		browseActionFromPalette = false;
-		browseFavoriteBusy = false;
-		browseFavoriteStatus = null;
-		if (cameFromPalette) {
-			openPalette(paletteQuery);
-			return;
-		}
-		const activeClaim = claim;
-		if (activeClaim && scope === 'browse') {
-			void browseController
-				.restore(activeClaim, browseState.snapshot, sheetZones[0]?.zoneId)
-				.then((restored) => replaceBrowseStateAfter(restored, activeClaim));
-		}
-	}
-
-	function beginBrowseAction(semantic: UnifiedSongActionSemantic, zoneId: string): void {
-		const activeClaim = claim;
-		if (!activeClaim) return;
-		void browseActionController.execute(activeClaim, semantic, zoneId);
-	}
-
-	// Which actions Roon offers is a question asked OF a zone, and the answer
-	// is what enables these buttons — but the zone picker sits in the layout,
-	// outside the sheet's backdrop, and stays clickable while the sheet is up.
-	// `+layout.svelte` also re-pins the selection on Core reconnect and moves
-	// it in memory when a zone vanishes. So availability probed under one zone
-	// can end up gating buttons that will execute on another: a button offered
-	// for a zone that never answered for it. A moved zone re-probes; the
-	// controller's fence supersedes the in-flight probe, so the buttons flip
-	// to loading and then to the truth (public issue #12).
 	$effect(() => {
-		const zoneId = actionZoneId;
-		const state = browseActionState;
-		const source = state.source;
-		if (state.phase === 'idle' || source === null) return;
-		if (state.zoneId === zoneId) return;
-		const activeClaim = claim;
-		if (!activeClaim) return;
-		untrack(() => {
-			void browseActionController.open(activeClaim, source, zoneId ?? undefined);
-		});
+		const zoneId = actionZoneId, state = browseActionState;
+		if (state.phase === 'idle' || !state.source || state.zoneId === zoneId) return;
+		if (!inlineActionOwnerCurrent()) { untrack(resetBrowseActions); return; }
+		if (browseMenuItem && inlineTrackAction?.busy !== true) {
+			const activeClaim = claim;
+			if (activeClaim) untrack(() => void browseActionController.open(activeClaim, state.source!, zoneId ?? undefined));
+		} else {
+			untrack(() => {
+				inlineTrackGesture += 1;
+				browseActionController.reset();
+				inlineTrackAction = { busy: false, error: true, status: 'Zone changed. Choose an action again.' };
+			});
+		}
 	});
 
 	async function preparePaletteBrowseTransition(): Promise<ClassicBrowseSessionClaim | null> {
@@ -2779,19 +2968,10 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	}
 
 	function paletteBrowseResult(query: string, result: SearchResult): void {
+		if (browseItemOpensActions(result)) return;
+		resetBrowseActions();
 		void preparePaletteBrowseTransition().then((activeClaim) => {
 			if (!activeClaim) return;
-			if (browseItemOpensActions(result)) {
-				browseActionFromPalette = true;
-				browseFavoriteBusy = false;
-				browseFavoriteStatus = null;
-				void browseActionController.open(
-					activeClaim,
-					{ kind: 'search', query, item: result },
-					actionZoneId ?? undefined
-				);
-				return;
-			}
 			scope = 'browse';
 			railTarget = null;
 			filterText = '';
@@ -2879,7 +3059,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	 * toggles regardless of focus.
 	 */
 	function paletteCaptureKeydown(event: KeyboardEvent): void {
-		if (browseActionState.phase !== 'idle') return;
 		if ((event.metaKey || event.ctrlKey) && (event.key === 'k' || event.key === 'K')) {
 			event.preventDefault();
 			if (paletteOpen) closePalette();
@@ -3021,11 +3200,13 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	}
 
 	function handleConnectionLost(): void {
+		destinationConnectionEpoch += 1;
+		destinationsStore.reset();
 		const activeClaim = claim;
 		if (!activeClaim || !isCurrentUnifiedClaim(activeClaim)) return;
 		sessionClient.connectionLost(activeClaim);
 		songActionController.reset();
-		browseActionController.reset();
+		resetBrowseActions();
 		browseActionFromPalette = false;
 		browseController.reset(browseState.snapshot);
 		selectedSong = null;
@@ -3034,6 +3215,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	}
 
 	function handleReconnect(): void {
+		destinationConnectionEpoch += 1;
 		const generation = lifecycleGeneration;
 		const activeClaim = claim;
 		if (
@@ -3061,8 +3243,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 				// hierarchy, so its hidden classic scope has nothing to retry.
 				if (itemTarget?.kind !== 'live') maybeLoadScopeData(scope);
 				if (scope === 'browse') {
-					void browseController
-						.restore(activeClaim, browseState.snapshot, sheetZones[0]?.zoneId)
+					void restoreBrowsePage(activeClaim, browseState.snapshot)
 						.then((restored) => replaceBrowseStateAfter(restored, activeClaim));
 				}
 				if (paletteOpen) {
@@ -3155,8 +3336,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		void loadForClaim(claim);
 		if (scope === 'browse') {
 			const activeClaim = claim;
-			void browseController
-				.restore(activeClaim, browseState.snapshot, sheetZones[0]?.zoneId)
+			void restoreBrowsePage(activeClaim, browseState.snapshot)
 				.then((restored) => replaceBrowseStateAfter(restored, activeClaim));
 		}
 		// Restored page state may land directly on a data-owning scope. A live
@@ -3244,10 +3424,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		returnToPalette = false;
 		filterText = '';
 		songActionController.reset();
-		browseActionController.reset();
+		resetBrowseActions();
 		browseActionFromPalette = false;
-		browseFavoriteBusy = false;
-		browseFavoriteStatus = null;
 		songFavoriteBusy = false;
 		songFavoriteStatus = null;
 		favoriteMutationBusy = false;
@@ -3341,7 +3519,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			class="findbtn"
 			data-testid="unified-find"
 			title="Search — or just type anywhere"
-			disabled={browseActionState.phase !== 'idle'}
 			onclick={() => openPalette('')}
 		>
 			<span aria-hidden="true">⚲</span> Search
@@ -3443,31 +3620,41 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			bind:this={pane}
 		>
 			<nav class="scopes" aria-label="Library scope" use:measureLibraryChrome={'scopes'}>
-				{#each scopeChips as chip (chip.id)}
-					<button
-						type="button"
-						class="sc"
-					class:on={scope === chip.id && !itemTarget && !filterText}
-						aria-pressed={scope === chip.id}
-						data-testid="unified-scope-{chip.id}"
-						onclick={() => setScope(chip.id)}
-					>
-						{chip.label}
-					</button>
-				{/each}
+				<LibraryScopeNavigation items={scopeChips as readonly { id: NavigationDestinationId; label: string }[]}
+					order={navigationOrder}
+					pinned={($navigationPrefsStore.snapshot ?? DEFAULT_NAVIGATION_SETTINGS).pinned}
+					activeId={!itemTarget && !filterText ? activeNavigationId : null}
+					selectedId={activeNavigationId}
+					onSelect={selectNavigationDestination} />
 			</nav>
 			{#if !resumed}
 				<p class="status">Suspended.</p>
 			{:else if scope === 'browse' && itemTarget === null}
+				{#if !collectionRoot && (browsePresentation.kind === 'artist' || browsePresentation.kind === 'album')}
+					<UnifiedPublicEntityPage state={browseState} kind={browsePresentation.kind}
+						onBack={browseBack} onItem={browseItem} hrefForItem={hrefForBrowseItem}
+						onLoadMore={browseLoadMore} actions={browseRowActions} />
+				{:else}
 				<UnifiedBrowseView
 					state={browseState}
+					displayItems={collectionMatches?.items.slice(0, collectionChoice.limit) ?? (genericBrowseItems?.length !== browseState.result?.items.length ? genericBrowseItems : undefined)}
+					collection={collectionRoot ? {
+						id: collectionRoot.id, label: collectionRoot.label, filter: collectionChoice.filter, sort: collectionChoice.sort, ready: completeCollection !== null,
+						matchCount: collectionMatches?.matchCount ?? 0,
+						onFilter: value => changeCollectionChoice({ filter: value, limit: 100 }),
+						onSort: sort => changeCollectionChoice({ sort, limit: 100 }),
+						onShowMore: () => changeCollectionChoice({ limit: collectionChoice.limit + 100 }),
+						onRetry: () => { if (collectionRoot) reloadCollection(collectionRoot); }
+					} : undefined}
 					onBack={browseBack}
 					onForward={browseForward}
 				onItem={browseItem}
+				trackActions={browseRowActions}
 				onLoadMore={browseLoadMore}
 				onSearchPrompt={() => openPalette('')}
 				hrefForItem={hrefForBrowseItem}
 					/>
+				{/if}
 			{:else if scope === 'favorites' && itemTarget === null}
 				<UnifiedFavoritesView
 					state={favorites as FavoritesState}
@@ -3578,6 +3765,9 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 						actionController={sheetActionController}
 						actionsEnabled={actionZoneId !== null}
 						onBeginActions={beginLiveCollectionActions}
+						onRowAction={beginLiveRowAction}
+						onRowMore={row => beginLiveRowAction(row, null)}
+						onCloseRowMore={closeLiveRowMore}
 						sorts={liveCollectionSorts}
 						randomSeed={shuffleSeed}
 						onSetAlbumSort={setLiveCollectionAlbumSort}
@@ -3668,10 +3858,10 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 							<div class="artist-view-switch" role="group" aria-label="Artist list">
 								<button type="button" class:on={artistView === 'album-artists'}
 									aria-pressed={artistView === 'album-artists'} data-testid="unified-artist-view-album-artists"
-									onclick={() => changeArtistView('album-artists')}>Album artists</button>
+									aria-label="Album artists" onclick={() => changeArtistView('album-artists')}>Album</button>
 								<button type="button" class:on={artistView === 'all-artists'}
 									aria-pressed={artistView === 'all-artists'} data-testid="unified-artist-view-all-artists"
-									onclick={() => changeArtistView('all-artists')}>All artists</button>
+									aria-label="All artists" onclick={() => changeArtistView('all-artists')}>All</button>
 							</div>
 						{/if}
 						{#if sortMenu}
@@ -3724,7 +3914,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 					</RetainedLibraryPanel>
 					<RetainedLibraryPanel active={!creditGroupActive && !(scope === 'artists' && artistView === 'album-artists')}
 						revision={roots.generation}>
-						<UnifiedScopeViews {scope} artists={listArtists} albums={listAlbums}
+						<UnifiedScopeViews {scope} artists={listArtists} albums={listAlbums} onFindRecent={findRecentTrack}
 							sorts={viewSorts} randomSeed={albumShuffleSeed} {surpriseSeed} {railTarget}
 							genres={$genresStore} recent={$recentStore}
 							onDrill={(target) => void openDrill(target)} onOpenLiveArtist={openLiveArtist}
@@ -3783,24 +3973,13 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			onOpenLiveAlbum={paletteOpenLiveAlbum}
 			onSong={paletteSong}
 			onBrowseResult={paletteBrowseResult}
+			browseActions={paletteRowActions}
 			onBrowseCategory={paletteBrowseCategory}
 			onApplyFilter={applySmartFilter}
 			onSearch={paletteSearch}
 		/>
 	{/if}
 
-	{#if browseActionState.phase !== 'idle' && browseActionState.source}
-		<UnifiedBrowseActionSheet
-			state={browseActionState}
-			zoneId={actionZoneId}
-			onAction={beginBrowseAction}
-			onFavorite={() => void favoriteBrowseAction()}
-			favoriteEnabled={!browseFavoriteBusy &&
-				favoriteTypeForSource(browseActionState.source) !== null}
-			favoriteStatus={browseFavoriteStatus}
-			onClose={closeBrowseAction}
-		/>
-	{/if}
 </section>
 
 <style>

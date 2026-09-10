@@ -1,10 +1,12 @@
 <script lang="ts">
 	import RetainedLibraryPanel from './RetainedLibraryPanel.svelte';
 	import { prepareLibraryGrid } from '$lib/preparedLibraryGrid';
+	import { libraryArtwork } from '$lib/actions/libraryArtwork';
 	import type { UnifiedLibraryDrillTarget, UnifiedLibraryScope } from '$lib/libraryPageState';
 	import { imageUrl } from '$lib/imageUrl';
 	import { shouldHandleLibraryAnchorClick } from '$lib/libraryPageNavigation';
 	import type { UnifiedSongActionSemantic } from '@shared/unifiedSearchContracts';
+	import type { RecentlyPlayedEntry } from '@shared/types';
 	import type {
 		LetterBucket,
 		LibraryAlbumEntry,
@@ -12,6 +14,7 @@
 	} from '$lib/libraryEntries';
 	import {
 		formatGenreAlbumCount,
+		GENRE_PAGE_BOUND,
 		type NamedCountsState
 	} from '$lib/stores/unifiedNamedCountsStore';
 	import type { RecentlyPlayedState } from '$lib/stores/recentlyPlayedStore';
@@ -66,6 +69,7 @@
 		 */
 		onOpenLiveArtist?: (entry: LibraryArtistEntry) => void;
 		onOpenLiveAlbum?: (entry: LibraryAlbumEntry) => void;
+		onFindRecent?: (entry: RecentlyPlayedEntry) => void;
 		hrefForArtist?: (entry: LibraryArtistEntry) => string | null;
 	hrefForAlbum?: (entry: LibraryAlbumEntry) => string | null;
 	hrefForDrill?: (target: UnifiedLibraryDrillTarget) => string | null;
@@ -88,6 +92,7 @@
 		onDrill,
 		onOpenLiveArtist,
 		onOpenLiveAlbum,
+		onFindRecent,
 		hrefForArtist,
 		hrefForAlbum,
 		hrefForDrill,
@@ -96,6 +101,7 @@
 
 	interface TileItem {
 		readonly source?: LibraryAlbumEntry;
+		readonly recent?: RecentlyPlayedEntry;
 		readonly key: string;
 		readonly title: string;
 		readonly artist: string;
@@ -198,7 +204,8 @@
 		recent.entries.map(
 			(entry, index): TileItem => ({
 				key: `rp:${index}:${entry.played_at}`,
-				title: entry.title ?? 'Unknown track',
+				title: entry.title?.trim() || 'Unknown track',
+				recent: entry,
 				artist: entry.artist ?? '',
 				imageKey: entry.image_key ?? null,
 				versionCount: 1
@@ -249,7 +256,7 @@
 		if (scope === 'recently-played') {
 			if (recent.loading && !recent.loaded) return 'Loading recent plays…';
 			if (recent.loaded && recent.entries.length === 0)
-				return 'Nothing recorded yet — plays are tracked only while this controller is running.';
+				return 'No recent plays yet.';
 		}
 		if (scope === 'artists' && artists.length === 0) return 'No artists in this library.';
 		if ((scope === 'albums' || scope === 'surprise' || scope === 'recently-added') && albums.length === 0)
@@ -295,12 +302,14 @@
 	<div class="tiles" use:prepareLibraryGrid={[items, layoutRevision]}>
 		{#each items as tile (tile.key)}
 			{@const liveEntry = tile.live}
+			{@const recentEntry = tile.recent}
+			{@const findable = recentEntry !== undefined && onFindRecent !== undefined &&
+				Boolean(recentEntry.title?.trim() || recentEntry.artist?.trim())}
 			{@const drillable = liveEntry !== undefined && onOpenLiveAlbum !== undefined}
 			{@const href = tile.source === undefined ? null : (hrefForAlbum?.(tile.source) ?? null)}
-			{@const open =
-				!drillable || liveEntry === undefined
-					? undefined
-					: () => onOpenLiveAlbum?.(liveEntry)}
+			{@const open = findable && recentEntry !== undefined
+				? () => onFindRecent?.(recentEntry)
+				: drillable && liveEntry !== undefined ? () => onOpenLiveAlbum?.(liveEntry) : undefined}
 			<svelte:element
 				this={href === null ? 'button' : 'a'}
 				role={href === null ? 'button' : 'link'}
@@ -308,16 +317,16 @@
 				{href}
 				class="tile"
 				data-testid={albumTestId}
-				disabled={href === null && !drillable}
+				disabled={href === null && open === undefined}
+				title={findable ? 'Find track' : undefined}
 				onclick={(event: MouseEvent) =>
 					href === null ? open?.() : followAddress(event, open)}
 			>
 				<div class="art">
 					{#if tile.imageKey}
 						<img
-							src={imageUrl(tile.imageKey, { scale: 'fit', width: 300, height: 300 })}
+							use:libraryArtwork={imageUrl(tile.imageKey, { scale: 'fit', width: 300, height: 300 })}
 							alt=""
-							loading="lazy"
 						/>
 					{:else}
 						{@const mono = monogram(tile.title)}
@@ -388,7 +397,7 @@
 	{:else if selectedScope === 'surprise'}
 		{@render albumTiles(surpriseTiles)}
 		<div class="hint">
-			Random, not "unplayed" — nothing knows what you have heard. Re-select the chip to redraw.
+			Choose Surprise me again for another selection.
 		</div>
 	{:else if selectedScope === 'genres'}
 		{#if cardGroups}
@@ -396,12 +405,11 @@
 		{:else}
 			{@render cardList(genreCards)}
 		{/if}
-		<div class="hint">Counts marked + are Roon's page bound, not the full genre.</div>
+		{#if genreCards.some(card => card.count >= GENRE_PAGE_BOUND)}
+			<div class="hint">+ means at least this many albums.</div>
+		{/if}
 	{:else if selectedScope === 'recently-played'}
 		{@render albumTiles(recentTiles)}
-		<div class="hint">
-			Only what this controller watched play. Roon does not share its own history.
-		</div>
 	{:else if selectedScope === 'recently-added'}
 		<!-- A restored address outliving the feature: the honest reason, never a
 		     guessed order. Roon's public browse API exposes no import date, and

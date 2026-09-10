@@ -25,7 +25,8 @@ export function resolveAppShellContract(
 	pathname: string,
 	activeLibraryView: LibraryView | null
 ): AppShellContract {
-	if (pathname === '/library' && activeLibraryView === 'unified') {
+	const isLibraryRoute = pathname === '/library' || pathname.startsWith('/library/');
+	if (isLibraryRoute && activeLibraryView === 'unified') {
 		return UNIFIED_LIBRARY_SHELL;
 	}
 	return NEUTRAL_LIBRARY_SHELL;

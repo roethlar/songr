@@ -1,5 +1,5 @@
 import { registerClassicBrowseSocket } from "../classicBrowse";
-import { BrowseSessionCoordinatorError } from "../../../core/roon/BrowseSessionCoordinator";
+import { BrowseSessionCoordinator, BrowseSessionCoordinatorError } from "../../../core/roon/BrowseSessionCoordinator";
 import { CLASSIC_BROWSE_ERROR_MAX_LENGTH } from "../../../shared/classicBrowseContracts";
 
 class FakeSocket {
@@ -57,10 +57,12 @@ describe("Classic browse socket adapter", () => {
     releaseMode: jest.Mock;
     runMode: jest.Mock;
     resolveClassicItemKey: jest.Mock;
+    beginClassicPublishedItems: jest.Mock;
     publishClassicBrowseResult: jest.Mock;
   };
   let browseService: { searchCoordinated: jest.Mock };
   let sessionBrowse: jest.Mock;
+  let sessionPop: jest.Mock;
   let modeRetiredListener:
     | ((event: {
         coreId: string;
@@ -87,6 +89,7 @@ describe("Classic browse socket adapter", () => {
       count: 0,
       items: [],
     });
+    sessionPop = jest.fn().mockResolvedValue({ level: 0, offset: 0, count: 0, items: [] });
     unsubscribeModeRetired = jest.fn(() => {
       modeRetiredListener = undefined;
     });
@@ -106,10 +109,11 @@ describe("Classic browse socket adapter", () => {
         work({
           browse: sessionBrowse,
           load: jest.fn().mockResolvedValue({ level: 0, offset: 0, count: 0, items: [] }),
-          pop: jest.fn().mockResolvedValue({ level: 0, offset: 0, count: 0, items: [] }),
+          pop: sessionPop,
         })
       ),
       resolveClassicItemKey: jest.fn((_access, _role, token) => `raw:${token}`),
+      beginClassicPublishedItems: jest.fn().mockReturnValue(1),
       publishClassicBrowseResult: jest.fn((_access, _role, result) => result),
     };
     browseService = { searchCoordinated: jest.fn() };
@@ -224,6 +228,103 @@ describe("Classic browse socket adapter", () => {
       hierarchy: "browse",
       itemKey: "raw:opaque-item-1",
     });
+  });
+
+  it.each([
+    ["browse", { hierarchy: "browse", popAll: true }],
+    ["browse", { hierarchy: "browse", refresh: true }],
+    ["pop", { hierarchy: "browse", levels: 1, refresh: true }],
+  ] as const)("retires old published authority before %s reset/refresh dispatch", async (operation, options) => {
+    const order: string[] = [];
+    coordinator.beginClassicPublishedItems.mockImplementation(() => { order.push("retire"); return 1; });
+    const dispatched = operation === "pop" ? sessionPop : sessionBrowse;
+    dispatched.mockImplementation(async () => { order.push("dispatch"); return { level: 0, offset: 0, count: 0, items: [] }; });
+    const ack = jest.fn();
+    await socket.trigger(`browse:${operation}`, { ...request(undefined, operation), options }, ack);
+    expect(order).toEqual(["retire", "dispatch"]);
+    expect(coordinator.beginClassicPublishedItems).toHaveBeenCalledWith(expect.anything(), "classic-browse");
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+
+  it("resolves a selected token before retiring its authority for an explicit refresh", async () => {
+    const order: string[] = [];
+    coordinator.resolveClassicItemKey.mockImplementation(() => { order.push("resolve"); return "exact-raw-key"; });
+    coordinator.beginClassicPublishedItems.mockImplementation(() => { order.push("retire"); return 1; });
+    sessionBrowse.mockImplementation(async () => { order.push("dispatch"); return { level: 0, offset: 0, count: 0, items: [] }; });
+    await socket.trigger("browse:browse", {
+      ...request(), options: { hierarchy: "browse", itemKey: "opaque-row", refresh: true },
+    }, jest.fn());
+    expect(order).toEqual(["resolve", "retire", "dispatch"]);
+    expect(sessionBrowse).toHaveBeenCalledWith({ hierarchy: "browse", itemKey: "exact-raw-key", refresh: true });
+  });
+
+  it.each([
+    ["browse", { hierarchy: "browse", itemKey: "opaque-row" }],
+    ["pop", { hierarchy: "browse", levels: 1 }],
+    ["load", { hierarchy: "browse", offset: 100, count: 100 }],
+  ] as const)("keeps retained parent tokens through ordinary %s navigation", async (operation, options) => {
+    const ack = jest.fn();
+    await socket.trigger(`browse:${operation}`, { ...request(undefined, operation), options }, ack);
+    expect(coordinator.beginClassicPublishedItems).not.toHaveBeenCalled();
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+
+  it("rejects a retired token when a new root reuses the same native row key", async () => {
+    const realSocket = new FakeSocket();
+    let title = "Old root row";
+    const nativeBrowse = jest.fn(async () => ({
+      title: "Browse", level: 0, offset: 0, count: 1, totalCount: 1,
+      items: [{ title, itemKey: "reused-native-key", isLoadable: true, isPlayable: false }],
+    }));
+    const realCoordinator = new BrowseSessionCoordinator({
+      browse: nativeBrowse, load: jest.fn(), pop: jest.fn(), reRoot: jest.fn().mockResolvedValue(undefined),
+    } as never);
+    try {
+      registerClassicBrowseSocket(realSocket as never, {
+        coordinator: realCoordinator, browseService: browseService as never,
+        getCoreId: () => "core-1", logger: logger as never,
+      });
+      const acquired = realCoordinator.acquireMode({ coreId: "core-1", socketId: "socket-1", tabId: "tab-1", mode: "classic" });
+      const handle = { handleId: acquired.handleId, generation: acquired.generation };
+      const initialAck = jest.fn();
+      await realSocket.trigger("browse:browse", request(handle), initialAck);
+      const oldToken = initialAck.mock.calls[0][0].data.result.items[0].itemKey;
+      title = "Different root row";
+      const nextAck = jest.fn();
+      await realSocket.trigger("browse:browse", request(handle), nextAck);
+      const newToken = nextAck.mock.calls[0][0].data.result.items[0].itemKey;
+      expect(newToken).not.toBe(oldToken);
+      const rejected = jest.fn();
+      await realSocket.trigger("browse:browse", {
+        ...request(handle), options: { hierarchy: "browse", itemKey: oldToken },
+      }, rejected);
+      expect(rejected).toHaveBeenCalledWith(expect.objectContaining({ success: false, code: "STALE_GENERATION" }));
+      expect(nativeBrowse).toHaveBeenCalledTimes(2);
+      const accepted = jest.fn();
+      await realSocket.trigger("browse:browse", {
+        ...request(handle), options: { hierarchy: "browse", itemKey: newToken },
+      }, accepted);
+      expect(accepted).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+      expect(nativeBrowse).toHaveBeenLastCalledWith(expect.objectContaining({ itemKey: "reused-native-key" }), expect.anything());
+
+      // A failed refresh cannot restore the old authority: the Core may have
+      // changed its list before reporting failure or losing the response.
+      const beforeFailure = nativeBrowse.mock.calls.length;
+      nativeBrowse.mockRejectedValueOnce(new Error("Refresh failed"));
+      const failedRefresh = jest.fn();
+      await realSocket.trigger("browse:browse", {
+        ...request(handle), options: { hierarchy: "browse", refresh: true },
+      }, failedRefresh);
+      expect(failedRefresh).toHaveBeenCalledWith(expect.objectContaining({ success: false, code: "INTERNAL_ERROR" }));
+      const retiredAfterFailure = jest.fn();
+      await realSocket.trigger("browse:browse", {
+        ...request(handle), options: { hierarchy: "browse", itemKey: newToken },
+      }, retiredAfterFailure);
+      expect(retiredAfterFailure).toHaveBeenCalledWith(expect.objectContaining({ success: false, code: "STALE_GENERATION" }));
+      expect(nativeBrowse).toHaveBeenCalledTimes(beforeFailure + 1);
+    } finally {
+      realCoordinator.shutdown();
+    }
   });
 
   it("publishes only the coordinator-tokenized BrowseResult", async () => {

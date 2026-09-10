@@ -589,6 +589,7 @@
 
 	.app-root {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		grid-template-rows: 1fr auto;
 		height: 100vh;
 	}
@@ -648,6 +649,7 @@
 		   padding it derives from, and read by SeekBar. */
 		--seek-hit-height: 10px;
 		display: flex;
+		flex-wrap: wrap;
 		flex-shrink: 0;
 		align-items: center;
 		gap: 18px;
@@ -847,6 +849,7 @@
 
 	.unified-zone {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: 10px;
 		color: var(--songr-soft);

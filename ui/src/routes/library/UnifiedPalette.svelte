@@ -33,6 +33,9 @@
 	import { pluralize } from '$lib/pluralize';
 	import { normalizeCatalogText } from '@shared/catalogContracts';
 	import type { SearchResult } from '@shared/types';
+	import { browseItemOpensActions } from '$lib/library/UnifiedBrowseController';
+	import type { BrowseRowActions } from '$lib/library/browsePresentation';
+	import UnifiedBrowseRowControls from './UnifiedBrowseRowControls.svelte';
 
 	const INSTANT_ROW_LIMIT = 8;
 	const NAMED_ROW_LIMIT = 4;
@@ -52,6 +55,7 @@
 		onOpenLiveAlbum,
 		onSong,
 		onBrowseResult = () => {},
+		browseActions,
 		onBrowseCategory = () => {},
 		onApplyFilter,
 		onSearch
@@ -68,6 +72,7 @@
 		onOpenLiveAlbum: (entry: LibraryAlbumEntry) => void;
 		onSong: (song: PaletteSearchRow) => void;
 		onBrowseResult?: (query: string, result: SearchResult) => void;
+		browseActions?: BrowseRowActions;
 		onBrowseCategory?: (query: string, categoryTitle: string) => void;
 		onApplyFilter: (text: string) => void;
 		onSearch: (query: string) => void;
@@ -82,6 +87,7 @@
 		readonly disabled: boolean;
 		readonly reason: string | null;
 		readonly activate: (() => void) | null;
+		readonly actionItem?: SearchResult;
 	}
 
 	interface PaletteGroup {
@@ -303,7 +309,8 @@
 				filter: false,
 				disabled: false,
 				reason: null,
-				activate: () => onBrowseResult(q, row)
+				activate: browseItemOpensActions(row) ? null : () => onBrowseResult(q, row),
+				...(browseItemOpensActions(row) ? { actionItem: row } : {})
 			}));
 			if (categoryTitle && group.total > group.rows.length) {
 				rows.push({
@@ -413,7 +420,7 @@
 	// container would never see it.
 	onMount(() => {
 		const handleKeydown = (event: KeyboardEvent) => {
-			if (event.key === 'Escape') {
+			if (event.key === 'Escape' && !event.defaultPrevented) {
 				event.preventDefault();
 				onClose();
 			}
@@ -446,6 +453,10 @@
 			onkeydown={onInputKeydown}
 		/>
 		<div class="pres" bind:this={listEl} data-testid="unified-palette-results">
+			{#if browseActions?.status}
+				<p class="palette-action-status" class:error={browseActions.error}
+					role={browseActions.error ? 'alert' : 'status'}>{browseActions.status}</p>
+			{/if}
 			{#if !query.trim()}
 				<div class="pgl">TRY</div>
 				{#each TRY_SEEDS as trySeed (trySeed)}
@@ -465,6 +476,15 @@
 				{#each groups as group, groupIndex (`${groupIndex}:${group.label}`)}
 					<div class="pgl" data-testid="unified-palette-group">{group.label}</div>
 					{#each group.rows as row (row.id)}
+						{#if row.actionItem}
+							<div class="prow palette-action-row" data-testid="unified-palette-row">
+								<span class="ic">{row.icon}</span>
+								<span class="p1">{row.primary}</span>
+								<span class="p2">{row.secondary}</span>
+								<UnifiedBrowseRowControls item={row.actionItem} actions={browseActions}
+									playable={row.actionItem.resultType === 'track'} favorite={false} />
+							</div>
+						{:else}
 						<button
 							type="button"
 							class="prow"
@@ -487,6 +507,7 @@
 							<span class="p1">{row.primary}</span>
 							<span class="p2">{row.secondary || row.reason || ''}</span>
 						</button>
+						{/if}
 					{/each}
 				{/each}
 				{#if searchState.phase === 'searching'}
@@ -507,3 +528,12 @@
 		<div class="palhint mono">↑↓ SELECT &nbsp;·&nbsp; ⏎ OPEN &nbsp;·&nbsp; ESC CLOSE</div>
 	</div>
 </div>
+
+<style>
+	.palette-action-row { cursor: default; flex-wrap: wrap; }
+	.palette-action-status { padding: 8px 14px; margin: 0; color: var(--soft); font-size: 12px; }
+	.palette-action-status.error { color: var(--songr-error); }
+	@media (max-width: 600px) {
+		.palette-action-row .p2 { display: block; order: 1; flex-basis: 100%; white-space: normal; }
+	}
+</style>

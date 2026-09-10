@@ -277,6 +277,35 @@ describe('BrowseService', () => {
       expect(result.items[1].inputPrompt).toBeUndefined();
     });
 
+    it.each([false, true])('preserves a public message and is_error=%s without replacing it with a refresh', async (isError) => {
+      mockBrowseApi.browse.mockImplementation((_params: unknown, cb: Function) => {
+        cb(false, { action: 'message', message: 'Tags are unavailable on this Core.', is_error: isError });
+      });
+      const result = await service.browse({ hierarchy: 'browse', itemKey: 'tags', refresh: true });
+      expect(result).toMatchObject({ action: 'message', message: 'Tags are unavailable on this Core.', isError, items: [] });
+      expect(mockBrowseApi.browse).toHaveBeenCalledTimes(1);
+      expect(mockBrowseApi.load).not.toHaveBeenCalled();
+    });
+
+    it('preserves a public message when popping instead of silently refreshing past it', async () => {
+      mockBrowseApi.browse.mockImplementation((_params: unknown, cb: Function) => {
+        cb(false, { action: 'message', message: 'That level is no longer available.', is_error: true });
+      });
+      const result = await service.pop({ hierarchy: 'browse', levels: 1, refresh: true });
+      expect(result).toMatchObject({ action: 'message', message: 'That level is no longer available.', isError: true });
+      expect(mockBrowseApi.browse).toHaveBeenCalledTimes(1);
+      expect(mockBrowseApi.load).not.toHaveBeenCalled();
+    });
+
+    it('keeps an explanation present in a load response alongside its paging fields', async () => {
+      mockBrowseApi.load.mockImplementation((_params: unknown, cb: Function) => {
+        cb(false, { items: [], offset: 20, list: { title: 'Tags', level: 2, count: 20 },
+          message: 'This list changed. Please return to Tags.', is_error: true });
+      });
+      const result = await service.load({ hierarchy: 'browse', offset: 20, count: 20 });
+      expect(result).toMatchObject({ offset: 20, title: 'Tags', message: 'This list changed. Please return to Tags.', isError: true });
+    });
+
     it('should not call load when browse returns action other than list', async () => {
       const browseResponse = {
         action: 'message',
@@ -503,6 +532,87 @@ describe('BrowseService', () => {
   });
 
   describe('browse pagination', () => {
+    it.each([
+      ['root remembered position', undefined, 0, 'Browse', 0],
+      ['Library remembered position', undefined, 0, 'Library', 1],
+      ['explicit offset', 13, 13, 'Tracks', 2],
+      ['fractional offset', 13.9, 13, 'Tracks', 2],
+      ['negative offset', -20, 0, 'Tracks', 2],
+      ['non-finite offset', Infinity, 0, 'Tracks', 2],
+      ['oversized offset', 1_000_001, 1_000_000, 'Tracks', 2],
+    ])('reports the actual fetched offset for %s instead of the stored display position', async (
+      _description, offset, expectedOffset, title, level
+    ) => {
+      const list = { title, level, count: 1_000_002, display_offset: 73 };
+      mockBrowseApi.browse.mockImplementation((_params: any, cb: Function) => {
+        cb(false, { action: 'list', list });
+      });
+      mockBrowseApi.load.mockImplementation((params: any, cb: Function) => {
+        cb(false, { offset: params.offset, list,
+          items: Array.from({ length: params.count }, (_, index) => ({
+            title: `Row ${params.offset + index}`, item_key: `row-${params.offset + index}`,
+          })),
+        });
+      });
+
+      const result = await service.browse({ hierarchy: 'browse', offset, pageSize: 2 });
+      expect(mockBrowseApi.load).toHaveBeenCalledTimes(1);
+      expect(mockBrowseApi.load).toHaveBeenCalledWith(
+        expect.objectContaining({ offset: expectedOffset, count: 2 }), expect.any(Function)
+      );
+      expect(result).toMatchObject({ title, level, offset: expectedOffset,
+        count: list.count, totalCount: list.count });
+      expect(result.items.map((item) => item.itemKey)).toEqual([
+        `row-${expectedOffset}`, `row-${expectedOffset + 1}`,
+      ]);
+    });
+
+    it('returns the loaded root offset after pop even when Roon remembers a different display position', async () => {
+      const list = { title: 'Browse', level: 0, count: 2, display_offset: 1 };
+      mockBrowseApi.browse.mockImplementation((_params: any, cb: Function) => {
+        cb(false, { action: 'list', list });
+      });
+      mockBrowseApi.load.mockImplementation((params: any, cb: Function) => {
+        cb(false, { offset: params.offset, list, items: [
+          { title: 'Library', item_key: 'library', hint: 'list' },
+          { title: 'Settings', item_key: 'settings', hint: 'list' },
+        ] });
+      });
+      const result = await service.pop({ hierarchy: 'browse', levels: 1 });
+      expect(mockBrowseApi.load).toHaveBeenCalledWith(
+        expect.objectContaining({ offset: 0, count: 2 }), expect.any(Function)
+      );
+      expect(result).toMatchObject({ offset: 0, count: 2, totalCount: 2 });
+      expect(result.items[0].itemKey).toBe('library');
+    });
+
+    it('preserves the public list total across an initial browse, a full load page, and a final short page', async () => {
+      // Public SDK List.count describes the whole level; load.items is only
+      // the requested slice. Keep that established response contract explicit.
+      const list = { title: 'Tracks', level: 2, count: 275, display_offset: 0 };
+      const rows = Array.from({ length: list.count }, (_, index) => ({
+        title: `Track ${index}`, item_key: `track-${index}`, hint: 'action_list',
+      }));
+      mockBrowseApi.browse.mockImplementation((_params: any, cb: Function) => {
+        cb(false, { action: 'list', list });
+      });
+      mockBrowseApi.load.mockImplementation((params: any, cb: Function) => {
+        cb(false, { list, offset: params.offset,
+          items: rows.slice(params.offset, params.offset + params.count) });
+      });
+      const first = await service.browse({ hierarchy: 'browse', pageSize: 100 });
+      const full = await service.load({ hierarchy: 'browse', offset: 100, count: 100 });
+      const tail = await service.load({ hierarchy: 'browse', offset: 200, count: 100 });
+      expect(first).toMatchObject({ offset: 0, count: 275, totalCount: 275 });
+      expect(full).toMatchObject({ offset: 100, count: 275, totalCount: 275 });
+      expect(tail).toMatchObject({ offset: 200, count: 275, totalCount: 275 });
+      expect([first.items.length, full.items.length, tail.items.length]).toEqual([100, 100, 75]);
+      expect([...first.items, ...full.items, ...tail.items].map((item) => item.itemKey))
+        .toEqual(rows.map((item) => item.item_key));
+      expect(mockBrowseApi.load.mock.calls.map(([params]: [any]) => [params.offset, params.count]))
+        .toEqual([[0, 100], [100, 100], [200, 100]]);
+    });
+
     it('loads only the first page (PAGE_SIZE=100) by default for large lists', async () => {
       const totalCount = 350;
       const browseResponse = {

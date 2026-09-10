@@ -19,6 +19,8 @@ import { TransportService } from "../../core/roon/TransportService";
 import { ImageService } from "../../core/roon/ImageService";
 import { RecentlyPlayedService } from "../../core/recently-played/RecentlyPlayedService";
 import { FavoritesService } from "../../core/favorites/FavoritesService";
+import { NavigationSettingsService } from "../../core/navigation/NavigationSettingsService";
+import { createNavigationSettingsRouter } from "../routes/navigationSettings";
 import { ErrorResponse } from "../../shared/types";
 
 export const createHttpApp = (
@@ -29,7 +31,8 @@ export const createHttpApp = (
   favoritesService: FavoritesService,
   logger: Logger,
   /** The live library's read surface (`.agents/plans/library-live-view.md`). */
-  libraryRoots?: LibraryRootsPort
+  libraryRoots?: LibraryRootsPort,
+  navigationSettings?: NavigationSettingsService
 ): Application => {
   const app = express();
 
@@ -110,6 +113,9 @@ export const createHttpApp = (
   app.use("/api/image", createImageRouter(imageService));
   app.use("/api/recently-played", createRecentlyPlayedRouter(recentlyPlayedService));
   app.use("/api/favorites", createFavoritesRouter(favoritesService));
+  if (navigationSettings) {
+    app.use("/api/settings/navigation", createNavigationSettingsRouter(navigationSettings));
+  }
   // Any unmatched /api/* request is an API miss — return JSON 404 instead of
   // falling through to the SPA HTML, which would confuse the API client's
   // response.json() parser.

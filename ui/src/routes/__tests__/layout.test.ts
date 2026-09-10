@@ -218,6 +218,49 @@ describe('Unified-only layout', () => {
 		expect(screen.getByTestId('route-child')).toBeInTheDocument();
 	});
 
+	it.each(['/library/', '/library/browse', '/library/artists/AC%2FDC/albums/record'])(
+		'keeps the full outer layout and playback footer on initial deep URL %s', async (pathname) => {
+			pageState.set({ url: new URL(pathname, 'http://localhost') });
+			const { container } = renderLayout();
+			await tick();
+			expect(container.querySelector('[data-workspace-presentation="full-bleed"]')).not.toBeNull();
+			expect(screen.getByRole('contentinfo', { name: 'Playback controls' })).toBeInTheDocument();
+		}
+	);
+
+	it('preserves the outer layout through shallow Library navigation and drops it on route departure', async () => {
+		const { container } = renderLayout();
+		for (const pathname of ['/library/artists/One', '/library/browse', '/library/']) {
+			pageState.set({ url: new URL(pathname, 'http://localhost') });
+			await tick();
+			expect(container.querySelector('[data-workspace-presentation="full-bleed"]')).not.toBeNull();
+			expect(screen.getByRole('contentinfo', { name: 'Playback controls' })).toBeInTheDocument();
+		}
+		for (const pathname of ['/libraryish', '/library-old', '/']) {
+			pageState.set({ url: new URL(pathname, 'http://localhost') });
+			await tick();
+			expect(container.querySelector('[data-workspace-presentation="contained"]')).not.toBeNull();
+			expect(screen.queryByRole('contentinfo', { name: 'Playback controls' })).not.toBeInTheDocument();
+		}
+	});
+
+	it('waits for the active Library view at a deep URL and hides transport when its host releases', async () => {
+		pageState.set({ url: new URL('http://localhost/library/browse') });
+		libraryHost.publishActiveMode(null);
+		const { container } = renderLayout();
+		await tick();
+		expect(container.querySelector('[data-workspace-presentation="contained"]')).not.toBeNull();
+		expect(screen.queryByRole('contentinfo', { name: 'Playback controls' })).not.toBeInTheDocument();
+		libraryHost.publishActiveMode('unified');
+		await tick();
+		expect(container.querySelector('[data-workspace-presentation="full-bleed"]')).not.toBeNull();
+		expect(screen.getByRole('contentinfo', { name: 'Playback controls' })).toBeInTheDocument();
+		libraryHost.release();
+		await tick();
+		expect(container.querySelector('[data-workspace-presentation="contained"]')).not.toBeNull();
+		expect(screen.queryByRole('contentinfo', { name: 'Playback controls' })).not.toBeInTheDocument();
+	});
+
 	it('keeps the Unified workspace literally full bleed in the style contract', async () => {
 		const fs = await import('node:fs');
 		const path = await import('node:path');

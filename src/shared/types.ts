@@ -496,12 +496,27 @@ export interface BrowseItem {
    * without input lands on an empty "No results" list.
    */
   inputPrompt?: string;
+  /** Public input_prompt metadata; input values are not persisted by Songr. */
+  inputPromptAction?: string;
+  inputPromptValue?: string;
+  inputPromptIsPassword?: boolean;
 }
 
 /**
  * Response payload for browse and load operations
  */
 export interface BrowseResult {
+  /** Public list.hint, including action_list when row hints are absent. */
+  listHint?: string;
+  /** Public browse response action, when this came from browse(). */
+  action?: string;
+
+  /** Roon's explanation for an action: message response. */
+  message?: string;
+
+  /** Public is_error flag; false is an informational message, not a failure. */
+  isError?: boolean;
+
   /** Result title */
   title?: string;
 
@@ -514,7 +529,10 @@ export interface BrowseResult {
   /** Offset applied when fetching items */
   offset: number;
 
-  /** Number of items returned */
+  /**
+   * Public Roon list total (legacy field), falling back to returned item count
+   * when no list total is supplied. Use items.length for the returned page size.
+   */
   count: number;
 
   /** Total number of items available */

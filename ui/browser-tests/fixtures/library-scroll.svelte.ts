@@ -43,6 +43,7 @@ import {
 import { setSelectedZone } from '../../src/lib/stores/selectedZoneStore';
 import { setZonesSnapshot } from '../../src/lib/stores/zonesStore';
 import { __getNavigationLog, __resetNavigation } from '../../src/test/app-stubs/navigation';
+import { page as navigationPage } from '../../src/test/app-stubs/state.svelte';
 import type { CatalogStatus } from '@shared/catalogContracts';
 import { encodeLibraryRoute } from '../../src/lib/libraryRoute';
 import { libraryEntryPageState, libraryRouteFromPageState } from '../../src/lib/libraryRouteState';
@@ -52,12 +53,26 @@ import {
 	type LibraryModeLifecycle
 } from '../../src/lib/libraryModeActivationContext';
 import type { LibraryViewActivationCause } from '../../src/lib/libraryPageState';
+import { createNavigationSettingsStore } from '../../src/lib/stores/navigationSettingsStore';
+import { DEFAULT_NAVIGATION_SETTINGS, createPublicNavigationDestinationId, parseNavigationSettingsUpdate, type NavigationDestinationId, type NavigationSettingsSnapshot } from '@shared/navigationSettings';
+import AppSettingsMenu from '../../src/lib/components/AppSettingsMenu.svelte';
+import { createUnifiedBrowseController, createUnifiedBrowseActionController, type UnifiedBrowseControllerDependencies } from '../../src/lib/library/UnifiedBrowseController';
+import { createDefaultLibraryDestinationInventory, discoverLibraryDestinations } from '../../src/lib/library/LibraryDestinations';
+import type { LibraryDestinationsState } from '../../src/lib/stores/libraryDestinationsStore';
+import type { ClassicBrowseApiTransaction } from '../../src/lib/api/client';
+import type { BrowseItem, BrowseResult } from '@shared/types';
+import { setCoreStatus } from '../../src/lib/stores/coreStore';
+import { setTheme } from '../../src/lib/stores/themeStore';
 
 // Scroll restoration is a LAYOUT behaviour: the browser clamps `scrollTop` to
 // the container's current scrollHeight, so a restore that runs before the list
 // is laid out silently lands near the top. jsdom has no layout and would pass
 // such a test vacuously, which is why this lives in the Chromium suite and
 // mounts the whole mode against a library big enough to actually scroll.
+
+const fixtureParams = new URLSearchParams(window.location.search);
+const publicVariant = fixtureParams.get('public') === '1';
+const recentVariant = fixtureParams.get('recent') === '1';
 
 const ARTIST_COUNT = window.libraryScrollFixtureSize?.artists ?? 400;
 const ALBUM_COUNT = window.libraryScrollFixtureSize?.albums ?? 400;
@@ -470,8 +485,174 @@ const paletteSearchStore = writable<PaletteSearchState>({
 	error: null
 });
 
-const recentStore = writable({ entries: [], loading: false, loaded: true });
+const recentStore = writable({ entries: recentVariant ? [{ title: 'I Swear', artist: 'All-4-One',
+	zone_id: 'zone-1', played_at: '2026-09-10T12:00:00.000Z' }] : [], loading: false, loaded: true });
+const publicSearchQueries: string[] = [];
+const publicFavoriteWrites: unknown[] = [];
 const favoritesStore = writable({ entries: [], loading: false, loaded: true });
+
+// Existing layout/performance tests exercise the original seven pages in
+// their original order. Dedicated navigation tests opt into server defaults.
+const existingScopes: NavigationDestinationId[] = [
+	'artists', 'albums', 'genres', 'tracks', 'recently-played', 'favorites', 'surprise'
+];
+const navigationPrefsStore = createNavigationSettingsStore();
+navigationPrefsStore.applySnapshot(new URLSearchParams(window.location.search).get('nav') === 'default'
+	? DEFAULT_NAVIGATION_SETTINGS
+	: {
+		...DEFAULT_NAVIGATION_SETTINGS,
+		order: [...existingScopes, ...DEFAULT_NAVIGATION_SETTINGS.order.filter(id => !existingScopes.includes(id))],
+		pinned: existingScopes
+	});
+
+// Opt-in public acceptance data. Every transaction gets its own Browse cursor;
+// discovery and the displayed page use the production readers independently.
+const publicRows = (title: string): BrowseItem[] => Array.from({ length: 225 }, (_, index) => ({
+	title: index === 224 ? `${title} needle at end` : `${title} ${String(index).padStart(3, '0')}`,
+	itemKey: `row:${title}:${index}`, subtitle: title === 'Tracks'
+		? index === 224 ? 'AAA Artist' : index === 223 ? 'ZZZ Artist' : 'Middle Artist'
+		: index === 224 ? 'Final record' : 'Fixture record',
+	...(title === 'Tracks' ? { hint: 'action_list' } : {}),
+	isLoadable: false, isPlayable: false
+}));
+const publicPageRows = new Map(publicVariant ? ['Tracks', 'Composers', 'Tags', 'Discoveries', 'My Live Radio'].map(title => [title, publicRows(title)] as const) : []);
+// Two visually identical public track rows must keep distinct click authority.
+if (publicVariant) {
+	for (const index of [37, 222]) Object.assign(publicPageRows.get('Tracks')![index], {
+		title: 'I Swear', subtitle: 'All-4-One', hint: 'action_list'
+	});
+}
+type PublicAuthorityEntry = { kind: 'page'; title: string } | { kind: 'track'; rowIndex: number } | { kind: 'action'; rowIndex: number; action: string };
+type PublicAuthority = { generation: number; sequence: number; retained: Map<string, PublicAuthorityEntry> };
+const publicMainAuthority: PublicAuthority = { generation: 0, sequence: 0, retained: new Map() };
+const publicActionProbes: Array<{ rowIndex: number; generation: number }> = [];
+const publicActions: Array<{ rowIndex: number; action: string; generation: number }> = [];
+function retirePublicAuthority(authority: PublicAuthority): void {
+	authority.generation++;
+	authority.retained.clear();
+}
+function retainPublicItem(authority: PublicAuthority, item: BrowseItem, entry: PublicAuthorityEntry): BrowseItem {
+	const token = `fixture-retained:${authority.generation}:${++authority.sequence}`;
+	authority.retained.set(token, entry);
+	return { ...item, itemKey: token };
+}
+const publicPageModes = new Map<string, 'ready' | 'empty' | 'error'>();
+if (publicVariant) {
+	for (const [query, mode] of [['public_empty', 'empty'], ['public_error', 'error']] as const) {
+		const title = fixtureParams.get(query);
+		if (title && publicPageRows.has(title)) publicPageModes.set(title, mode);
+	}
+}
+const publicReads: Array<{ page: string; operation: string; offset: number; count: number; totalCount: number; returnedCount: number }> = [];
+const discoveriesId = createPublicNavigationDestinationId([{ title: 'Discoveries' }]);
+function publicEntry(title: string): BrowseItem {
+	// Public Browse frequently omits the optional list hint at these roots.
+	return { title, itemKey: `page:${title}`, isLoadable: true, isPlayable: false };
+}
+function publicBrowseTransaction(purpose: 'main' | 'inventory' = 'main'): ClassicBrowseApiTransaction {
+	const authority = purpose === 'main' ? publicMainAuthority : { generation: 0, sequence: 0, retained: new Map<string, PublicAuthorityEntry>() };
+	let currentPage = 'Browse';
+	const result = (offset = 0): BrowseResult => {
+		if (publicPageModes.get(currentPage) === 'error') throw new Error(`${currentPage} fixture is unavailable`);
+		const rows = currentPage === 'Browse'
+			? ['Library', 'Genres', 'Settings', 'Playlists', 'Discoveries', 'My Live Radio'].map(publicEntry)
+			: currentPage === 'Library'
+				? ['Search', 'Artists', 'Albums', 'Tracks', 'Composers', 'Tags'].map(publicEntry)
+				: publicPageModes.get(currentPage) === 'empty' ? [] : publicPageRows.get(currentPage) ?? [];
+		return { action: 'list', title: currentPage, level: currentPage === 'Browse' ? 0 : ['Tracks', 'Composers', 'Tags'].includes(currentPage) ? 2 : 1,
+			// The backend mirrors Roon list.count into count and totalCount.
+			// Page length comes only from items.length, including the short final page.
+			offset, count: rows.length, totalCount: rows.length, items: rows.slice(offset, offset + 100).map((item, index) => {
+				if (item.itemKey?.startsWith('page:')) return retainPublicItem(authority, item, { kind: 'page', title: item.title });
+				if (currentPage === 'Tracks' && item.hint === 'action_list') return retainPublicItem(authority, item, { kind: 'track', rowIndex: offset + index });
+				return item;
+			}) };
+	};
+	return {
+		async browse(options) {
+			if (options.input !== undefined) throw new Error('The public fixture never submits input');
+			if (options.popAll) { currentPage = 'Browse'; retirePublicAuthority(authority); }
+			if (options.itemKey) {
+				const retained = authority.retained.get(options.itemKey);
+				if (!retained) throw new Error('The public row reference expired');
+				if (retained.kind === 'page') currentPage = retained.title;
+				else if (retained.kind === 'track') {
+					if (purpose !== 'main') throw new Error('Inventory must not probe actions');
+					publicActionProbes.push({ rowIndex: retained.rowIndex, generation: authority.generation });
+					const items = ['Play Now', 'Add Next', 'Queue'].map(action => retainPublicItem(authority,
+						{ title: action, hint: 'action', isPlayable: true, isLoadable: false },
+						{ kind: 'action', rowIndex: retained.rowIndex, action }));
+					return { action: 'list', title: 'Actions', level: 3, offset: 0, count: items.length, totalCount: items.length, items };
+				} else {
+					if (purpose !== 'main') throw new Error('Inventory must not execute actions');
+					// This is an offline receipt only: no playback API or live service exists here.
+					publicActions.push({ rowIndex: retained.rowIndex, action: retained.action, generation: authority.generation });
+					authority.retained.delete(options.itemKey);
+					return { action: 'none', level: 3, offset: 0, count: 0, totalCount: 0, items: [] };
+				}
+			}
+			const response = result();
+			if (publicVariant) publicReads.push({ page: currentPage, operation: 'browse', offset: 0,
+				count: response.count, totalCount: response.totalCount!, returnedCount: response.items.length });
+			return response;
+		},
+		async browseLoad(options) {
+			const response = result(options.offset);
+			if (publicVariant) publicReads.push({ page: currentPage, operation: 'load', offset: options.offset,
+				count: response.count, totalCount: response.totalCount!, returnedCount: response.items.length });
+			return response;
+		},
+		async browsePop() { throw new Error('Public fixture restores semantic paths instead of mutating its cursor'); },
+		async browseSearch() { throw new Error('Public fixture does not invoke search'); }
+	};
+}
+const publicTransaction: NonNullable<UnifiedBrowseControllerDependencies['transaction']> = async (_role, claim, work) => {
+	await claim.ready;
+	return work(publicBrowseTransaction());
+};
+const browseController = createUnifiedBrowseController({
+	transaction: publicTransaction,
+	isClaimCurrent: claim => sessionClient.isClaimCurrent(claim)
+});
+const browseActionController = createUnifiedBrowseActionController({
+	transaction: publicTransaction,
+	isClaimCurrent: claim => sessionClient.isClaimCurrent(claim)
+});
+const publicInventoryState = writable<LibraryDestinationsState>({ inventory: createDefaultLibraryDestinationInventory(), loading: false, error: null });
+let publicInventoryGeneration = 0;
+const publicDestinationsStore = {
+	subscribe: publicInventoryState.subscribe,
+	async load() {
+		const generation = ++publicInventoryGeneration;
+		publicInventoryState.update(state => ({ ...state, loading: true }));
+		try {
+			const inventory = await discoverLibraryDestinations(publicBrowseTransaction('inventory'));
+			if (generation === publicInventoryGeneration) publicInventoryState.set({ inventory, loading: false, error: null });
+		} catch (error) {
+			if (generation === publicInventoryGeneration) publicInventoryState.update(state => ({ ...state, loading: false, error: String(error) }));
+		}
+	},
+	reset() {
+		publicInventoryGeneration++;
+		publicInventoryState.set({ inventory: createDefaultLibraryDestinationInventory(), loading: false, error: null });
+	}
+};
+let fixtureNavigationServer: NavigationSettingsSnapshot = structuredClone(DEFAULT_NAVIGATION_SETTINGS);
+const navigationWrites: NavigationSettingsSnapshot[] = [];
+const fixtureFetch: typeof fetch = async (input, init) => {
+	if (!publicVariant || new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, window.location.origin).pathname !== '/api/settings/navigation') {
+		throw new Error('The fixture must not fetch a live service');
+	}
+	const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+	if (!init?.method || init.method === 'GET') return json(fixtureNavigationServer);
+	if (init.method !== 'PUT') throw new Error('Unexpected fixture navigation method');
+	const update = parseNavigationSettingsUpdate(JSON.parse(String(init.body)));
+	if (!update) return json({ error: 'Invalid update' }, 400);
+	if (update.expectedRevision !== fixtureNavigationServer.revision) return json({ error: 'Conflict', current: fixtureNavigationServer }, 409);
+	fixtureNavigationServer = { version: 1, revision: fixtureNavigationServer.revision + 1, order: update.order, pinned: update.pinned };
+	navigationWrites.push(structuredClone(fixtureNavigationServer));
+	return json(fixtureNavigationServer);
+};
 
 const prefsStore = createUnifiedLibraryPrefsStore({
 	isBrowser: true,
@@ -623,6 +804,13 @@ setZonesSnapshot([
 ]);
 setSelectedZone('zone-fixture');
 
+// Fixture selectors are not part of the strict production route grammar.
+// Capture them above, then expose the exact canonical address before boot.
+if (publicVariant && window.location.pathname.startsWith('/library')) {
+	const address = new URL(window.location.href);
+	for (const key of ['public', 'nav', 'desktop', 'public_empty', 'public_error']) address.searchParams.delete(key);
+	window.history.replaceState({}, '', address);
+}
 __resetNavigation(window.location.href);
 
 const target = document.querySelector<HTMLElement>('#app');
@@ -643,6 +831,9 @@ mount(UnifiedLibraryMode, {
 	target,
 	context: new Map([[LIBRARY_MODE_ACTIVATION_CONTEXT, activationContext]]),
 	props: {
+		destinationsStore: (publicVariant ? publicDestinationsStore : { subscribe: writable({ inventory: null, loading: false, error: null }).subscribe, load: async () => {}, reset: () => {} }) as never,
+		browseController,
+		...(publicVariant ? { browseActionController } : {}),
 		sessionClient: sessionClient as never,
 		rootsStore: rootsStore as never,
 		loadRoots: (async () => {}) as never,
@@ -654,11 +845,23 @@ mount(UnifiedLibraryMode, {
 			core: { id: 'browser-fixture-core', displayName: 'Fixture', displayVersion: '1' }
 		})) as never,
 		prefsStore,
+		navigationPrefsStore,
 		albumActionController: albumActionController as never,
 		genresStore: genresStore as never,
 		composersStore: composersStore as never,
 		paletteSearchStore: paletteSearchStore as never,
-		searchPaletteData: (async () => {}) as never,
+		searchPaletteData: (async (_claim: unknown, query: string) => {
+			if (!recentVariant) return;
+			publicSearchQueries.push(query);
+			await Promise.resolve();
+			paletteSearchStore.set({ phase: 'ready', query, groups: [{ title: 'Tracks', rows: [{
+				resultId: 'fixture-current-song', title: 'I Swear', subtitle: 'All-4-One', imageKey: null
+			}] }], error: null });
+		}) as never,
+		...(publicVariant ? {
+			addFavoriteData: async (_fetchFn: unknown, payload: unknown) => { publicFavoriteWrites.push(structuredClone(payload)); },
+			songRelationshipClient: { relationship: async () => ({ songTitle: 'I Swear', albums: [], composerLabels: [] }) }
+		} : {}),
 		clearPaletteSearchData: (async () => {}) as never,
 		resetPaletteSearchData: (() => {}) as never,
 		recentStore: recentStore as never,
@@ -669,12 +872,17 @@ mount(UnifiedLibraryMode, {
 		loadMostPlayedData: (async () => {}) as never,
 		loadPlaylistsData: (async () => {}) as never,
 		fetchStatus: (async () => status) as never,
-		fetchFn: (() => {
-			throw new Error('the library scroll fixture must not fetch');
-		}) as unknown as typeof fetch,
+		fetchFn: fixtureFetch,
 		getSocketClient: (() => connectionSocket) as never
 	}
 });
+
+if (publicVariant) {
+	setTheme('dark');
+	setCoreStatus({ status: 'paired', core: { id: 'browser-fixture-core', displayName: 'Fixture', displayVersion: '1' } });
+	mount(AppSettingsMenu, { target: document.body, props: { navigationStore: navigationPrefsStore, fetchFn: fixtureFetch,
+		resolveAdvancedSettings: () => fixtureParams.get('desktop') === '1' ? () => {} : null } });
+}
 
 await tick();
 if (registeredLifecycle === null) throw new Error('Library fixture lifecycle did not register');
@@ -715,6 +923,23 @@ document.addEventListener('click', (event) => {
 		mirroredNavigationCount = navigation.length;
 	});
 });
+
+// Public collections commit their route only after the complete asynchronous
+// read. Observe the real stub URL so reload sees that committed address rather
+// than the preceding page sampled by the legacy click-microtask mirror.
+if (publicVariant) {
+	$effect.root(() => {
+		$effect(() => {
+			void navigationPage.url.href;
+			const navigation = __getNavigationLog();
+			for (const entry of navigation.slice(mirroredNavigationCount)) {
+				if (entry.operation === 'pushState' || entry.operation === 'goto') window.history.pushState({}, '', entry.url);
+				else if (entry.operation === 'replaceState') window.history.replaceState({}, '', entry.url);
+			}
+			mirroredNavigationCount = navigation.length;
+		});
+	});
+}
 
 window.addEventListener('popstate', () => {
 	lifecycle.suspend();
@@ -775,6 +1000,23 @@ async function replaceRetiredLibraryGeneration(): Promise<{
 }
 
 const fixture = {
+	get publicSearchQueries() { return [...publicSearchQueries]; },
+	get publicFavoriteWrites() { return structuredClone(publicFavoriteWrites); },
+	get publicReads() { return publicReads.map(read => ({ ...read })); },
+	get publicActionProbes() { return publicActionProbes.map(probe => ({ ...probe })); },
+	get publicActions() { return publicActions.map(action => ({ ...action })); },
+	expirePublicActionAuthority() { retirePublicAuthority(publicMainAuthority); },
+	get navigationWrites() { return structuredClone(navigationWrites); },
+	get discoveriesId() { return discoveriesId; },
+	setPublicPageMode(title: string, mode: 'ready' | 'empty' | 'error') { publicPageModes.set(title, mode); },
+	async applyNavigationSnapshot(snapshot: NavigationSettingsSnapshot) {
+		const accepted = navigationPrefsStore.applySnapshot(snapshot);
+		await tick();
+		return accepted;
+	},
+	get navigationSnapshot() {
+		return get(navigationPrefsStore).snapshot;
+	},
 	async publishInitialRoots() {
 		rootsStore.set(rootsStateFor(0));
 		await tick();

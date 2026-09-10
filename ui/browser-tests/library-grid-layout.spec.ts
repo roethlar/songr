@@ -187,3 +187,97 @@ test('native Tab crosses prepared chunks and distant album titles remain browser
 		tile.contains(window.getSelection()?.anchorNode ?? null)
 	)).toBe(true);
 });
+
+
+test('the reported 40k Shuffle seed keeps exact height as prepared chunks enter and leave view', async ({ page }, info) => {
+	test.setTimeout(120_000);
+	await page.setViewportSize({ width: 1280, height: 820 });
+	await page.addInitScript(() => {
+		Date.now = () => 1789000150591;
+		window.libraryScrollFixtureSize = { artists: 1679, albums: 40000 };
+		window.libraryScrollFixturePresentation = { artwork: true, longTitles: true, albumsSort: 'shuffle', singleLetter: false };
+	});
+	await page.goto('/fixtures/library-scroll.html');
+	await expect(page.getByTestId('unified-row').first()).toBeVisible();
+	for (const scope of ['albums', 'artists', 'genres', 'albums', 'surprise', 'albums']) {
+		await page.evaluate(scope => new Promise<void>(resolve => {
+			document.querySelector<HTMLButtonElement>(`[data-testid="unified-scope-${scope}"]`)!.click();
+			requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+		}), scope);
+		await page.waitForTimeout(100);
+	}
+	const measured = await page.getByTestId('unified-pane').evaluate(async pane => {
+		const grid = pane.querySelector<HTMLElement>('[data-scope-panel="albums"] .tiles')!;
+		const initialHeight = pane.scrollHeight;
+		let mutations = 0;
+		const observer = new MutationObserver(records => {
+			mutations += records.filter(record => record.type !== 'attributes' || !(record.target instanceof HTMLImageElement)).length;
+		});
+		observer.observe(grid, { childList: true, subtree: true, attributes: true });
+		observer.observe(grid.shadowRoot!, { childList: true, subtree: true, attributes: true });
+		for (let frame = 0; frame < 120; frame++) {
+			pane.scrollTo({ top: frame * 150, behavior: 'instant' });
+			await new Promise(requestAnimationFrame);
+		}
+		const beforeJump = pane.scrollHeight;
+		pane.scrollTo({ top: pane.scrollHeight, behavior: 'instant' });
+		await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
+		const finalHeight = pane.scrollHeight;
+		observer.disconnect();
+		// Read geometry only after the original scroll workload. Opening every
+		// chunk earlier would hide an inaccurate offscreen intrinsic fallback.
+		for (const box of grid.shadowRoot!.querySelectorAll<HTMLElement>('[data-prepared-library-chunk]')) {
+			box.style.contentVisibility = 'visible';
+		}
+		return { initialHeight, beforeJump, finalHeight, fullyRenderedHeight: pane.scrollHeight, mutations };
+	});
+	await info.attach('reported-grid-height', { body: JSON.stringify(measured), contentType: 'application/json' });
+	expect(measured.beforeJump).toBe(measured.initialHeight);
+	expect(measured.finalHeight).toBe(measured.initialHeight);
+	expect(measured.fullyRenderedHeight).toBe(measured.initialHeight);
+	expect(measured.mutations).toBe(0);
+});
+
+
+test('pending exact measurements cannot publish stale geometry or expose an inactive scope', async ({ page }) => {
+	test.setTimeout(90_000);
+	await page.addInitScript(() => {
+		const NativeResizeObserver = window.ResizeObserver;
+		const pending: Array<() => void> = [];
+		let hold = true;
+		window.ResizeObserver = class extends NativeResizeObserver {
+			constructor(callback: ResizeObserverCallback) {
+				super((entries, observer) => {
+					if (hold && entries.some(entry => entry.target.hasAttribute('data-prepared-library-chunk'))) {
+						pending.push(() => callback(entries, observer));
+					} else callback(entries, observer);
+				});
+			}
+		};
+		Object.assign(window, { pendingGridMeasurements: () => pending.length,
+			releaseGridMeasurements: () => { hold = false; for (const deliver of pending.splice(0).reverse()) deliver(); } });
+	});
+	await openAlbums(page, 'shuffle');
+	const pendingCount = () => page.evaluate(() => (window as Window & { pendingGridMeasurements(): number }).pendingGridMeasurements());
+	await expect.poll(pendingCount).toBeGreaterThan(0);
+	await page.getByTestId('unified-scope-artists').click();
+	const before = await pendingCount();
+	await page.setViewportSize({ width: 710, height: 820 });
+	await expect.poll(pendingCount).toBeGreaterThan(before);
+	const resized = await pendingCount();
+	await page.evaluate(() => window.libraryScrollFixture.setPresentation('dark', 'compact'));
+	await expect.poll(pendingCount).toBeGreaterThan(resized);
+	await page.evaluate(() => (window as Window & { releaseGridMeasurements(): void }).releaseGridMeasurements());
+	await expect.poll(() => page.locator(GRID).evaluate(grid => [...grid.shadowRoot!.querySelectorAll<HTMLElement>('[data-prepared-library-chunk]')]
+		.every(chunk => chunk.style.contentVisibility === 'auto' && /^\d+(?:\.\d+)?px$/.test(chunk.style.containIntrinsicBlockSize)))).toBe(true);
+	await expect(page.locator(TILES).first()).not.toBeVisible();
+	expect(await page.locator(GRID).evaluate(grid => {
+		for (let parent = grid.parentElement; parent; parent = parent.parentElement) {
+			if (parent.hasAttribute('data-retained-library-panel') && parent.style.contentVisibility) return false;
+		}
+		return true;
+	})).toBe(true);
+	await page.getByTestId('unified-scope-albums').click();
+	await expectStableDistantScroll(page);
+	await expectOrdinaryGridGeometry(page);
+});

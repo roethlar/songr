@@ -16,6 +16,8 @@ import {
 import { CorePressureBreaker } from "../core/roon/CorePressureBreaker";
 import { ImageService } from "../core/roon/ImageService";
 import { RecentlyPlayedService } from "../core/recently-played/RecentlyPlayedService";
+import { NavigationSettingsService } from "../core/navigation/NavigationSettingsService";
+import { registerNavigationSettingsBroadcast } from "./routes/navigationSettings";
 import { FavoritesService } from "../core/favorites/FavoritesService";
 import { BrowseSessionCoordinator } from "../core/roon/BrowseSessionCoordinator";
 import { AlbumActionResolver } from "../core/roon/AlbumActionResolver";
@@ -44,8 +46,8 @@ export interface ServerContext {
   /** The B5 admission gate over background Core work; always present. */
   readonly corePressureBreaker: CorePressureBreaker;
   /**
-   * httpServer.listen() is deferred until RecentlyPlayedService.start
-   * resolves (so the API can't serve epoch-0 sentinel snapshots).
+   * httpServer.listen() waits for persisted services to load, so clients
+   * cannot read defaults while saved state is still being restored.
    * If shutdown is requested during that window, callers MUST signal
    * it via `requestShutdown()` so the listen call is skipped — and
    * MUST check `isListening()` before calling `httpServer.close()`,
@@ -227,6 +229,10 @@ export const startServer = (
     filePath: config.favoritesPath,
   });
 
+  const navigationSettingsService = new NavigationSettingsService(logger, {
+    filePath: config.navigationSettingsPath,
+  });
+
   // Create HTTP app with services
   const app: Application = createHttpApp(
     roonClient,
@@ -235,7 +241,8 @@ export const startServer = (
     recentlyPlayedService,
     favoritesService,
     logger,
-    liveLibrary
+    liveLibrary,
+    navigationSettingsService
   );
   const httpServer = http.createServer(app);
 
@@ -253,6 +260,11 @@ export const startServer = (
     browseSessionCoordinator,
     logger,
   });
+
+  const stopNavigationBroadcast = registerNavigationSettingsBroadcast(
+    navigationSettingsService, socketContext.io
+  );
+  httpServer.once("close", stopNavigationBroadcast);
 
   let zonesSubscribed = false;
 
@@ -433,6 +445,8 @@ export const startServer = (
     // Favorites loads alongside RP behind the same deferred-listen
     // gate so the API can't serve an empty list mid-load.
     favoritesService.start(),
+    // Navigation must load before any client can read or overwrite defaults.
+    navigationSettingsService.start(),
   ]).then(
     () => {
       if (shutdownRequested) {

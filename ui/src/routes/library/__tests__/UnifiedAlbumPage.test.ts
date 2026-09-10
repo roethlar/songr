@@ -166,20 +166,22 @@ describe('UnifiedAlbumPage', () => {
 	});
 
 	it('reveals the monogram fallback when the hero image fails to load (q6)', async () => {
-		makeHarness(resolvedState(), actionState(), undefined, null, {
+		const harness = makeHarness(resolvedState(), actionState(), undefined, null, {
 			album: { imageKey: 'album-art-1', title: 'Debut', artist: 'Björk' }
 		});
 		const image = screen.getByTestId('unified-album-hero-image') as HTMLImageElement;
 		const fallback = screen.getByTestId('unified-album-hero-fallback');
 		// The monogram is the permanent placeholder layer beneath the image
-		// (q6); while the image has not failed, it stays visible on top.
+		// (q6); it remains visible while artwork is waiting to load.
 		expect(fallback.textContent?.trim()).toBe('D');
-		expect(image.style.visibility).toBe('');
+		expect(image.style.visibility).toBe('hidden');
 		// A stale key or /api/image error hides the img in place (the box's
 		// geometry is unchanged) and reveals the monogram beneath.
 		await fireEvent.error(image);
 		expect(image.style.visibility).toBe('hidden');
-		// A later successful load (e.g. a retried src) restores the image.
+		// A replacement source that decodes successfully restores the image.
+		await harness.rerender({ album: { id: 'album-1', searchKey: 'debut bjork', imageKey: 'album-art-2', title: 'Debut', artist: 'Björk' } });
+		Object.defineProperty(image, 'naturalWidth', { configurable: true, value: 300 });
 		await fireEvent.load(image);
 		expect(image.style.visibility).toBe('');
 	});
@@ -227,7 +229,7 @@ describe('UnifiedAlbumPage', () => {
 	});
 
 	it('reveals the glyph fallback when a version thumbnail fails to load (q6)', async () => {
-		makeHarness(
+		const harness = makeHarness(
 			sheetState({
 				phase: 'versions',
 				activeTab: 'versions',
@@ -247,9 +249,14 @@ describe('UnifiedAlbumPage', () => {
 			})
 		);
 		const image = screen.getByTestId('unified-album-version-art-0') as HTMLImageElement;
-		expect(image.style.visibility).toBe('');
+		expect(image.style.visibility).toBe('hidden');
 		await fireEvent.error(image);
 		expect(image.style.visibility).toBe('hidden');
+		harness.sheetStore.update(state => ({
+			...state, versions: state.versions.map(version => ({ ...version, imageKeyHint: 'fresh-artwork' }))
+		}));
+		await waitFor(() => expect(image.getAttribute('src')).toContain('fresh-artwork'));
+		Object.defineProperty(image, 'naturalWidth', { configurable: true, value: 96 });
 		await fireEvent.load(image);
 		expect(image.style.visibility).toBe('');
 	});

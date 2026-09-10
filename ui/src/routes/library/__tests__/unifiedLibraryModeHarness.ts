@@ -4,6 +4,7 @@
 import { vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/svelte';
 import { get, writable, type Writable } from 'svelte/store';
+import type { libraryDestinationsStore } from '$lib/stores/libraryDestinationsStore';
 import UnifiedLibraryMode from '../UnifiedLibraryMode.svelte';
 import type { ArtistView } from '$lib/albumArtistGroups';
 import type { LibraryPreviewResponse } from '@shared/libraryPreviewContracts';
@@ -74,6 +75,8 @@ import type {
 } from '$lib/stores/unifiedPaletteSearchStore';
 import { createUnifiedLibraryPrefsStore } from '$lib/stores/unifiedLibraryPrefsStore';
 import { collectionDrillRenderingOf } from '@shared/collectionDrillContracts';
+import { createNavigationSettingsStore, type NavigationSettingsStore } from '$lib/stores/navigationSettingsStore';
+import { DEFAULT_NAVIGATION_SETTINGS, type NavigationDestinationId } from '@shared/navigationSettings';
 
 export type SessionClient = typeof classicBrowseSessionClient;
 
@@ -422,6 +425,8 @@ export function fakeRecentStore() {
 
 
 export interface Harness {
+	destinationsStore?: typeof libraryDestinationsStore;
+	navigationPrefsStore?: NavigationSettingsStore;
 	/** Existing tests address the All-artists surface; null tests a fresh preference. */
 	artistViewPreference?: ArtistView | null;
 	sessionClient?: SessionClient;
@@ -505,6 +510,17 @@ export function mountMode(options: Harness = {}) {
 			}))
 	);
 	const corePairedStore = options.corePairedStore ?? writable(true);
+	// Preserve the existing content-interaction workload using an explicit
+	// server configuration; navigation-specific tests can supply real defaults.
+	const existingScopes: NavigationDestinationId[] = [
+		'artists', 'albums', 'genres', 'tracks', 'recently-played', 'favorites', 'surprise'
+	];
+	const navigationPrefsStore = options.navigationPrefsStore ?? createNavigationSettingsStore();
+	if (!options.navigationPrefsStore) navigationPrefsStore.applySnapshot({
+		...DEFAULT_NAVIGATION_SETTINGS,
+		order: [...existingScopes, ...DEFAULT_NAVIGATION_SETTINGS.order.filter(id => !existingScopes.includes(id))],
+		pinned: existingScopes
+	});
 	const prefsStorage = new Map<string, string>();
 	const prefsStore = createUnifiedLibraryPrefsStore({
 		isBrowser: true,
@@ -553,6 +569,12 @@ export function mountMode(options: Harness = {}) {
 	const favoritesStore =
 		options.favoritesStore ??
 		writable<FavoritesState>({ entries: [], loading: false, loaded: true });
+	const connectionSocket = fakeConnectionSocket();
+	connectionSocket.connected = true;
+	const destinationsStore = options.destinationsStore ?? {
+		subscribe: writable({ inventory: null, loading: false, error: null }).subscribe,
+		load: vi.fn(async () => {}), reset: vi.fn()
+	} as typeof libraryDestinationsStore;
 	const props = {
 		sessionClient: options.sessionClient ?? session.client,
 		rootsStore: (options.rootsSource ?? rootsStore) as never,
@@ -563,6 +585,8 @@ export function mountMode(options: Harness = {}) {
 		fetchCoreStatusData: fetchCoreStatus as never,
 		corePairedStore: corePairedStore as never,
 		prefsStore,
+		navigationPrefsStore,
+		destinationsStore,
 		genresStore: genresStore as unknown as typeof unifiedGenresStore,
 		composersStore: composersStore as unknown as typeof unifiedComposersStore,
 		paletteSearchStore: paletteSearchStore as unknown as typeof unifiedPaletteSearchStore,
@@ -589,7 +613,7 @@ export function mountMode(options: Harness = {}) {
 		...(options.albumActionController
 			? { albumActionController: options.albumActionController }
 			: {}),
-		...(options.getSocketClient ? { getSocketClient: options.getSocketClient } : {})
+		getSocketClient: options.getSocketClient ?? (() => connectionSocket)
 	};
 
 	const renderResult =
@@ -632,6 +656,7 @@ export function mountMode(options: Harness = {}) {
 		fetchCoreStatus,
 		corePairedStore,
 		prefsStore,
+		navigationPrefsStore,
 		genresStore,
 		composersStore,
 		paletteSearchStore,

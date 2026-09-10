@@ -18,7 +18,7 @@ for (const albums of [3914, 40000]) {
   await first!.evaluate(node => node.focus());
   expect(await first!.evaluate(node => document.activeElement === node)).toBe(false);
   const timings: Array<{ scope: string; ms: number }> = [];
-  for (const scope of ['albums', 'artists', 'genres', 'albums', 'surprise', 'albums', 'browse', 'favorites', 'albums']) {
+  for (const scope of ['albums', 'artists', 'genres', 'albums', 'surprise', 'albums', 'tracks', 'favorites', 'albums']) {
    timings.push(await page.evaluate(scope => new Promise<{scope: string; ms: number}>(resolve => {
     const start = performance.now();
     document.querySelector<HTMLButtonElement>(`[data-testid="unified-scope-${scope}"]`)!.click();

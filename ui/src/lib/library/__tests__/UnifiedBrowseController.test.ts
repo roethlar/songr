@@ -2,6 +2,7 @@ import { get } from 'svelte/store';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ClassicBrowseApiTransaction } from '$lib/api/client';
+import type { BrowseHistorySnapshot } from '$lib/libraryPageState';
 import type { ClassicBrowseSessionClaim } from '$lib/stores/classicBrowseSessionStore';
 import type { BrowseItem, BrowseResult, SearchResult } from '@shared/types';
 import {
@@ -32,7 +33,7 @@ function page(
 	return {
 		level: 0,
 		offset: 0,
-		count: items.length,
+		count: over.totalCount ?? items.length,
 		totalCount: items.length,
 		items,
 		...over
@@ -47,6 +48,66 @@ function dependencies(transaction: ClassicBrowseApiTransaction) {
 }
 
 describe('UnifiedBrowseController', () => {
+ it('commits a complete 275-row collection only after every page is loaded', async () => {
+  const items = Array.from({ length: 275 }, (_, index) => row(`Track ${index}`, `track-${index}`, { itemType: 'track' }));
+  let resolveLast!: (value: BrowseResult) => void;
+  const lastPage = new Promise<BrowseResult>(resolve => { resolveLast = resolve; });
+  const browse = vi.fn<ClassicBrowseApiTransaction['browse']>(async options => options.itemKey
+   ? page(items.slice(0, 100), { title: 'Tracks', level: 1, totalCount: items.length })
+   : page([row('Tracks', 'fresh-tracks', { hint: 'list' })], { title: 'Browse' }));
+  const browseLoad = vi.fn<ClassicBrowseApiTransaction['browseLoad']>(async options => options.offset === 100
+   ? page(items.slice(100, 200), { title: 'Tracks', level: 1, offset: 100, totalCount: items.length })
+   : lastPage);
+  const transaction = { browse, browseLoad } as unknown as ClassicBrowseApiTransaction;
+  const deps = dependencies(transaction);
+  const controller = createUnifiedBrowseController(deps);
+  const snapshot: BrowseHistorySnapshot = { context: { hierarchy: 'browse' }, history: [{ hierarchy: 'browse', breadcrumb: { title: 'Tracks' } }], forward: [] };
+  const loading = controller.restore(CLAIM, snapshot, 'zone-1', { complete: true });
+  await vi.waitFor(() => expect(browseLoad).toHaveBeenCalledTimes(2));
+  expect(get(controller)).toMatchObject({ phase: 'loading', result: null, snapshot });
+  resolveLast(page(items.slice(200), { title: 'Tracks', level: 1, offset: 200, totalCount: items.length }));
+  await expect(loading).resolves.toBe(true);
+  expect(get(controller)).toMatchObject({ phase: 'ready', result: { items, count: 275, totalCount: 275, offset: 0 }, snapshot, error: null });
+  expect(deps.transaction).toHaveBeenCalledTimes(1);
+  expect(deps.transaction).toHaveBeenCalledWith('classic-browse', CLAIM, expect.any(Function));
+  expect(browseLoad.mock.calls.map(([options]) => options)).toEqual([
+   { hierarchy: 'browse', zoneId: 'zone-1', offset: 100, count: 175 },
+   { hierarchy: 'browse', zoneId: 'zone-1', offset: 200, count: 75 }
+  ]);
+  expect(JSON.stringify(get(controller).snapshot)).not.toContain('fresh-tracks');
+ });
+
+ it('does not publish a partial collection after an incomplete page', async () => {
+  const browse = vi.fn<ClassicBrowseApiTransaction['browse']>(async options => options.itemKey
+   ? page(Array.from({ length: 100 }, (_, index) => row(`Track ${index}`, `track-${index}`)), { title: 'Tracks', level: 1, totalCount: 150 })
+   : page([row('Tracks', 'fresh-tracks', { hint: 'list' })], { title: 'Browse' }));
+  const browseLoad = vi.fn<ClassicBrowseApiTransaction['browseLoad']>(async () =>
+   page([], { title: 'Tracks', offset: 100, level: 1, totalCount: 150 }));
+  const controller = createUnifiedBrowseController(dependencies({ browse, browseLoad } as unknown as ClassicBrowseApiTransaction));
+  await expect(controller.restore(CLAIM, {
+   context: { hierarchy: 'browse' }, history: [{ hierarchy: 'browse', breadcrumb: { title: 'Tracks' } }], forward: []
+  }, 'zone-1', { complete: true })).resolves.toBe(false);
+  expect(get(controller)).toMatchObject({ phase: 'error', result: null, snapshot: { history: [{ hierarchy: 'browse', breadcrumb: { title: 'Tracks' } }] }, notice: null });
+  expect(get(controller).error).toBe('The collection changed or ended before every item was loaded.');
+  expect(browseLoad).toHaveBeenCalledTimes(1);
+ });
+
+ it.each([false, true])('preserves a complete-collection Roon message with isError=%s', async isError => {
+  const browse = vi.fn<ClassicBrowseApiTransaction['browse']>(async options => options.itemKey
+   ? page(Array.from({ length: 100 }, (_, index) => row(`Track ${index}`, `track-${index}`)), { title: 'Tracks', level: 1, totalCount: 150 })
+   : page([row('Tracks', 'fresh-tracks', { hint: 'list' })], { title: 'Browse' }));
+  const diagnostic = page([], { action: 'message', message: 'This collection is temporarily unavailable.', isError, offset: 100, level: 1 });
+  const browseLoad = vi.fn<ClassicBrowseApiTransaction['browseLoad']>(async () => diagnostic);
+  const controller = createUnifiedBrowseController(dependencies({ browse, browseLoad } as unknown as ClassicBrowseApiTransaction));
+  const snapshot: BrowseHistorySnapshot = {
+   context: { hierarchy: 'browse' }, history: [{ hierarchy: 'browse', breadcrumb: { title: 'Tracks' } }], forward: []
+  };
+  await expect(controller.restore(CLAIM, snapshot, 'zone-1', { complete: true })).resolves.toBe(true);
+  expect(get(controller)).toEqual({ phase: 'ready', result: diagnostic, snapshot, notice: null, error: null });
+  expect(get(controller).result!.items).toEqual([]);
+  expect(browseLoad).toHaveBeenCalledTimes(1);
+ });
+
 	it('re-resolves every semantic breadcrumb from a fresh root', async () => {
 		const browse = vi.fn<ClassicBrowseApiTransaction['browse']>(async (options) => {
 			if (!options.itemKey) return page([row('Library', 'fresh-library')], { title: 'Browse' });
@@ -189,6 +250,7 @@ describe('UnifiedBrowseController', () => {
 		await expect(controller.loadMore(CLAIM)).resolves.toBe(true);
 
 		expect(get(controller).result?.items).toHaveLength(200);
+		expect(get(controller).result).toMatchObject({ count: 54_082, totalCount: 54_082, offset: 0 });
 		expect(transaction.browseLoad).toHaveBeenCalledWith({
 			hierarchy: 'browse',
 			offset: 100,
@@ -397,5 +459,170 @@ describe('UnifiedBrowseActionController', () => {
 			available: { 'play-now': true, 'add-next': true, queue: true }
 		});
 		expect(largeTransaction.browseLoad).not.toHaveBeenCalled();
+	});
+});
+
+
+describe('exact public Browse action selection', () => {
+	function fixture() {
+		const copies = ['copy-one', 'copy-two'].map(itemKey => row('(Coffee’s for Closers)', itemKey,
+			{ subtitle: 'Fall Out Boy', hint: 'action_list', itemType: 'track' }));
+		const issued: string[] = [];
+		let expired = false;
+		const transaction = {
+			browse: vi.fn(async (options) => {
+				if (options.popAll) return page(copies, { title: 'Tracks' });
+				const key = options.itemKey ?? '';
+				if (expired) throw new Error('The selected item key has expired.');
+				if (copies.some(item => item.itemKey === key)) return page([
+					row('Play Now', `${key}:${options.zoneId}:play`, { hint: 'action', isPlayable: true }),
+					row('Add Next', `${key}:${options.zoneId}:next`, { hint: 'action', isPlayable: true }),
+					row('Queue', `${key}:${options.zoneId}:queue`, { hint: 'action', isPlayable: true })
+				], { title: 'Actions', level: 1 });
+				issued.push(key);
+				return page([]);
+			}),
+			browseLoad: vi.fn(), browsePop: vi.fn(), browseSearch: vi.fn()
+		} as unknown as ClassicBrowseApiTransaction;
+		const deps = dependencies(transaction);
+		const controller = createUnifiedBrowseActionController(deps);
+		const source = { kind: 'browse' as const,
+			snapshot: { context: { hierarchy: 'browse' as const }, history: [], forward: [] },
+			item: copies[1], restoreCount: copies.length };
+		return { controller, source, transaction, deps, issued, expire: () => { expired = true; } };
+	}
+
+	it('opens the exact second identical track and executes only its advertised leaf without replay', async () => {
+		const { controller, source, transaction, issued } = fixture();
+		expect(await controller.open(CLAIM, source, 'zone-a')).toBe(true);
+		expect(get(controller).available).toEqual({ 'play-now': true, 'add-next': true, queue: true });
+		expect(issued).toEqual([]);
+		expect(JSON.stringify(get(controller).source)).not.toContain('copy-two');
+		expect(await controller.execute(CLAIM, 'add-next', 'zone-a')).toBe(true);
+		expect(issued).toEqual(['copy-two:zone-a:next']);
+		expect(vi.mocked(transaction.browse).mock.calls.map(([options]) => options.itemKey)).toEqual(['copy-two', 'copy-two:zone-a:next']);
+		expect(transaction.browseLoad).not.toHaveBeenCalled();
+		expect(transaction.browsePop).not.toHaveBeenCalled();
+	});
+
+	it('keeps the exact selection when the same published source is reprobed for a new zone', async () => {
+		const { controller, source, transaction, issued } = fixture();
+		await controller.open(CLAIM, source, 'zone-a');
+		const published = get(controller).source!;
+		expect(await controller.open(CLAIM, published, 'zone-b')).toBe(true);
+		expect(await controller.execute(CLAIM, 'play-now', 'zone-a')).toBe(false);
+		expect(issued).toEqual([]);
+		expect(await controller.execute(CLAIM, 'play-now', 'zone-b')).toBe(true);
+		expect(issued).toEqual(['copy-two:zone-b:play']);
+		expect(vi.mocked(transaction.browse).mock.calls.map(([options]) => options.itemKey)).toEqual(['copy-two', 'copy-two', 'copy-two:zone-b:play']);
+	});
+
+	it('refuses an expired exact row without falling back to matching display text', async () => {
+		const { controller, source, transaction, issued, expire } = fixture();
+		expire();
+		expect(await controller.open(CLAIM, source, 'zone-a')).toBe(false);
+		expect(get(controller).error).toContain('expired');
+		expect(vi.mocked(transaction.browse).mock.calls.map(([options]) => options.itemKey)).toEqual(['copy-two']);
+		expect(issued).toEqual([]);
+	});
+
+	it('refuses an expired advertised leaf without reopening the track or issuing a replacement', async () => {
+		const { controller, source, transaction, issued, expire } = fixture();
+		await controller.open(CLAIM, source, 'zone-a');
+		expire();
+		expect(await controller.execute(CLAIM, 'queue', 'zone-a')).toBe(false);
+		expect(get(controller).error).toContain('expired');
+		expect(vi.mocked(transaction.browse).mock.calls.map(([options]) => options.itemKey)).toEqual(['copy-two', 'copy-two:zone-a:queue']);
+		expect(issued).toEqual([]);
+	});
+
+	it('refuses a changed claim and clears private selection on reset', async () => {
+		const { controller, source, transaction, issued } = fixture();
+		await controller.open(CLAIM, source, 'zone-a');
+		const published = get(controller).source!;
+		expect(await controller.execute({ ...CLAIM, claimId: CLAIM.claimId + 1 }, 'queue', 'zone-a')).toBe(false);
+		controller.reset();
+		expect(await controller.open(CLAIM, published, 'zone-a')).toBe(false);
+		expect(get(controller).error).toMatch(/select.*again/i);
+		expect(transaction.browse).toHaveBeenCalledTimes(1);
+		expect(issued).toEqual([]);
+	});
+
+	it('retains initial exact selection until a zone is selected', async () => {
+		const { controller, source, transaction } = fixture();
+		expect(await controller.open(CLAIM, source)).toBe(true);
+		expect(transaction.browse).not.toHaveBeenCalled();
+		expect(await controller.open(CLAIM, get(controller).source!, 'zone-a')).toBe(true);
+		expect(vi.mocked(transaction.browse).mock.calls[0][0].itemKey).toBe('copy-two');
+	});
+
+	it('does not issue an obsolete probe after reset while its transaction is queued', async () => {
+		const { controller, source, transaction, deps } = fixture();
+		let release!: () => Promise<void>;
+		deps.transaction.mockImplementationOnce((_role, _claim, work) => new Promise((resolve, reject) => {
+			release = async () => { try { resolve(await work(transaction)); } catch (error) { reject(error); } };
+		}));
+		const pending = controller.open(CLAIM, source, 'zone-a');
+		controller.reset();
+		await release();
+		expect(await pending).toBe(false);
+		expect(transaction.browse).not.toHaveBeenCalled();
+		expect(get(controller).phase).toBe('idle');
+	});
+
+	it('does not issue an advertised leaf after reset while execution is queued', async () => {
+		const { controller, source, transaction, deps, issued } = fixture();
+		await controller.open(CLAIM, source, 'zone-a');
+		let release!: () => Promise<void>;
+		deps.transaction.mockImplementationOnce((_role, _claim, work) => new Promise((resolve, reject) => {
+			release = async () => { try { resolve(await work(transaction)); } catch (error) { reject(error); } };
+		}));
+		const pending = controller.execute(CLAIM, 'queue', 'zone-a');
+		controller.reset();
+		await release();
+		expect(await pending).toBe(false);
+		expect(transaction.browse).toHaveBeenCalledTimes(1);
+		expect(issued).toEqual([]);
+	});
+});
+
+
+describe('partial track list after an inline action', () => {
+	it('restores the visible prefix and parent cursor before loading another page', async () => {
+		const tracks = Array.from({ length: 350 }, (_, index) => row(`Track ${index}`, `track-${index}`, { itemType: 'track', hint: 'action_list' }));
+		let cursor = 'root';
+		const loads: number[] = [];
+		const transaction = {
+			browse: vi.fn(async (options: Parameters<ClassicBrowseApiTransaction['browse']>[0]) => {
+				if (options.popAll) cursor = 'root';
+				if (options.itemKey === 'list') cursor = 'tracks';
+				if (options.itemKey?.startsWith('track-')) cursor = 'actions';
+				if (options.itemKey === 'queue-leaf') return page([], { action: 'none' });
+				if (cursor === 'root') return page([row('Recordings', 'list', { hint: 'list' })]);
+				if (cursor === 'actions') return page([row('Queue', 'queue-leaf', { hint: 'action', isPlayable: true })], { title: 'Actions', level: 2 });
+				return page(tracks.slice(0, 100), { title: 'Recordings', level: 1, totalCount: 350 });
+			}),
+			browseLoad: vi.fn(async (options: Parameters<ClassicBrowseApiTransaction['browseLoad']>[0]) => {
+				if (cursor !== 'tracks') throw new Error('Load used the action cursor');
+				const offset = options.offset ?? 0;
+				loads.push(offset);
+				return page(tracks.slice(offset, offset + Math.min(options.count ?? 100, 100)), { title: 'Recordings', level: 1, offset, totalCount: 350 });
+			})
+		} as unknown as ClassicBrowseApiTransaction;
+		const deps = dependencies(transaction);
+		const controller = createUnifiedBrowseController(deps);
+		const actions = createUnifiedBrowseActionController(deps);
+		const snapshot: BrowseHistorySnapshot = { context: { hierarchy: 'browse' }, history: [{ hierarchy: 'browse', breadcrumb: { title: 'Recordings' } }], forward: [] };
+		await controller.restore(CLAIM, snapshot, 'zone-a');
+		await controller.loadMore(CLAIM, 'zone-a');
+		const selected = get(controller).result!.items[137];
+		await actions.open(CLAIM, { kind: 'browse', snapshot, item: selected }, 'zone-a');
+		await actions.execute(CLAIM, 'queue', 'zone-a');
+		expect(cursor).toBe('actions');
+		expect(get(controller).result?.items).toEqual(tracks.slice(0, 200));
+		expect(get(controller).result?.count).toBe(350);
+		await controller.loadMore(CLAIM, 'zone-a');
+		expect(get(controller).result?.items).toEqual(tracks.slice(0, 300));
+		expect(loads).toEqual([100, 100, 200]);
 	});
 });

@@ -177,7 +177,7 @@ function fakeBrowseActionController() {
 	const execute = vi.fn(async () => true);
 	const reset = vi.fn(() => store.set(idle()));
 	return {
-		controller: { subscribe: store.subscribe, open, execute, reset } as UnifiedBrowseActionController,
+		controller: { subscribe: store.subscribe, open, execute, reset, executeItem: vi.fn(), openActionList: vi.fn() } as UnifiedBrowseActionController,
 		store,
 		open,
 		execute,
@@ -443,11 +443,11 @@ describe('UnifiedLibraryMode — shell', () => {
 		});
 
 		const scopeNav = screen.getByRole('navigation', { name: 'Library scope' });
-		expect(Array.from(scopeNav.querySelectorAll('.sc'), (chip) => chip.textContent)).toEqual([
+		expect(Array.from(scopeNav.querySelectorAll('.sc[data-primary-id]:not(.scope-measure)'), (chip) => chip.textContent)).toEqual([
 			'Artists',
 			'Albums',
 			'Genres',
-			'Browse',
+			'Tracks',
 			'Recently played',
 			'Favorites',
 			'Surprise me'
@@ -553,6 +553,15 @@ describe('UnifiedLibraryMode — shell', () => {
 	});
 });
 
+function restoreLegacyBrowseRoot(harness: ReturnType<typeof mountMode>): void {
+	harness.registered.lifecycle!.resume({
+		cause: 'history-pop',
+		pageState: buildUnifiedLibraryPageState({ scope: 'browse', collectionDrill: null,
+			itemTarget: null, filterText: '', surpriseSeed: null,
+			browseHistory: { context: { hierarchy: 'browse' }, history: [], forward: [] } })
+	} as CommittedLibraryModeActivation);
+}
+
 describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 	beforeEach(() => {
 		clearPendingLibraryPageStateWrite();
@@ -572,14 +581,15 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 		]);
 	});
 
-	it('uses the existing Unified claim and records only semantic Browse history', async () => {
+	it('restores a legacy Browse address with the existing claim and records only semantic history', async () => {
 		const browse = fakeBrowseController();
 		const harness = mountMode({
+			withContext: true,
 			liveLibrary: harnessLibrary(),
 			browseController: browse.controller
 		});
 
-		await fireEvent.click(screen.getByTestId('unified-scope-browse'));
+		restoreLegacyBrowseRoot(harness);
 		await waitFor(() => expect(browse.restore).toHaveBeenCalledTimes(1));
 		expect(harness.session.claim).toHaveBeenCalledTimes(1);
 		expect(screen.getByTestId('unified-browse-view')).toBeInTheDocument();
@@ -637,7 +647,8 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 				'zone-1'
 			)
 		);
-		expect(screen.getByTestId('unified-scope-browse')).toHaveAttribute('aria-pressed', 'true');
+		expect(screen.getByTestId('unified-pane')).toHaveAttribute('data-scope', 'browse');
+		expect(screen.queryByTestId('unified-scope-browse')).toBeNull();
 	});
 
 	it('moves See All into the persisted semantic search hierarchy', async () => {
@@ -707,7 +718,8 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 			standaloneLiveLevel('Genres', [{ token: 'genre:jazz', title: 'Jazz', kind: 'genre' }])
 		);
 		const openLiveRef = vi.fn(async () => standaloneLiveLevel('Jazz', []));
-		mountMode({
+		const harness = mountMode({
+			withContext: true,
 			liveLibrary: harnessLibrary(),
 			browseController: browse.controller,
 			genresStore,
@@ -715,7 +727,7 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 			openLiveRef
 		});
 
-		await fireEvent.click(screen.getByTestId('unified-scope-browse'));
+		restoreLegacyBrowseRoot(harness);
 		await waitFor(() => expect(screen.getByTestId('unified-browse-view')).toBeInTheDocument());
 		await fireEvent.click(screen.getByTestId('unified-find'));
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
@@ -728,7 +740,8 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 			'genre'
 		);
 		expect(screen.queryByTestId('unified-browse-view')).toBeNull();
-		expect(screen.getByTestId('unified-scope-browse')).toHaveAttribute('aria-pressed', 'true');
+		expect(screen.getByTestId('unified-pane')).toHaveAttribute('data-scope', 'browse');
+		expect(screen.queryByTestId('unified-scope-browse')).toBeNull();
 	});
 
 	it('retires palette authority before a keyless category result opens explicit actions', async () => {
@@ -1164,7 +1177,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		expect(zeroRow?.querySelector('.ac')).toHaveTextContent('0');
 	});
 
-	it('redraws Surprise me by re-selecting its chip and renders the prototype hint after the tiles', async () => {
+	it('redraws Surprise me by re-selecting its control and keeps the instruction after the tiles', async () => {
 		const albums = Array.from({ length: 40 }, (_unused, index) =>
 			harnessAlbum(`Album ${index.toString().padStart(2, '0')}`)
 		);
@@ -1176,7 +1189,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		expect(first).toHaveLength(24);
 		expect(screen.queryByRole('button', { name: 'Redraw' })).toBeNull();
 		const hint = activeLibraryScreen.getByText(
-			'Random, not "unplayed" — nothing knows what you have heard. Re-select the chip to redraw.'
+			'Choose Surprise me again for another selection.'
 		);
 		expect(hint.previousElementSibling).toHaveClass('tiles');
 		expect(hint.parentElement?.lastElementChild).toBe(hint);

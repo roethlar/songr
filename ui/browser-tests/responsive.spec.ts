@@ -60,10 +60,21 @@ test('the core controls stay reachable on a phone', async ({ page }) => {
 		'unified-about-open',
 		'unified-scope-artists',
 		'unified-scope-albums',
-		'unified-scope-browse'
+		'unified-scope-more'
 	]) {
 		await expect(page.getByTestId(id), `${id} off-screen at 390px`).toBeInViewport();
 	}
+
+	await expect(page.getByRole('button', { name: 'Open Controller settings' })).toBeInViewport();
+	// Configured pages that do not fit remain actionable through More.
+	await page.getByTestId('unified-scope-more').click();
+	await expect(page.getByRole('menu', { name: 'More library pages' })).toBeInViewport();
+	await expect(page.getByTestId('unified-scope-tracks')).toBeInViewport();
+	await page.getByTestId('unified-scope-tracks').click();
+	await expect(page.getByTestId('unified-pane')).toHaveAttribute('data-scope', 'browse');
+	await expect(page.getByRole('menu', { name: 'More library pages' })).toHaveCount(0);
+	await expect(page.getByTestId('unified-scope-more')).toBeFocused();
+	await page.getByTestId('unified-scope-artists').click();
 
 	// Names must be readable, not ellipsed into a single-column-worth of nothing:
 	// the multi-column list collapses to one column at phone width.

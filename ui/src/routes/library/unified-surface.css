@@ -380,11 +380,11 @@
   border-radius: 6px;
 }
 
-/* scope chips: one height, one baseline, no wrapped reasons inside */
+/* Shared navigation keeps the existing single-row controls; excess pages use More. */
 .unified-surface .scopes {
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   /* The scope chips live inside the scrolling pane. Left unpinned they scroll
      away with the list, so switching tabs from a few thousand pixels down means
@@ -465,16 +465,18 @@
 .unified-surface .artist-view-switch {
   display: inline-flex;
   flex: 0 0 auto;
-  max-width: 100%;
-  padding: 3px;
+  position: relative;
   gap: 2px;
-  background: var(--control);
+  padding: 2px;
   border: 1px solid var(--line);
   border-radius: 6px;
+  background: var(--control);
 }
 .unified-surface .artist-view-switch button {
-  min-height: var(--chip);
-  padding: 0 10px;
+  position: relative;
+  min-height: 26px;
+  min-width: 44px;
+  padding: 0 9px;
   border: 0;
   border-radius: 3px;
   background: transparent;
@@ -483,13 +485,11 @@
   white-space: nowrap;
   cursor: pointer;
 }
-.unified-surface .artist-view-switch button.on {
-  background: var(--accent);
-  color: #000;
-}
-.unified-surface .artist-view-switch button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.unified-surface .artist-view-switch button.on { background: var(--accent); color: var(--on-accent); }
+.unified-surface .artist-view-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.unified-surface[data-d="pi"] .artist-view-switch button::after { content: ''; position: absolute; inset: -9px 0; }
+@media (pointer: coarse) {
+  .unified-surface .artist-view-switch button::after { content: ''; position: absolute; inset: -9px 0; }
 }
 .unified-surface .credit-label {
   min-width: 0;
@@ -1263,3 +1263,13 @@
 .unified-surface .library-index-slot { flex: 0 0 var(--rw); min-height: 0; }
 .unified-surface .library-index-slot .rail { height: 100%; }
 @media (max-width: 520px) { .unified-surface .library-index-slot { display: none; } }
+
+.unified-surface .scope-navigation { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; }
+.unified-surface .scope-navigation > .sc { flex: 0 0 auto; position: relative; }
+.unified-surface .scope-navigation > .sc::after { content: ''; position: absolute; inset: -4px 0; }
+.unified-surface .scope-navigation > .scope-measure { position: absolute; visibility: hidden; pointer-events: none; width: max-content; }
+.unified-surface .scope-more { gap: 7px; }
+.unified-surface .scope-overflow { position: absolute; top: calc(100% + 8px); width: min(264px, 100%); box-sizing: border-box; padding: 5px; overflow-y: auto; overscroll-behavior: contain; background: var(--control); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 12px 32px #0005; }
+.unified-surface .scope-overflow button { display: block; width: 100%; min-height: 44px; border: 0; border-radius: 7px; padding: 10px 13px; text-align: left; font: inherit; font-size: 14px; color: var(--text); background: transparent; cursor: pointer; }
+.unified-surface .scope-overflow button:hover, .unified-surface .scope-overflow button:focus-visible { background: var(--songr-surface-1d); outline: 1px solid var(--line-strong); }
+.unified-surface .scope-overflow button.on { color: var(--accent); }

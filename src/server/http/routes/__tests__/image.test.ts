@@ -4,6 +4,8 @@ import { AddressInfo } from 'net';
 import path from 'path';
 import { ImageService } from '../../../../core/roon/ImageService';
 import { createImageRouter } from '../image';
+import { ImageQueueFullError } from '../../../../core/roon/errors';
+import { createErrorHandler } from '../../middleware/errorHandler';
 
 // Minimal mock client
 const mockRoonClient = {
@@ -22,6 +24,7 @@ const mockLogger = {
 function startApp(service: ImageService): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
   app.use('/api/image', createImageRouter(service));
+  app.use(createErrorHandler(mockLogger));
   return new Promise((resolve) => {
     const server = http.createServer(app);
     server.listen(0, '127.0.0.1', () => {
@@ -138,4 +141,43 @@ describe('GET /api/image/:key', () => {
     // SHA-256 hex digest length
     expect(dataFiles[0]).toMatch(/^[0-9a-f]{64}$/);
   });
-});
+  it('returns a retryable 503 with a one-second Retry-After when the artwork queue is full', async () => {
+    jest.spyOn(service, 'getImage').mockRejectedValueOnce(new ImageQueueFullError());
+    const res = await fetch(`${app.url}/api/image/busy`);
+    expect(res.status).toBe(503);
+    expect(res.headers.get('retry-after')).toBe('1');
+    expect(await res.json()).toMatchObject({ details: 'IMAGE_QUEUE_FULL' });
+  });
+
+  it('detaches the image waiter when the HTTP client closes before a response', async () => {
+    let admitted!: () => void;
+    const ready = new Promise<void>((resolve) => { admitted = resolve; });
+    let closed!: () => void;
+    const detached = new Promise<void>((resolve) => { closed = resolve; });
+    let serverSignal: AbortSignal | undefined;
+    jest.spyOn(service, 'getImage').mockImplementationOnce((_key, _scale, _width, _height, signal) => {
+      serverSignal = signal;
+      admitted();
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => {
+          closed();
+          reject(signal.reason);
+        }, { once: true });
+      });
+    });
+    const controller = new AbortController();
+    const response = fetch(`${app.url}/api/image/abandoned`, { signal: controller.signal }).catch((error: Error) => error);
+    await ready;
+    expect(serverSignal).toBeDefined();
+    controller.abort();
+    expect(await response).toMatchObject({ name: 'AbortError' });
+    await detached;
+    expect(serverSignal?.aborted).toBe(true);
+  });
+
+  it('keeps successful response completion separate from request cancellation', async () => {
+    const spy = jest.spyOn(service, 'getImage');
+    const res = await fetch(`${app.url}/api/image/complete`);
+    expect(await res.text()).toBe('PNG_BYTES');
+    expect(spy.mock.calls[0][4]?.aborted).toBe(false);
+  });});

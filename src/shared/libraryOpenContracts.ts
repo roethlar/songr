@@ -67,7 +67,7 @@ export const LIBRARY_NODE_KINDS = [
   "composition",
   /** A structural child of a collection node: Roon's own "Albums"/"Artists". */
   "section",
-  /** A verb row: Play Artist, Play Album, Play Genre, Play Composer. */
+  /** A verb row: Play Artist, Play Album, Play Genre, Play Composer, Play Work. */
   "action",
   /** Navigable, nature unclaimed. */
   "entry",
@@ -311,6 +311,7 @@ export const LIBRARY_VERB_LABELS: readonly string[] = [
   "play genre",
   "play composer",
   "play composition",
+  "play work",
   "play now",
   "play from here",
   "shuffle",

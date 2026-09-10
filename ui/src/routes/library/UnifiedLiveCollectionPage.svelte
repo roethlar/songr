@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { onDestroy, untrack } from 'svelte';
+	import { get } from 'svelte/store';
 	import { measureLibraryChrome } from '$lib/libraryListChrome';
 	import type { AlbumActionController } from '$lib/library/AlbumActionController';
 	import type {
@@ -31,6 +33,9 @@
 		onBack: () => void;
 		onRetry: () => void;
 		onOpenRow: (row: LibraryLevelRow) => void;
+		onRowAction?: (row: LibraryLevelRow, semantic: 'play-now' | 'add-next' | 'queue') => void;
+		onRowMore?: (row: LibraryLevelRow) => void;
+		onCloseRowMore?: () => void;
 		hrefForRow: (row: LibraryLevelRow) => string | null;
 		onOpenAlbum: (entry: LibraryAlbumEntry) => void;
 		hrefForAlbum: (entry: LibraryAlbumEntry) => string | null;
@@ -59,6 +64,9 @@
 		onBack,
 		onRetry,
 		onOpenRow,
+		onRowAction,
+		onRowMore,
+		onCloseRowMore,
 		hrefForRow,
 		onOpenAlbum,
 		hrefForAlbum,
@@ -76,6 +84,12 @@
 		hrefForPreview
 	}: Props = $props();
 
+	let surface: HTMLElement | null = null;
+	let menuRow = $state.raw<LibraryLevelRow | null>(null);
+	let menuTrigger: HTMLButtonElement | null = null;
+	let menuRequestId = $state<string | null>(null);
+	let menuStartingRequestId: string | null = null;
+	let menuMayReissue = false;
 	let sortOpen = $state(false);
 	let railTarget = $state<LetterBucket | null>(null);
 	const action = $derived($actionController);
@@ -86,6 +100,8 @@
 		rows.filter((row) => row.kind !== 'album' && row.kind !== 'action')
 	);
 	const hasActions = $derived(rows.some((row) => row.kind === 'action'));
+	const bulkRows = $derived(rows.filter(row => row.kind === 'action' &&
+		['play artist', 'play album', 'play genre', 'play composer', 'play composition', 'play work'].includes(row.title.trim().toLowerCase())));
 	const actionBusy = $derived(
 		action.phase === 'resolving' ||
 			action.phase === 'choosing' ||
@@ -146,13 +162,101 @@
 		return kind === 'track' ? 'recording' : kind === 'entry' ? 'list' : kind;
 	}
 
+	function closeRowMenu(cancel = true, focus = false): void {
+		if (!menuRow) return;
+		const current = get(actionController);
+		const owns = menuRequestId === null ? current.requestId === menuStartingRequestId : current.requestId === menuRequestId;
+		menuRow = null;
+		menuRequestId = null;
+		menuMayReissue = false;
+		if (cancel && owns) {
+			if (onCloseRowMore) onCloseRowMore();
+			else actionController.cancel();
+		}
+		if (focus) menuTrigger?.focus();
+		menuTrigger = null;
+	}
+
+	function openRowMenu(row: LibraryLevelRow, event: MouseEvent): void {
+		if (menuRow === row) { closeRowMenu(true, true); return; }
+		if (!onRowMore || !actionsEnabled || actionBusy || page.phase !== 'ready' || !rows.includes(row)) return;
+		closeRowMenu();
+		menuRow = row;
+		menuTrigger = event.currentTarget as HTMLButtonElement;
+		menuStartingRequestId = get(actionController).requestId;
+		menuRequestId = null;
+		onRowMore(row);
+	}
+
+	// Observe every controller transition, including a bounded same-intent reissue,
+	// so choices from a newer unrelated attempt never inherit this row's menu.
+	$effect(() => {
+		const controller = actionController;
+		return controller.subscribe(current => untrack(() => {
+			if (!menuRow) return;
+			if (current.requestId === menuStartingRequestId && menuRequestId === null) return;
+			if (current.requestId !== null && current.requestId !== menuRequestId) {
+				if (menuRequestId !== null && !menuMayReissue) { closeRowMenu(false); return; }
+				menuRequestId = current.requestId;
+				menuMayReissue = false;
+			}
+			if (current.phase === 'failed' && current.code === 'SESSION_LOST' && !current.executionAttempted) menuMayReissue = true;
+			if (current.phase === 'executed') closeRowMenu(false, true);
+			else if (current.phase === 'canceled' || current.phase === 'idle') closeRowMenu(false);
+		}));
+	});
+	$effect(() => {
+		const selected = menuRow;
+		if (selected && (!actionsEnabled || page.phase !== 'ready' || !rows.includes(selected))) untrack(() => closeRowMenu());
+	});
+	onDestroy(() => closeRowMenu());
+
+	function dismissRecordingMenus(event: PointerEvent | KeyboardEvent): void {
+		if (!menuRow) return;
+		if (event instanceof KeyboardEvent) {
+			if (event.key !== 'Escape') return;
+			event.preventDefault();
+			closeRowMenu(true, true);
+		} else {
+			const menu = surface?.querySelector('[data-live-row-menu="open"]');
+			if (!(event.target instanceof Node) || !menu?.contains(event.target)) closeRowMenu();
+		}
+	}
+
 	function setAlbumSort(value: string): void {
 		railTarget = null;
 		onSetAlbumSort(value);
 	}
 </script>
 
+{#snippet rowControls(row: LibraryLevelRow, prominent: boolean)}
+	<div class="recording-controls" class:prominent data-live-row-menu={menuRow === row ? 'open' : undefined}>
+		<button type="button" class="tgo" disabled={!onRowAction || !actionsEnabled || actionBusy} onclick={() => onRowAction?.(row, 'play-now')}>Play</button>
+		<button type="button" class="tq" disabled={!onRowAction || !actionsEnabled || actionBusy} onclick={() => onRowAction?.(row, 'queue')}>Queue</button>
+		<button type="button" class="recording-more" aria-label="More actions for {row.title}" aria-haspopup="menu" aria-expanded={menuRow === row}
+			disabled={menuRow !== row && (!onRowMore || !actionsEnabled || actionBusy)} onclick={event => openRowMenu(row, event)}>⋯</button>
+		{#if menuRow === row}
+			<div class="recording-menu" role="menu" aria-label="Actions for {row.title}">
+				{#if menuRequestId === null || action.phase === 'resolving'}<span role="status">Loading…</span>
+				{:else if action.phase === 'executing'}<span role="status">Working…</span>
+				{:else if action.phase === 'failed' || action.phase === 'outcome-unknown'}<span class="error" role="alert">{action.error ?? 'The action failed.'}</span>
+				{:else if action.phase === 'choosing' && action.requestId === menuRequestId}
+					{#each action.actions as choice (choice.actionId)}
+						<button type="button" role="menuitem" disabled={!actionsEnabled} onclick={() => {
+							if (menuRow === row && rows.includes(row) && get(actionController).requestId === menuRequestId) actionController.execute(choice.actionId);
+						}}>{choice.label}</button>
+					{/each}
+					{#if action.actions.length === 0}<span>No actions are available.</span>{/if}
+				{/if}
+			</div>
+		{/if}
+	</div>
+{/snippet}
+
+<svelte:window onpointerdown={dismissRecordingMenus} onkeydown={dismissRecordingMenus} />
+
 <section
+	bind:this={surface}
 	class="item-page"
 	data-testid="unified-live-collection-page"
 	data-level-kind={levelKind}
@@ -164,8 +268,11 @@
 		</h2>
 		{#if levelKind !== 'genre' && page.phase === 'ready' && albumRows.length > 0}
 			<span class="n mono" data-testid="unified-live-collection-summary">
-				{(page.level?.count ?? albumRows.length).toLocaleString()} ALBUMS
+				{albumRows.length.toLocaleString()} ALBUMS
 			</span>
+		{/if}
+		{#if page.phase === 'ready' && (levelKind === 'composer' || levelKind === 'composition') && ordinaryRows.length > 0}
+			<span class="n mono" data-testid="unified-live-collection-summary">{ordinaryRows.length.toLocaleString()} {levelKind === 'composer' ? 'COMPOSITIONS' : 'RECORDINGS'}</span>
 		{/if}
 		{#if levelKind !== 'genre' && page.phase === 'ready' && albumRows.length > 0}
 			<div class="sortc-wrap">
@@ -198,7 +305,7 @@
 				</div>
 			</div>
 		{/if}
-		{#if page.phase === 'ready' && hasActions}
+		{#if page.phase === 'ready' && hasActions && levelKind === 'genre'}
 			<button
 				type="button"
 				class="ctab"
@@ -208,10 +315,14 @@
 			>
 				Actions
 			</button>
+		{:else if page.phase === 'ready'}
+			{#each bulkRows as row (`${row.ref.generation}:${row.ref.token}`)}
+				<div class="bulk-controls" aria-label={row.title}>{@render rowControls(row, true)}</div>
+			{/each}
 		{/if}
 	</div>
 
-	{#if action.phase === 'choosing'}
+	{#if levelKind === 'genre' && action.phase === 'choosing'}
 		<div class="action-choices" data-testid="unified-live-action-choices">
 			{#each action.actions as choice (choice.actionId)}
 				<button type="button" onclick={() => actionController.execute(choice.actionId)}>
@@ -220,9 +331,9 @@
 			{/each}
 			<button type="button" class="ghost" onclick={() => actionController.cancel()}>Cancel</button>
 		</div>
-	{:else if action.phase === 'resolving' || action.phase === 'executing'}
+	{:else if !menuRow && (action.phase === 'resolving' || action.phase === 'executing')}
 		<p class="status" data-testid="unified-live-action-busy">Working…</p>
-	{:else if action.phase === 'failed' || action.phase === 'outcome-unknown'}
+	{:else if !menuRow && (action.phase === 'failed' || action.phase === 'outcome-unknown')}
 		<p class="status error" data-testid="unified-live-action-error">
 			{action.error ?? 'The action failed.'}
 		</p>
@@ -273,10 +384,16 @@
 			</div>
 		{/if}
 		{#if ordinaryRows.length > 0}
+			{#if levelKind === 'composer' || levelKind === 'composition'}<h3 class="section-label">{levelKind === 'composer' ? 'Compositions' : 'Recordings'}</h3>{/if}
 			<div class="alist" data-testid="unified-live-collection-rows">
 				{#each ordinaryRows as row, index (`${row.ref.generation}:${row.ref.token}`)}
 					{@const href = hrefForRow(row)}
-					{#if href === null}
+					{#if row.kind === 'track'}
+						<div class="tr recording-row" data-testid="unified-live-recording-{index}" data-row-kind={row.kind}>
+							<span class="recording-name"><span class="tnm">{row.title}</span>{#if row.subtitle}<span class="recording-credit">{row.subtitle}</span>{/if}</span>
+							{@render rowControls(row, false)}
+						</div>
+					{:else if href === null}
 						<div
 							class="live-fact"
 							data-testid="unified-live-fact-{index}"
@@ -307,6 +424,23 @@
 </section>
 
 <style>
+	.section-label { margin: 14px 8px 8px; color: var(--soft); font-size: 13px; font-weight: 500; }
+	.recording-menu span { padding: 7px 10px; color: var(--soft); font-size: 12px; }
+	.recording-menu .error { color: var(--songr-error); }
+	.recording-menu button:hover { background: var(--hover-subtle); }
+	.recording-row { cursor: default; min-width: 0; }
+	.recording-name { display: flex; flex: 1; align-items: baseline; gap: 14px; min-width: 0; }
+	.recording-credit { flex: 0 1 40%; min-width: 0; font-size: 12px; color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.recording-controls { position: relative; display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+	.recording-more { border: 0; background: transparent; font: inherit; cursor: pointer; color: var(--soft); padding: 2px 6px; border-radius: 4px; }
+	.recording-menu { display: flex; flex-direction: column; position: absolute; right: 0; top: 100%; z-index: 20; min-width: 110px; padding: 4px; background: var(--control); border: 1px solid var(--line); border-radius: 5px; }
+	.recording-menu button { text-align: left; border: 0; background: transparent; color: var(--text); padding: 7px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+	.recording-row:focus-within .tgo, .recording-row:focus-within .tq, .recording-controls:focus-within .tgo, .recording-controls:focus-within .tq, .prominent .tgo, .prominent .tq { opacity: 1; }
+	.recording-controls button:disabled { cursor: default; color: var(--dim); }
+	.recording-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+	@media (hover: none), (max-width: 600px) { .recording-row .tgo, .recording-row .tq { opacity: 1; min-height: 36px; } .recording-more { min-width: 28px; min-height: 32px; } }
+	@media (max-width: 600px) { .recording-name { flex-direction: column; align-items: stretch; gap: 3px; } .recording-credit { flex-basis: auto; } }
+
 	.live-album-layout {
 		display: flex;
 		min-height: 0;

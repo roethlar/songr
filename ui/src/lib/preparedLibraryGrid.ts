@@ -4,6 +4,7 @@
  * Every chunk is laid out before paint skipping is enabled; scrolling never
  * constructs tiles, assigns slots, or estimates their geometry.
  */
+export const PREPARED_LIBRARY_GRID_EVENT = 'librarygridprepared';
 const ROWS_PER_CHUNK = 40;
 
 interface Chunk {
@@ -36,6 +37,7 @@ const widthObservers = new WeakMap<Document, WidthObserver>();
 const pending = new Set<Grid>();
 const manualSlots = new WeakMap<Document, boolean>();
 let scheduled = false;
+let measuring: { grids: Grid[]; cancel(): void } | null = null;
 
 function supportsManualSlots(document: Document): boolean {
 	const known = manualSlots.get(document);
@@ -115,7 +117,12 @@ function schedule(grid: Grid): void {
 
 function preparePendingGrids(): void {
 	scheduled = false;
-	const grids = [...pending].filter(grid => !grid.disposed && grid.node.isConnected);
+	// A resize/revision may arrive before exact block sizes are delivered. Carry
+	// every unfinished grid into the replacement batch; stale observers cannot
+	// publish geometry or restore ancestors owned by that replacement.
+	const unfinished = measuring?.grids ?? [];
+	measuring?.cancel();
+	const grids = [...new Set([...unfinished, ...pending])].filter(grid => !grid.disposed && grid.node.isConnected);
 	pending.clear();
 	if (!grids.length) return;
 
@@ -129,6 +136,16 @@ function preparePendingGrids(): void {
 			}
 		}
 	}
+	const restorePanels = (): void => {
+		for (const [panel, previous] of panels) {
+			// Visibility switches use aria-hidden, so restoring the inline override
+			// respects the current scope. Do not overwrite another inline owner.
+			if (panel.style.contentVisibility !== 'visible') continue;
+			if (previous) panel.style.contentVisibility = previous;
+			else panel.style.removeProperty('content-visibility');
+		}
+	};
+	let waitingForSizes = false;
 	try {
 		for (const panel of panels.keys()) panel.style.contentVisibility = 'visible';
 		for (const grid of grids) {
@@ -189,21 +206,43 @@ function preparePendingGrids(): void {
 			prepared.push(grid);
 		}
 
-		// Chunk boxes have no padding/border, so these are their exact intrinsic
-		// content heights. Numeric values avoid stale browser-remembered `auto`
-		// sizes overriding a new measurement after width, density or font changes.
-		const heights = prepared.flatMap(grid => grid.chunks.map(chunk => ({
-			box: chunk.box, height: chunk.box.getBoundingClientRect().height
-		})));
-		for (const { box, height } of heights) {
-			box.style.containIntrinsicBlockSize = `${height}px`;
-			box.style.contentVisibility = 'auto';
-		}
+		// Viewport DOMRects lose fractional precision at million-pixel scroll
+		// coordinates. ResizeObserver reports the exact layout block size instead.
+		// Keep these boxes laid out until that pre-paint delivery, then disconnect:
+		// scrolling must never cause application measurement or style mutations.
+		const boxes = prepared.flatMap(grid => grid.chunks.map(chunk => chunk.box));
+		if (boxes.length === 0) return;
+		const heights = new Map<Element, number>();
+		const observer = new ResizeObserver(entries => {
+			if (measuring !== batch) return;
+			for (const entry of entries) {
+				heights.set(entry.target, entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
+			}
+			if (heights.size !== boxes.length) return;
+			observer.disconnect();
+			measuring = null;
+			try {
+				for (const box of boxes) {
+					// No padding/border: the observed block size is the intrinsic
+					// content height. Numeric sizes cannot retain stale `auto` memory.
+					box.style.containIntrinsicBlockSize = `${heights.get(box)!}px`;
+					box.style.contentVisibility = 'auto';
+				}
+				for (const grid of prepared) {
+					grid.node.dispatchEvent(new Event(PREPARED_LIBRARY_GRID_EVENT, { bubbles: true }));
+				}
+			} finally { restorePanels(); }
+		});
+		const batch = { grids: prepared, cancel(): void {
+			observer.disconnect();
+			if (measuring === batch) measuring = null;
+			restorePanels();
+		} };
+		measuring = batch;
+		for (const box of boxes) observer.observe(box, { box: 'border-box' });
+		waitingForSizes = true;
 	} finally {
-		for (const [panel, previous] of panels) {
-			if (previous) panel.style.contentVisibility = previous;
-			else panel.style.removeProperty('content-visibility');
-		}
+		if (!waitingForSizes) restorePanels();
 	}
 }
 
@@ -211,7 +250,7 @@ export function prepareLibraryGrid(node: HTMLElement, revision: unknown): {
 	update(revision: unknown): void;
 	destroy(): void;
 } {
-	if (!supportsManualSlots(node.ownerDocument)) return { update() {}, destroy() {} };
+	if (typeof ResizeObserver === 'undefined' || !supportsManualSlots(node.ownerDocument)) return { update() {}, destroy() {} };
 	// A skipped inactive grid does not receive ResizeObserver updates. Its
 	// scrolling pane stays laid out, so observe that available-width boundary
 	// too, and refresh hidden geometry before the owner returns to the scope.
@@ -234,6 +273,10 @@ export function prepareLibraryGrid(node: HTMLElement, revision: unknown): {
 		destroy() {
 			grid.disposed = true;
 			pending.delete(grid);
+			if (measuring?.grids.includes(grid) && !scheduled) {
+				scheduled = true;
+				queueMicrotask(preparePendingGrids);
+			}
 			stopObservingWidths();
 			fonts?.removeEventListener('loadingdone', fontChanged);
 		}

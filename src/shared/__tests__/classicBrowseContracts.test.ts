@@ -175,6 +175,25 @@ describe("classic browse wire contracts", () => {
     ).toBeNull();
   });
 
+  it("preserves public browse messages and validates their error flag at the Classic boundary", () => {
+    const command = normalizeClassicBrowseCommandRequest({
+      requestId: "request-message", tabId: "tab-1", session, role: "classic-browse",
+      operation: "browse", options: { hierarchy: "browse", popAll: true },
+    });
+    if (!command) throw new Error("expected browse command");
+    const result = { level: 0, offset: 0, count: 0, items: [], action: "message",
+      message: "The selected Tags list is unavailable.", isError: true };
+    const ack = (value: unknown) => ({ success: true, data: { requestId: command.requestId, session, result: value } });
+    expect(normalizeClassicBrowseCommandAck(ack(result), command)).toMatchObject({
+      success: true, data: { result },
+    });
+    expect(normalizeClassicBrowseCommandAck(ack({ ...result, message: "", isError: false }), command))
+      .toMatchObject({ success: true, data: { result: { message: "", isError: false } } });
+    for (const invalid of [{ action: 3 }, { message: {} }, { isError: "false" }]) {
+      expect(normalizeClassicBrowseCommandAck(ack({ ...result, ...invalid }), command)).toBeNull();
+    }
+  });
+
   it("rejects a BrowseResult acknowledgment without its required paging fields", () => {
     const command = normalizeClassicBrowseCommandRequest({
       requestId: "request-browse",

@@ -1,31 +1,64 @@
 <script lang="ts">
-	import { tick } from 'svelte';
+	import { tick, type Snippet } from 'svelte';
+	import { readable } from 'svelte/store';
+	import type { LibraryAlbumTrack } from '@shared/libraryAlbumContracts';
 	import type { AlbumActionSemantic } from '@shared/albumActionContracts';
 	import { normalizeCatalogText } from '@shared/catalogContracts';
 	import { imageUrl } from '$lib/imageUrl';
 	import { monogram } from '$lib/monogram';
-	import { hideOnError } from '$lib/actions/imageFallback';
+	import { libraryArtwork } from '$lib/actions/libraryArtwork';
 	import { trackTitleCarriesOrdinal } from '$lib/trackTitle';
 	import { shouldHandleLibraryAnchorClick } from '$lib/libraryPageNavigation';
 	import type {
 		LibraryAlbumController,
+		LibraryAlbumState,
 		LibraryAlbumVersionState
 	} from '$lib/library/LibraryAlbumController';
 	import type { LibraryAlbumEntry } from '$lib/libraryEntries';
-	import type { AlbumActionController } from '$lib/library/AlbumActionController';
-		import UnifiedItemPageFrame from './UnifiedItemPageFrame.svelte';
+	import type { AlbumActionController, AlbumActionState } from '$lib/library/AlbumActionController';
+	import UnifiedItemPageFrame from './UnifiedItemPageFrame.svelte';
 
 	type PageTrackTarget = { readonly index: number; readonly title: string };
 
+	/** Public Browse supplies display data and controls without library references. */
+	interface PublicAlbumPresentation {
+		title: string;
+		artist: string | null;
+		imageKey?: string;
+		phase: 'opening' | 'details' | 'failed';
+		error?: string | null;
+		tracks: readonly LibraryAlbumTrack[];
+		controls: Snippet;
+		trackControls: Snippet<[number]>;
+		feedback?: Snippet;
+		footer?: Snippet;
+	}
+
+	type AlbumDisplayState = Pick<LibraryAlbumState,
+		'phase' | 'activeTab' | 'title' | 'artist' | 'versions' | 'degraded' |
+		'selectedVersionId' | 'actionsAvailable' | 'albumActionsAvailable' |
+		'orderedTracks' | 'live' | 'error'>;
+	const emptyDisplay: AlbumDisplayState = {
+		phase: 'idle', activeTab: 'details', title: null, artist: null,
+		versions: [], degraded: false, selectedVersionId: null,
+		actionsAvailable: false, albumActionsAvailable: false,
+		orderedTracks: [], live: null, error: null
+	};
+	const emptyPageStore = readable(emptyDisplay);
+	const emptyActionStore = readable<Pick<AlbumActionState, 'phase' | 'actions' | 'error'>>({
+		phase: 'idle', actions: [], error: null
+	});
+
 	interface Props {
-		controller: LibraryAlbumController;
-		actionController: AlbumActionController;
+		controller?: LibraryAlbumController;
+		actionController?: AlbumActionController;
+		publicPage?: PublicAlbumPresentation;
 		/**
 		 * The zone every action on this page targets: the one the user has
 		 * selected. `null` disables them. The page never asks which zone
 		 * (public issue #12).
 		 */
-		zoneId: string | null;
+		zoneId?: string | null;
 		album?: LibraryAlbumEntry | null;
 		/**
 		 * Stage-aware prose for a collection-opened page whose locator could
@@ -39,10 +72,10 @@
 		activationGeneration?: number;
 		backLabel: string;
 		onBack: () => void;
-		onRetry: () => void;
+		onRetry?: () => void;
 		actionRetryAvailable?: boolean;
 		onRetryAction?: () => void;
-		onBeginAction: (
+		onBeginAction?: (
 			track: PageTrackTarget | null,
 			zoneId: string,
 			desiredSemantic: AlbumActionSemantic
@@ -67,7 +100,8 @@
 	const {
 		controller,
 		actionController,
-		zoneId,
+		publicPage,
+		zoneId = null,
 		album = null,
 		collectionFailureMessage = null,
 		focusSongTitle = null,
@@ -95,15 +129,24 @@
 	 */
 	let trackInfo = $state<{ position: number; title: string } | null>(null);
 
-	const sheet = $derived($controller);
-	const action = $derived($actionController);
+	const pageStore = $derived(controller ?? emptyPageStore);
+	const actionStore = $derived(actionController ?? emptyActionStore);
+	const sheet = $derived<AlbumDisplayState>(publicPage ? {
+		...emptyDisplay,
+		phase: publicPage.phase,
+		title: publicPage.title,
+		artist: publicPage.artist,
+		orderedTracks: publicPage.tracks,
+		error: publicPage.error ?? null
+	} : $pageStore);
+	const action = $derived($actionStore);
 	const selectedVersion = $derived(
 		sheet.versions.find((version) => version.versionId === sheet.selectedVersionId) ?? null
 	);
 	const pageCount = $derived(Math.max(1, Math.ceil(sheet.orderedTracks.length / PAGE_SIZE)));
 	const pageTracks = $derived(sheet.orderedTracks.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE));
 	const suppressRowIndex = $derived(
-		pageTracks.length > 0 && pageTracks.every((track) => trackTitleCarriesOrdinal(track.title))
+		Boolean(publicPage) || (pageTracks.length > 0 && pageTracks.every((track) => trackTitleCarriesOrdinal(track.title)))
 	);
 	const focusedTrackPosition = $derived.by(() => {
 		if (!focusSongTitle) return -1;
@@ -130,9 +173,9 @@
 	);
 	const displayTitle = $derived(sheet.title ?? album?.title ?? 'Album');
 	const displayArtist = $derived(sheet.artist ?? album?.artist ?? '');
-	const displayImageKey = $derived(selectedVersion?.imageKeyHint ?? album?.imageKey ?? null);
+	const displayImageKey = $derived(publicPage?.imageKey ?? selectedVersion?.imageKeyHint ?? album?.imageKey ?? null);
 	// Permanent hero placeholder layer (q6): rendered beneath the image so
-	// a failed load — hidden in place by hideOnError — reveals it.
+	// a failed load — hidden in place by libraryArtwork — reveals it.
 	const heroFallback = $derived(monogram(displayTitle));
 
 	$effect(() => {
@@ -192,9 +235,9 @@
 
 	function selectVersion(versionId: string): void {
 		if (action.phase === 'executing') return;
-		actionController.cancel();
-		actionController.reset();
-		controller.select(versionId);
+		actionController?.cancel();
+		actionController?.reset();
+		controller?.select(versionId);
 	}
 
 	function pickTarget(
@@ -206,7 +249,7 @@
 		// the same answer on a catalog page and may differ on a live one.
 		const available = track === null ? sheet.albumActionsAvailable : sheet.actionsAvailable;
 		if (!available || actionBusy || zoneId === null) return;
-		onBeginAction(track, zoneId, desiredSemantic);
+		onBeginAction?.(track, zoneId, desiredSemantic);
 	}
 
 	function openTrackInfo(position: number, title: string): void {
@@ -260,7 +303,7 @@
 		<div class="pleft">
 			<div class="art">
 				<!-- The monogram is the permanent placeholder layer (q6): a
-				     failed image load hides the img in place — hideOnError keeps
+				     failed image load hides the img in place — libraryArtwork keeps
 				     its box, so the geometry never changes — and reveals the
 				     monogram beneath. -->
 				<div
@@ -273,39 +316,41 @@
 				</div>
 				{#if displayImageKey}
 					<img
-						src={imageUrl(displayImageKey, { scale: 'fit', width: 300, height: 300 })}
+						use:libraryArtwork={imageUrl(displayImageKey, { scale: 'fit', width: 300, height: 300 })}
 						alt=""
-						loading="lazy"
 						data-testid="unified-album-hero-image"
-						use:hideOnError
 					/>
 				{/if}
 			</div>
-			<div class="pb">
-				<button
-					type="button"
-					data-testid="unified-album-play"
-					disabled={!sheet.albumActionsAvailable || sheet.phase !== 'details' || actionBusy || zoneId === null}
-					onclick={() => pickTarget(null, 'play-now')}
-				>
-					Play album
-				</button>
-				<button
-					type="button"
-					data-testid="unified-album-queue"
-					disabled={!sheet.albumActionsAvailable || sheet.phase !== 'details' || actionBusy || zoneId === null}
-					onclick={() => pickTarget(null, 'queue')}
-				>
-					Queue album
-				</button>
-				<button
-					type="button"
-					data-testid="unified-album-artist-link"
-					disabled={!onOpenArtist}
-					onclick={onOpenArtist}
-				>
-					All by artist
-				</button>
+			<div class:pb={!publicPage} class:public-album-controls={Boolean(publicPage)}>
+				{#if publicPage}
+					{@render publicPage.controls()}
+				{:else}
+					<button
+						type="button"
+						data-testid="unified-album-play"
+						disabled={!sheet.albumActionsAvailable || sheet.phase !== 'details' || actionBusy || zoneId === null}
+						onclick={() => pickTarget(null, 'play-now')}
+					>
+						Play album
+					</button>
+					<button
+						type="button"
+						data-testid="unified-album-queue"
+						disabled={!sheet.albumActionsAvailable || sheet.phase !== 'details' || actionBusy || zoneId === null}
+						onclick={() => pickTarget(null, 'queue')}
+					>
+						Queue album
+					</button>
+					<button
+						type="button"
+						data-testid="unified-album-artist-link"
+						disabled={!onOpenArtist}
+						onclick={onOpenArtist}
+					>
+						All by artist
+					</button>
+				{/if}
 			</div>
 		</div>
 
@@ -333,7 +378,7 @@
 						type="button"
 						class:on={sheet.activeTab === 'versions'}
 						data-testid="unified-album-tab-versions"
-						onclick={() => controller.showVersions()}
+						onclick={() => controller?.showVersions()}
 					>
 						Versions{sheet.versions.length > 0 ? ` (${sheet.versions.length})` : ''}
 					</button>
@@ -342,19 +387,22 @@
 						class:on={sheet.activeTab === 'details'}
 						data-testid="unified-album-tab-details"
 						disabled={!sheet.selectedVersionId}
-						onclick={() => controller.showDetails()}
+						onclick={() => controller?.showDetails()}
 					>
 						Details
 					</button>
 				</nav>
 			{/if}
 
+			{#if publicPage?.feedback}
+				{@render publicPage.feedback()}
+			{/if}
 			{#if action.phase === 'choosing'}
 				<div class="action-choices" data-testid="unified-album-action-choices">
 					{#each action.actions as choice (choice.actionId)}
-						<button type="button" onclick={() => actionController.execute(choice.actionId)}>{choice.label}</button>
+						<button type="button" onclick={() => actionController?.execute(choice.actionId)}>{choice.label}</button>
 					{/each}
-					<button type="button" class="ghost" onclick={() => actionController.cancel()}>Cancel</button>
+					<button type="button" class="ghost" onclick={() => actionController?.cancel()}>Cancel</button>
 				</div>
 			{:else if action.phase === 'resolving' || action.phase === 'executing'}
 				<p class="status" data-testid="unified-album-action-busy">Working…</p>
@@ -378,15 +426,17 @@
 				<div class="tl">
 					<p class="status" data-testid="unified-album-loading">Opening album page…</p>
 				</div>
-				<div class="stub">Finding the versions Roon currently exposes.</div>
+				{#if !publicPage}<div class="stub">Finding the versions Roon currently exposes.</div>{/if}
 			{:else if sheet.phase === 'failed' || sheet.phase === 'canceled'}
 				<div class="tl">
 					<p class="status error" data-testid="unified-album-error">{collectionFailureMessage ??
 							sheet.error ??
 							'The album page could not be opened.'}</p>
-					<button type="button" class="retry" onclick={onRetry} data-testid="unified-album-retry">Try again</button>
+					{#if onRetry}
+						<button type="button" class="retry" onclick={onRetry} data-testid="unified-album-retry">Try again</button>
+					{/if}
 				</div>
-				<div class="stub">Reopen the page to restore live version authority.</div>
+				{#if !publicPage}<div class="stub">Reopen the page to restore live version authority.</div>{/if}
 			{:else if sheet.activeTab === 'versions'}
 				<ul class="version-list tl" data-testid="unified-album-versions">
 					{#each sheet.versions as version, index (version.versionId)}
@@ -407,11 +457,9 @@
 									<span class="version-mono" aria-hidden="true">{versionLabel(version, index).slice(0, 1)}</span>
 									{#if version.imageKeyHint}
 										<img
-											src={imageUrl(version.imageKeyHint, { scale: 'fit', width: 96, height: 96 })}
+											use:libraryArtwork={imageUrl(version.imageKeyHint, { scale: 'fit', width: 96, height: 96 })}
 											alt=""
-											loading="lazy"
 											data-testid="unified-album-version-art-{index}"
-											use:hideOnError
 										/>
 									{/if}
 								</span>
@@ -439,7 +487,7 @@
 					<span>{versionFacts(selectedVersion).join(' · ')}</span>
 					</div>
 				{/if}
-				<ol class="tl tracks" data-testid="unified-album-tracks" start={page * PAGE_SIZE + 1} bind:this={trackList}>
+				<ol class="tl tracks" class:public-tracks={Boolean(publicPage)} data-testid="unified-album-tracks" start={page * PAGE_SIZE + 1} bind:this={trackList}>
 					{#each pageTracks as track, offset (track.index)}
 						<li
 							class="tr"
@@ -462,20 +510,24 @@
 										followTrackInfo(event, href, page * PAGE_SIZE + offset, track.title)}
 								>Info</svelte:element>
 							{/if}
-							<button
-								type="button"
-								class="tgo"
-								data-testid="unified-track-action-{track.index}"
-								disabled={!sheet.actionsAvailable || actionBusy || zoneId === null}
-								onclick={() => pickTarget({ index: track.index, title: track.title }, 'play-now')}
-							>Play</button>
-							<button
-								type="button"
-								class="tq"
-								data-testid="unified-track-queue-{track.index}"
-								disabled={!sheet.actionsAvailable || actionBusy || zoneId === null}
-								onclick={() => pickTarget({ index: track.index, title: track.title }, 'queue')}
-							>Queue</button>
+							{#if publicPage}
+								{@render publicPage.trackControls(track.index)}
+							{:else}
+								<button
+									type="button"
+									class="tgo"
+									data-testid="unified-track-action-{track.index}"
+									disabled={!sheet.actionsAvailable || actionBusy || zoneId === null}
+									onclick={() => pickTarget({ index: track.index, title: track.title }, 'play-now')}
+								>Play</button>
+								<button
+									type="button"
+									class="tq"
+									data-testid="unified-track-queue-{track.index}"
+									disabled={!sheet.actionsAvailable || actionBusy || zoneId === null}
+									onclick={() => pickTarget({ index: track.index, title: track.title }, 'queue')}
+								>Queue</button>
+							{/if}
 						</li>
 					{/each}
 				</ol>
@@ -505,13 +557,23 @@
 							</section>
 						{/if}
 					{/if}
-				<div class="stub">{sheet.orderedTracks.length} tracks loaded from your Core.</div>
+				{#if publicPage?.footer}
+					{@render publicPage.footer()}
+				{:else}
+					<div class="stub">{sheet.orderedTracks.length} tracks loaded from your Core.</div>
+				{/if}
 			{/if}
 		</div>
 	</div>
 </UnifiedItemPageFrame>
 
 <style>
+	.public-album-controls {
+		margin-top: 14px;
+	}
+	.public-tracks {
+		overflow: visible;
+	}
 	.item-page-body {
 		display: flex;
 		gap: 22px;

@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { ImageService, ImageScale } from '../../../core/roon/ImageService';
+import { ImageQueueFullError } from '../../../core/roon/errors';
 import { ErrorResponse } from '../../../shared/types';
 
 const VALID_SCALES: readonly ImageScale[] = ['fit', 'fill', 'stretch'] as const;
@@ -41,6 +42,11 @@ export const createImageRouter = (imageService: ImageService): Router => {
    * Optional query params: scale, width, height
    */
   router.get('/:key', async (req: Request, res: Response, next: NextFunction) => {
+    const controller = new AbortController();
+    const onClose = () => {
+      if (!res.writableEnded) controller.abort();
+    };
+    res.once('close', onClose);
     try {
       const { key } = req.params;
 
@@ -78,7 +84,8 @@ export const createImageRouter = (imageService: ImageService): Router => {
         return res.status(400).json(response);
       }
 
-      const { data, contentType } = await imageService.getImage(key, scale, width, height);
+      const { data, contentType } = await imageService.getImage(key, scale, width, height, controller.signal);
+      if (controller.signal.aborted) return;
 
       // Set cache headers
       const cacheHeaders = imageService.getCacheHeaders();
@@ -89,7 +96,11 @@ export const createImageRouter = (imageService: ImageService): Router => {
       res.set('Content-Type', contentType);
       res.send(data);
     } catch (error) {
+      if (controller.signal.aborted) return;
+      if (error instanceof ImageQueueFullError) res.set('Retry-After', '1');
       next(error);
+    } finally {
+      res.off('close', onClose);
     }
   });
 

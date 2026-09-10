@@ -236,7 +236,9 @@ function normalizeBrowseOptions(value: unknown): ClassicBrowseOptions | null {
   ];
   if (!isRecord(value) || !Reflect.ownKeys(value).every((key) => typeof key === "string" && keys.includes(key))) return null;
   if (!isAllowedBrowseHierarchy(value.hierarchy) || !isOptionalBoundedText(value.zoneId) || !isOptionalBoundedText(value.itemKey)) return null;
-  if (value.input !== undefined && !isBoundedText(value.input)) return null;
+  if (value.input !== undefined &&
+      !(value.hierarchy === "settings" && value.input === "") &&
+      !isBoundedText(value.input)) return null;
   if (value.offset !== undefined && !isNonNegativeInteger(value.offset)) return null;
   if (value.setDisplayOffset !== undefined && !isNonNegativeInteger(value.setDisplayOffset)) return null;
   if (!isOptionalBoolean(value.refresh) || !isOptionalBoolean(value.popAll)) return null;
@@ -360,6 +362,11 @@ function isBrowseItem(value: unknown): value is BrowseResult["items"][number] {
   for (const field of ["subtitle", "itemKey", "hint", "imageKey", "itemType", "inputPrompt"] as const) {
     if (!isOptionalBoundedText(value[field])) return false;
   }
+  for (const field of ["inputPromptAction", "inputPromptValue"] as const) {
+    if (value[field] !== undefined &&
+        (typeof value[field] !== "string" || value[field].length > CLASSIC_BROWSE_ERROR_MAX_LENGTH)) return false;
+  }
+  if (value.inputPromptIsPassword !== undefined && typeof value.inputPromptIsPassword !== "boolean") return false;
   return typeof value.isLoadable === "boolean" && typeof value.isPlayable === "boolean";
 }
 
@@ -368,6 +375,10 @@ function isBrowseResult(value: unknown): value is BrowseResult {
     return false;
   }
   if (!isOptionalBoundedText(value.title) || !isOptionalBoundedText(value.subtitle)) return false;
+  if (!isOptionalBoundedText(value.action) || !isOptionalBoundedText(value.listHint)) return false;
+  if (value.message !== undefined &&
+      (typeof value.message !== "string" || value.message.length > CLASSIC_BROWSE_ERROR_MAX_LENGTH)) return false;
+  if (value.isError !== undefined && typeof value.isError !== "boolean") return false;
   if (
     !isNonNegativeInteger(value.level) ||
     !isNonNegativeInteger(value.offset) ||

@@ -115,3 +115,10 @@ export class RoonOperationError extends RoonError {
     this.context = context;
   }
 }
+
+/** The bounded artwork queue is full; clients should retry after one second. */
+export class ImageQueueFullError extends RoonError {
+  constructor() {
+    super("Artwork requests are busy; retry shortly", "IMAGE_QUEUE_FULL", 503);
+  }
+}

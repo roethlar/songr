@@ -71,7 +71,7 @@ export class BrowseService {
     options: BrowseOptions,
     lifecycle?: BrowseCallLifecycle
   ): Promise<BrowseResult> {
-    this.logger.debug({ options }, "BrowseService browse invoked");
+    this.logger.debug({ options: { ...options, ...(options.input !== undefined ? { input: "[redacted]" } : {}) } }, "BrowseService browse invoked");
     const refreshAfterNavigation =
       options.refresh === true && Boolean(options.itemKey || options.popAll);
     let browseResponse = await this.invokeBrowse(
@@ -80,15 +80,16 @@ export class BrowseService {
       ),
       lifecycle
     );
-    if (refreshAfterNavigation) {
+    if (refreshAfterNavigation && browseResponse?.action === "list") {
       browseResponse = await this.invokeBrowse(
         this.mapCurrentListRefreshOptions(options),
         lifecycle
       );
     }
 
-    const items = await this.loadItemsForList(browseResponse, options, lifecycle);
-    const normalized = this.buildResult(browseResponse, items);
+    const offset = BrowseService.normalizeLoadOffset(options.offset);
+    const items = await this.loadItemsForList(browseResponse, { ...options, offset }, lifecycle);
+    const normalized = this.buildResult(browseResponse, items, offset);
 
     this.logger.debug(
       {
@@ -146,7 +147,7 @@ export class BrowseService {
       ),
       lifecycle
     );
-    if (refreshAfterPop) {
+    if (refreshAfterPop && browseResponse?.action === "list") {
       browseResponse = await this.invokeBrowse(
         this.mapCurrentListRefreshOptions(options),
         lifecycle
@@ -160,7 +161,7 @@ export class BrowseService {
       offset: 0,
       pageSize: options.pageSize,
     }, lifecycle);
-    const normalized = this.buildResult(browseResponse, items);
+    const normalized = this.buildResult(browseResponse, items, 0);
 
     this.logger.debug(
       {
@@ -583,7 +584,7 @@ export class BrowseService {
     lifecycle?: BrowseCallLifecycle
   ): Promise<any> {
     const service = this.getBrowseService();
-    this.logger.debug({ method, params }, "Invoking Roon browse API");
+    this.logger.debug({ method, params: { ...params, ...(params.input !== undefined ? { input: "[redacted]" } : {}) } }, "Invoking Roon browse API");
 
     return withRoonTimeout(
       `browse.${method}`,
@@ -639,6 +640,15 @@ export class BrowseService {
     return Math.floor(value);
   }
 
+  /** The loaded slice offset is independent of Roon's remembered display position. */
+  private static normalizeLoadOffset(value: unknown): number {
+    return BrowseService.clamp(value, {
+      min: 0,
+      max: BrowseService.MAX_OFFSET,
+      defaultValue: 0,
+    });
+  }
+
   private static readonly MAX_OFFSET = 1_000_000;
   private static readonly MAX_COUNT = 5_000;
   private static readonly MAX_POP_LEVELS = 32;
@@ -677,7 +687,7 @@ export class BrowseService {
       params.item_key = options.itemKey;
     }
 
-    if (options.input) {
+    if (typeof options.input === "string") {
       params.input = options.input;
     }
 
@@ -734,11 +744,7 @@ export class BrowseService {
       params.zone_or_output_id = options.zoneId;
     }
 
-    params.offset = BrowseService.clamp(options.offset, {
-      min: 0,
-      max: BrowseService.MAX_OFFSET,
-      defaultValue: 0,
-    });
+    params.offset = BrowseService.normalizeLoadOffset(options.offset);
 
     if (typeof options.count === "number" && Number.isFinite(options.count)) {
       params.count = BrowseService.clamp(options.count, {
@@ -815,11 +821,7 @@ export class BrowseService {
     }
 
     const totalCount = count;
-    const startOffset = BrowseService.clamp(options.offset, {
-      min: 0,
-      max: BrowseService.MAX_OFFSET,
-      defaultValue: 0,
-    });
+    const startOffset = BrowseService.normalizeLoadOffset(options.offset);
 
     // Compute requested page size, then clamp so a single browse call
     // can't chain unbounded sequential load() calls.
@@ -869,15 +871,17 @@ export class BrowseService {
   /**
    * Build a BrowseResult from a browse() response + loaded items.
    */
-  private buildResult(browseResponse: any, rawItems: any[]): BrowseResult {
+  private buildResult(browseResponse: any, rawItems: any[], offset: number): BrowseResult {
     const list = browseResponse?.list ?? {};
     const normalizedItems = rawItems.map((item: any) => this.toBrowseItem(item));
 
     return {
+      ...this.responseMessage(browseResponse),
+      ...(typeof list.hint === "string" ? { listHint: list.hint } : {}),
       title: repairOptionalEncoding(list.title ?? browseResponse?.title),
       subtitle: repairOptionalEncoding(list.subtitle ?? undefined),
       level: this.ensureNumber(list.level, 0),
-      offset: this.ensureNumber(list.display_offset ?? 0, 0),
+      offset,
       count: this.ensureNumber(list.count ?? normalizedItems.length, normalizedItems.length),
       totalCount: this.ensureOptionalNumber(list.count),
       items: normalizedItems,
@@ -894,12 +898,25 @@ export class BrowseService {
     const normalizedItems = rawItems.map((item: any) => this.toBrowseItem(item));
 
     return {
+      ...this.responseMessage(payload),
+      ...(typeof list.hint === "string" ? { listHint: list.hint } : {}),
       title: repairOptionalEncoding(list.title),
       level: this.ensureNumber(list.level, 0),
       offset: this.ensureNumber(payload?.offset ?? 0, 0),
       count: this.ensureNumber(list.count ?? normalizedItems.length, normalizedItems.length),
       totalCount: this.ensureOptionalNumber(list.count),
       items: normalizedItems,
+    };
+  }
+
+  /** Preserve Roon's public action/message/is_error response separately from
+   * callback failures, which continue to reject through invokeBrowse/invokeLoad.
+   */
+  private responseMessage(payload: any): Pick<BrowseResult, "action" | "message" | "isError"> {
+    return {
+      ...(typeof payload?.action === "string" ? { action: payload.action } : {}),
+      ...(typeof payload?.message === "string" ? { message: repairEncoding(payload.message) } : {}),
+      ...(typeof payload?.is_error === "boolean" ? { isError: payload.is_error } : {}),
     };
   }
 
@@ -920,6 +937,12 @@ export class BrowseService {
         typeof item?.input_prompt?.prompt === "string"
           ? repairEncoding(item.input_prompt.prompt)
           : undefined,
+      inputPromptAction: typeof item?.input_prompt?.action === "string"
+        ? repairEncoding(item.input_prompt.action) : undefined,
+      inputPromptValue: typeof item?.input_prompt?.value === "string"
+        ? item.input_prompt.value : undefined,
+      inputPromptIsPassword: typeof item?.input_prompt?.is_password === "boolean"
+        ? item.input_prompt.is_password : undefined,
     };
   }
 

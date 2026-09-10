@@ -590,7 +590,7 @@ describe("BrowseSessionCoordinator", () => {
     ).toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
   });
 
-  it("bounds Classic item-token authority and evicts the oldest token", () => {
+  it("bounds non-collection Classic item-token authority and evicts the oldest token", () => {
     coordinator.shutdown();
     coordinator = makeCoordinator({ maxPublishedItemKeysPerRole: 2 });
     const handle = coordinator.acquireMode({
@@ -601,7 +601,7 @@ describe("BrowseSessionCoordinator", () => {
     });
     const access = modeAccess(handle);
     const publish = (raw: string) =>
-      coordinator.publishClassicBrowseResult(access, "classic-browse", {
+      coordinator.publishClassicBrowseResult(access, "classic-search", {
         level: 0,
         offset: 0,
         count: 1,
@@ -618,11 +618,66 @@ describe("BrowseSessionCoordinator", () => {
     const second = publish("raw-2");
     const third = publish("raw-3");
 
-    expect(() => coordinator.resolveClassicItemKey(access, "classic-browse", first)).toThrow(
+    expect(() => coordinator.resolveClassicItemKey(access, "classic-search", first)).toThrow(
       expect.objectContaining({ code: "STALE_GENERATION" })
     );
-    expect(coordinator.resolveClassicItemKey(access, "classic-browse", second)).toBe("raw-2");
-    expect(coordinator.resolveClassicItemKey(access, "classic-browse", third)).toBe("raw-3");
+    expect(coordinator.resolveClassicItemKey(access, "classic-search", second)).toBe("raw-2");
+    expect(coordinator.resolveClassicItemKey(access, "classic-search", third)).toBe("raw-3");
+  });
+
+  it("retains the exact first and last collection tokens after loading more than 8192 tracks", async () => {
+    const access = modeAccess(await classicHandle());
+    const total = 8_193;
+    let first = "";
+    let second = "";
+    let last = "";
+    for (let offset = 0; offset < total; offset += 4_000) {
+      const items = Array.from({ length: Math.min(4_000, total - offset) }, (_, index) => ({
+        title: "Same title", subtitle: "Same artist", itemKey: `track-${offset + index}`,
+        hint: "action_list", isLoadable: true, isPlayable: false,
+      }));
+      const result = coordinator.publishClassicBrowseResult(access, "classic-browse", {
+        title: "Tracks", level: 2, offset, count: total, totalCount: total, items,
+      });
+      if (offset === 0) { first = result.items[0].itemKey!; second = result.items[1].itemKey!; }
+      last = result.items[result.items.length - 1].itemKey!;
+    }
+    expect(first).not.toBe(second);
+    expect(coordinator.resolveClassicItemKey(access, "classic-browse", first)).toBe("track-0");
+    expect(coordinator.resolveClassicItemKey(access, "classic-browse", second)).toBe("track-1");
+    expect(coordinator.resolveClassicItemKey(access, "classic-browse", last)).toBe("track-8192");
+  });
+
+  it("refuses collection overflow atomically and reclaims its bounded capacity only at a new generation", async () => {
+    coordinator.shutdown();
+    coordinator = makeCoordinator({
+      maxPublishedItemKeysPerRole: 2, maxPublishedBrowseCollectionItemKeys: 3,
+    });
+    const access = modeAccess(await classicHandle());
+    const publish = (keys: string[], title = "Same title") => coordinator.publishClassicBrowseResult(
+      access, "classic-browse", {
+        title: "Tracks", level: 2, offset: 0, count: keys.length,
+        items: keys.map((itemKey) => ({ title, itemKey, isLoadable: true, isPlayable: false })),
+      }
+    );
+    const first = publish(["raw-a", "raw-b", "raw-c"]);
+    const token = first.items[0].itemKey!;
+    expect(() => publish(["raw-a", "raw-d", "raw-e", "raw-f"], "Attempted overwrite"))
+      .toThrow(expect.objectContaining({ code: "BACKPRESSURE" }));
+    expect(coordinator.resolveClassicPublishedItem(access, "classic-browse", token))
+      .toMatchObject({ title: "Same title", itemKey: "raw-a" });
+    // The rejected page must neither consume capacity nor evict existing rows.
+    const next = publish(["raw-d", "raw-e"]);
+    expect(coordinator.resolveClassicItemKey(access, "classic-browse", next.items[1].itemKey!)).toBe("raw-e");
+    expect(publish(["raw-a", "raw-a"]).items.map((item) => item.itemKey)).toEqual([token, token]);
+    expect(() => publish(["raw-f"])).toThrow(expect.objectContaining({ code: "BACKPRESSURE" }));
+    coordinator.beginClassicPublishedItems(access, "classic-browse");
+    const replacement = publish(["raw-a", "raw-b", "raw-c", "raw-d", "raw-e"], "New list");
+    expect(replacement.items[0].itemKey).not.toBe(token);
+    expect(() => coordinator.resolveClassicItemKey(access, "classic-browse", token))
+      .toThrow(expect.objectContaining({ code: "STALE_GENERATION" }));
+    expect(coordinator.resolveClassicPublishedItem(access, "classic-browse", replacement.items[0].itemKey!))
+      .toMatchObject({ title: "New list", itemKey: "raw-a" });
   });
 
   it("enforces eight tabs without allocating anything for the rejected ninth", async () => {

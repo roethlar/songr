@@ -1,4 +1,5 @@
 import { writable, type Readable } from 'svelte/store';
+import { loadCompleteLibraryCollection } from './LibraryDestinations';
 
 import {
 	CLASSIC_BROWSE_PAGE_SIZE_MAX,
@@ -45,7 +46,8 @@ export interface UnifiedBrowseController extends Readable<UnifiedBrowseState> {
 	restore(
 		claim: ClassicBrowseSessionClaim,
 		snapshot: BrowseHistorySnapshot,
-		zoneId?: string
+		zoneId?: string,
+		options?: { complete?: boolean }
 	): Promise<boolean>;
 	openItem(
 		claim: ClassicBrowseSessionClaim,
@@ -103,7 +105,6 @@ function mergeResult(base: BrowseResult, items: readonly BrowseItem[]): BrowseRe
 	return {
 		...base,
 		offset: 0,
-		count: items.length,
 		items: [...items]
 	};
 }
@@ -216,8 +217,8 @@ export function createUnifiedBrowseController(
 	dependencies: UnifiedBrowseControllerDependencies = {}
 ): UnifiedBrowseController {
 	const runTransaction = dependencies.transaction ?? withClassicBrowseRoleTransaction;
-	const isClaimCurrent = dependencies.isClaimCurrent ?? ((claim) =>
-		classicBrowseSessionClient.isClaimCurrent(claim));
+	const isClaimCurrent =
+		dependencies.isClaimCurrent ?? ((claim) => classicBrowseSessionClient.isClaimCurrent(claim));
 	let requestFence = 0;
 	let state: UnifiedBrowseState = {
 		phase: 'idle',
@@ -236,12 +237,15 @@ export function createUnifiedBrowseController(
 	async function restore(
 		claim: ClassicBrowseSessionClaim,
 		snapshot: BrowseHistorySnapshot,
-		zoneId?: string
+		zoneId?: string,
+		options?: { complete?: boolean }
 	): Promise<boolean> {
 		const target = cloneSnapshot(snapshot);
 		requestFence += 1;
 		const token = requestFence;
-		const previousSnapshot = state.snapshot;
+		// A first-class collection keeps its requested address through loading
+		// and failure, so reconnect/reload cannot replace it with a Browse parent.
+		const previousSnapshot = options?.complete ? target : state.snapshot;
 		publish({
 			phase: 'loading',
 			result: null,
@@ -250,9 +254,14 @@ export function createUnifiedBrowseController(
 			error: null
 		});
 		try {
-			const resolved = await runTransaction(roleFor(target), claim, (transaction) =>
-				resolvePath(transaction, target, zoneId)
-			);
+			const resolved = await runTransaction(roleFor(target), claim, async (transaction) => {
+				if (!options?.complete) return resolvePath(transaction, target, zoneId);
+				const model = await loadCompleteLibraryCollection(transaction, target, { zoneId });
+				if (!model.complete && !(model.result.action === 'message' || model.result.message !== undefined || model.result.isError === true)) {
+					throw new Error(model.diagnostic?.message ?? 'The complete collection could not be loaded.');
+				}
+				return { result: model.result, snapshot: target, notice: null };
+			});
 			if (token !== requestFence || !isClaimCurrent(claim)) return false;
 			publish({ phase: 'ready', error: null, ...resolved });
 			return true;
@@ -480,6 +489,8 @@ export interface UnifiedBrowseActionState {
 	 */
 	readonly zoneId: string | null;
 	readonly available: Readonly<Record<UnifiedSongActionSemantic, boolean>>;
+	/** Keyless choices from the current result; pass these exact objects back to the controller. */
+	readonly actions?: readonly BrowseItem[];
 	readonly error: string | null;
 }
 
@@ -492,6 +503,16 @@ export interface UnifiedBrowseActionController extends Readable<UnifiedBrowseAct
 	execute(
 		claim: ClassicBrowseSessionClaim,
 		semantic: UnifiedSongActionSemantic,
+		zoneId: string
+	): Promise<boolean>;
+	executeItem(
+		claim: ClassicBrowseSessionClaim,
+		item: BrowseItem,
+		zoneId: string
+	): Promise<boolean>;
+	openActionList(
+		claim: ClassicBrowseSessionClaim,
+		item: BrowseItem,
 		zoneId: string
 	): Promise<boolean>;
 	reset(): void;
@@ -520,27 +541,11 @@ function keylessSource(source: UnifiedBrowseActionSource): UnifiedBrowseActionSo
 			};
 }
 
-async function resolveActionSource(
+async function resolveSearchActionSource(
 	transaction: ClassicBrowseApiTransaction,
-	source: UnifiedBrowseActionSource,
+	source: Extract<UnifiedBrowseActionSource, { kind: 'search' }>,
 	zoneId?: string
 ): Promise<BrowseItem & { itemKey: string }> {
-	if (source.kind === 'browse') {
-		const path = await resolvePath(transaction, source.snapshot, zoneId);
-		const breadcrumb = browseBreadcrumbFor(source.item);
-		if (!breadcrumb) throw new Error('Browse action target is invalid');
-		const located = await findUniqueBreadcrumb(
-			transaction,
-			path.result,
-			breadcrumb,
-			source.snapshot.context.hierarchy,
-			zoneId,
-			source.restoreCount
-		);
-		if (!located.match?.itemKey) throw new Error(located.reason ?? 'Browse target changed');
-		return located.match as BrowseItem & { itemKey: string };
-	}
-
 	const query = source.query.trim();
 	if (!query) throw new Error('Search action target is missing its query');
 	let page = await transaction.browse({
@@ -570,6 +575,18 @@ async function resolveActionSource(
 	return target as BrowseItem & { itemKey: string };
 }
 
+type ExactBrowseActionItem = BrowseItem & { itemKey: string };
+
+function isActionLeaf(item: BrowseItem): item is ExactBrowseActionItem {
+	return item.hint === 'action' && item.isPlayable &&
+		typeof item.itemKey === 'string' && item.itemKey.length > 0;
+}
+
+function isNestedActionList(item: BrowseItem): item is ExactBrowseActionItem {
+	return item.hint === 'action_list' && !item.isPlayable &&
+		typeof item.itemKey === 'string' && item.itemKey.length > 0;
+}
+
 async function discoverActionRows(
 	transaction: ClassicBrowseApiTransaction,
 	target: BrowseItem & { itemKey: string },
@@ -595,18 +612,11 @@ async function discoverActionRows(
 		) {
 			throw new Error('Roon returned an incomplete or oversized action list');
 		}
-		const actions = page.items.filter(
-			(item) => item.hint === 'action' && item.isPlayable && item.itemKey
-		);
-		if (actions.length > 0) return actions;
-		const nested = page.items.filter(
-			(item): item is BrowseItem & { itemKey: string } =>
-				item.hint === 'action_list' &&
-				!item.isPlayable &&
-				typeof item.itemKey === 'string' &&
-				item.itemKey.length > 0
-		);
-		if (nested.length !== 1) return [];
+		const choices = page.items.filter((item) => isActionLeaf(item) || isNestedActionList(item));
+		const nested = choices.filter(isNestedActionList);
+		// A single navigation-only link keeps the established bounded discovery
+		// path. Multiple or mixed choices require an explicit selection in the UI.
+		if (choices.some(isActionLeaf) || nested.length !== 1) return choices;
 		cursor = nested[0];
 	}
 	throw new Error('The action path exceeded its depth bound');
@@ -616,19 +626,40 @@ export function createUnifiedBrowseActionController(
 	dependencies: UnifiedBrowseControllerDependencies = {}
 ): UnifiedBrowseActionController {
 	const runTransaction = dependencies.transaction ?? withClassicBrowseRoleTransaction;
-	const isClaimCurrent = dependencies.isClaimCurrent ?? ((claim) =>
-		classicBrowseSessionClient.isClaimCurrent(claim));
+	const isClaimCurrent =
+		dependencies.isClaimCurrent ?? ((claim) => classicBrowseSessionClient.isClaimCurrent(claim));
 	const emptyAvailability = (): Record<UnifiedSongActionSemantic, boolean> => ({
 		'play-now': false,
 		'add-next': false,
 		queue: false
 	});
+	type ExactItem = ExactBrowseActionItem;
+	type BrowseSource = Extract<UnifiedBrowseActionSource, { kind: 'browse' }>;
+	type ActionRows = Partial<Record<UnifiedSongActionSemantic, ExactItem>>;
 	let fence = 0;
+	let actionClaim: ClassicBrowseSessionClaim | null = null;
+	// These server-issued opaque capabilities belong only to this open sheet.
+	// Published source/URL state stays keyless. Backend session/role/publication
+	// validation rejects retired capabilities; display text is never a fallback.
+	let exactSelection: {
+		source: BrowseSource;
+		claim: ClassicBrowseSessionClaim;
+		item: ExactItem;
+	} | null = null;
+	let advertisedActions: {
+		source: UnifiedBrowseActionSource;
+		claim: ClassicBrowseSessionClaim;
+		zoneId: string;
+		rows: ActionRows;
+		choices: ReadonlyMap<BrowseItem, ExactItem>;
+		semanticSearchReplay: boolean;
+	} | null = null;
 	let state: UnifiedBrowseActionState = {
 		phase: 'idle',
 		source: null,
 		zoneId: null,
 		available: emptyAvailability(),
+		actions: [],
 		error: null
 	};
 	const internal = writable(state);
@@ -637,30 +668,128 @@ export function createUnifiedBrowseActionController(
 		internal.set(next);
 	};
 
+	function clearAuthority(): void {
+		exactSelection = null;
+		advertisedActions = null;
+		actionClaim = null;
+	}
+
+	function fencedTransaction(
+		transaction: ClassicBrowseApiTransaction,
+		claim: ClassicBrowseSessionClaim,
+		source: UnifiedBrowseActionSource,
+		token: number
+	): ClassicBrowseApiTransaction {
+		const guarded = async <T>(work: () => Promise<T>): Promise<T> => {
+			if (
+				token !== fence ||
+				actionClaim !== claim ||
+				state.source !== source ||
+				!isClaimCurrent(claim)
+			) {
+				throw new ClassicBrowseSupersededError();
+			}
+			const result = await work();
+			if (
+				token !== fence ||
+				actionClaim !== claim ||
+				state.source !== source ||
+				!isClaimCurrent(claim)
+			) {
+				throw new ClassicBrowseSupersededError();
+			}
+			return result;
+		};
+		return {
+			...transaction,
+			browse: (options) => guarded(() => transaction.browse(options)),
+			browseLoad: (options) => guarded(() => transaction.browseLoad(options))
+		};
+	}
+
+	function actionRows(rows: readonly BrowseItem[]): ActionRows {
+		const result: ActionRows = {};
+		for (const [semantic, label] of Object.entries(ACTION_LABELS)) {
+			const matches = rows.filter((row) => row.title === label && isActionLeaf(row));
+			if (matches.length === 1) {
+				result[semantic as UnifiedSongActionSemantic] = { ...matches[0] } as ExactItem;
+			}
+		}
+		return result;
+	}
+
+	function currentActions(claim: ClassicBrowseSessionClaim, zoneId: string) {
+		const retained = advertisedActions;
+		return retained && state.phase === 'ready' && state.source === retained.source &&
+			state.zoneId === zoneId && retained.zoneId === zoneId &&
+			actionClaim === claim && retained.claim === claim && isClaimCurrent(claim)
+			? retained : null;
+	}
+
+	function publishActions(
+		claim: ClassicBrowseSessionClaim,
+		source: UnifiedBrowseActionSource,
+		zoneId: string,
+		items: readonly BrowseItem[],
+		semanticSearchReplay = true
+	): void {
+		const choices = new Map<BrowseItem, ExactItem>();
+		for (const item of items) {
+			if (!isActionLeaf(item) && !isNestedActionList(item)) continue;
+			choices.set(Object.freeze(keylessItem(item)), Object.freeze({ ...item }));
+		}
+		const rows = actionRows([...choices.values()]);
+		advertisedActions = { source, claim, zoneId, rows, choices, semanticSearchReplay };
+		const available = Object.fromEntries(
+			Object.keys(ACTION_LABELS).map((semantic) => [
+				semantic, rows[semantic as UnifiedSongActionSemantic] !== undefined
+			])
+		) as Record<UnifiedSongActionSemantic, boolean>;
+		publish({ phase: 'ready', source, zoneId, available,
+			actions: Object.freeze([...choices.keys()]), error: null });
+	}
+
 	async function open(
 		claim: ClassicBrowseSessionClaim,
 		rawSource: UnifiedBrowseActionSource,
 		zoneId?: string
 	): Promise<boolean> {
+		if (!isClaimCurrent(claim)) return false;
+		const selected =
+			rawSource.kind === 'browse'
+				? rawSource === exactSelection?.source && exactSelection.claim === claim
+					? exactSelection.item
+					: rawSource.item.itemKey
+						? ({ ...rawSource.item } as ExactItem)
+						: null
+				: null;
 		const source = keylessSource(rawSource);
 		fence += 1;
 		const token = fence;
+		clearAuthority();
+		actionClaim = claim;
+		if (source.kind === 'browse' && selected) {
+			exactSelection = { source, claim, item: selected };
+		}
 		const probedZoneId = zoneId ?? null;
 		publish({
 			phase: 'loading',
 			source,
 			zoneId: probedZoneId,
 			available: emptyAvailability(),
+			actions: [],
 			error: null
 		});
-		if (!zoneId) {
+		if (source.kind === 'browse' && !selected) {
 			publish({
-				phase: 'ready',
-				source,
-				zoneId: probedZoneId,
-				available: emptyAvailability(),
-				error: null
+				...state,
+				phase: 'error',
+				error: 'Select this item again to load its current actions.'
 			});
+			return false;
+		}
+		if (!zoneId) {
+			publish({ ...state, phase: 'ready' });
 			return true;
 		}
 		try {
@@ -668,31 +797,28 @@ export function createUnifiedBrowseActionController(
 				source.kind === 'search' || source.snapshot.context.hierarchy === 'search'
 					? 'classic-search'
 					: 'classic-browse';
-			const available = await runTransaction(role, claim, async (transaction) => {
-				const target = await resolveActionSource(transaction, source, zoneId);
-				const rows = await discoverActionRows(
-					transaction,
-					target,
-					role === 'classic-search' ? 'search' : 'browse',
-					zoneId
+			const rows = await runTransaction(role, claim, async (transaction) => {
+				const current = fencedTransaction(transaction, claim, source, token);
+				const target =
+					source.kind === 'browse'
+						? selected!
+						: await resolveSearchActionSource(current, source, zoneId);
+				return discoverActionRows(
+					current, target, role === 'classic-search' ? 'search' : 'browse', zoneId
 				);
-				return Object.fromEntries(
-					Object.entries(ACTION_LABELS).map(([semantic, label]) => [
-						semantic,
-						rows.filter((row) => row.title === label).length === 1
-					])
-				) as Record<UnifiedSongActionSemantic, boolean>;
 			});
-			if (token !== fence || !isClaimCurrent(claim)) return false;
-			publish({ phase: 'ready', source, zoneId: probedZoneId, available, error: null });
+			if (token !== fence || actionClaim !== claim || !isClaimCurrent(claim)) return false;
+			publishActions(claim, source, zoneId, rows);
 			return true;
 		} catch (error) {
 			if (token !== fence) return false;
+			clearAuthority();
 			publish({
 				phase: error instanceof ClassicBrowseSupersededError ? 'idle' : 'error',
 				source: error instanceof ClassicBrowseSupersededError ? null : source,
 				zoneId: error instanceof ClassicBrowseSupersededError ? null : probedZoneId,
 				available: emptyAvailability(),
+				actions: [],
 				error:
 					error instanceof ClassicBrowseSupersededError
 						? null
@@ -704,13 +830,78 @@ export function createUnifiedBrowseActionController(
 		}
 	}
 
+	async function openActionList(
+		claim: ClassicBrowseSessionClaim,
+		item: BrowseItem,
+		zoneId: string
+	): Promise<boolean> {
+		const retained = currentActions(claim, zoneId);
+		const target = retained?.choices.get(item);
+		if (!retained || !target || !isNestedActionList(target)) return false;
+		const source = retained.source;
+		fence += 1;
+		const token = fence;
+		publish({ ...state, phase: 'loading', available: emptyAvailability(), actions: [], error: null });
+		try {
+			const role: ClassicBrowseRole = source.kind === 'search' || source.snapshot.context.hierarchy === 'search'
+				? 'classic-search' : 'classic-browse';
+			const choices = await runTransaction(role, claim, (transaction) => discoverActionRows(
+				fencedTransaction(transaction, claim, source, token), target,
+				role === 'classic-search' ? 'search' : 'browse', zoneId
+			));
+			if (token !== fence || actionClaim !== claim || !isClaimCurrent(claim)) return false;
+			publishActions(claim, source, zoneId, choices, false);
+			return true;
+		} catch (error) {
+			if (token !== fence) return false;
+			clearAuthority();
+			publish({ ...state,
+				phase: error instanceof ClassicBrowseSupersededError ? 'idle' : 'error',
+				available: emptyAvailability(), actions: [],
+				error: error instanceof ClassicBrowseSupersededError ? null
+					: error instanceof Error ? error.message : 'Actions are unavailable' });
+			return false;
+		}
+	}
+
 	async function execute(
 		claim: ClassicBrowseSessionClaim,
 		semantic: UnifiedSongActionSemantic,
 		zoneId: string
 	): Promise<boolean> {
-		const source = state.source;
-		if (!source || state.phase !== 'ready' || !state.available[semantic]) return false;
+		const retained = currentActions(claim, zoneId);
+		const exactAction = retained?.rows[semantic];
+		if (!retained || !state.available[semantic] || !exactAction) return false;
+		const source = retained.source;
+		return executeAction(claim, source, zoneId, async (current) => {
+			if (source.kind !== 'search' || !retained.semanticSearchReplay) return exactAction;
+			// Preserve the established semantic search path. Explicit choice
+			// execution and explicitly selected nested lists retain their exact
+			// capability; replaying the parent would lose that explicit choice.
+			const target = await resolveSearchActionSource(current, source, zoneId);
+			const action = actionRows(await discoverActionRows(current, target, 'search', zoneId))[semantic];
+			if (!action) throw new Error(`${ACTION_LABELS[semantic]} is no longer available`);
+			return action;
+		});
+	}
+
+	async function executeItem(
+		claim: ClassicBrowseSessionClaim,
+		item: BrowseItem,
+		zoneId: string
+	): Promise<boolean> {
+		const retained = currentActions(claim, zoneId);
+		const action = retained?.choices.get(item);
+		if (!retained || !action || !isActionLeaf(action)) return false;
+		return executeAction(claim, retained.source, zoneId, async () => action);
+	}
+
+	async function executeAction(
+		claim: ClassicBrowseSessionClaim,
+		source: UnifiedBrowseActionSource,
+		zoneId: string,
+		resolveAction: (transaction: ClassicBrowseApiTransaction) => Promise<ExactItem>
+	): Promise<boolean> {
 		fence += 1;
 		const token = fence;
 		publish({ ...state, phase: 'executing', error: null });
@@ -720,33 +911,32 @@ export function createUnifiedBrowseActionController(
 					? 'classic-search'
 					: 'classic-browse';
 			await runTransaction(role, claim, async (transaction) => {
-				const target = await resolveActionSource(transaction, source, zoneId);
-				const rows = await discoverActionRows(
-					transaction,
-					target,
-					role === 'classic-search' ? 'search' : 'browse',
-					zoneId
-				);
-				const matches = rows.filter(
-					(row) => row.title === ACTION_LABELS[semantic] && row.itemKey && row.isPlayable
-				);
-				if (matches.length !== 1 || !matches[0].itemKey) {
-					throw new Error(`${ACTION_LABELS[semantic]} is no longer available`);
-				}
-				await transaction.browse({
+				const current = fencedTransaction(transaction, claim, source, token);
+				const action = await resolveAction(current);
+				await current.browse({
 					hierarchy: role === 'classic-search' ? 'search' : 'browse',
-					itemKey: matches[0].itemKey,
+					itemKey: action.itemKey,
 					zoneId
 				});
 			});
-			if (token !== fence || !isClaimCurrent(claim)) return false;
-			publish({ ...state, phase: 'success', error: null });
+			if (token !== fence || actionClaim !== claim || !isClaimCurrent(claim)) return false;
+			clearAuthority();
+			publish({
+				...state,
+				phase: 'success',
+				available: emptyAvailability(),
+				actions: [],
+				error: null
+			});
 			return true;
 		} catch (error) {
 			if (token !== fence) return false;
+			clearAuthority();
 			publish({
 				...state,
 				phase: error instanceof ClassicBrowseSupersededError ? 'idle' : 'error',
+				available: emptyAvailability(),
+				actions: [],
 				error:
 					error instanceof ClassicBrowseSupersededError
 						? null
@@ -760,16 +950,18 @@ export function createUnifiedBrowseActionController(
 
 	function reset(): void {
 		fence += 1;
+		clearAuthority();
 		publish({
 			phase: 'idle',
 			source: null,
 			zoneId: null,
 			available: emptyAvailability(),
+			actions: [],
 			error: null
 		});
 	}
 
-	return { subscribe: internal.subscribe, open, execute, reset };
+	return { subscribe: internal.subscribe, open, execute, executeItem, openActionList, reset };
 }
 
 export const unifiedBrowseActionController = createUnifiedBrowseActionController();
