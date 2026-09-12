@@ -3,9 +3,9 @@ import { writable, type Readable } from 'svelte/store';
 import type { ArtistView } from '$lib/albumArtistGroups';
 
 /**
- * Unified Library sort/density preferences (plan §3.2, slice 4).
+ * Unified Library sort/grouping/density preferences (plan §3.2, slice 4).
  * Persisted in localStorage under a versioned key; a `storage` listener
- * reconciles changes across tabs. Sorts remain device preferences. Density is
+ * reconciles changes across tabs. Sorts and grouping remain device preferences. Density is
  * also captured in Unified semantic page state so browser Back/Forward can
  * restore an explicit size change without forfeiting persistence.
  */
@@ -23,10 +23,10 @@ export const UNIFIED_LIBRARY_DENSITY_OPTIONS: readonly {
 	{ id: 'pi', label: 'Touch' }
 ]);
 export type UnifiedArtistsSort = 'az' | 'za' | 'most-albums' | 'fewest-albums';
-export type UnifiedAlbumsSort = 'az' | 'za' | 'by-artist' | 'shuffle' | 'year-asc' | 'year-desc';
+export type UnifiedAlbumsSort = 'az' | 'za' | 'by-artist' | 'shuffle';
 export type UnifiedGenresSort = 'az' | 'za' | 'most-albums';
-export type UnifiedArtistDrillSort = 'az' | 'za' | 'shuffle' | 'year-asc' | 'year-desc';
-export type UnifiedGenreDrillSort = 'az' | 'za' | 'by-artist' | 'shuffle' | 'year-asc' | 'year-desc';
+export type UnifiedArtistDrillSort = 'az' | 'za' | 'shuffle';
+export type UnifiedGenreDrillSort = 'az' | 'za' | 'by-artist' | 'shuffle';
 
 export interface UnifiedLibrarySorts {
 	readonly artists: UnifiedArtistsSort;
@@ -42,15 +42,16 @@ export interface UnifiedLibraryPrefs {
 	readonly artistView: ArtistView;
 	readonly density: UnifiedLibraryDensity;
 	readonly sorts: UnifiedLibrarySorts;
+	readonly groupByLetter: Readonly<Record<SortableUnifiedScope, boolean>>;
 }
 
 const DENSITIES: readonly string[] = UNIFIED_LIBRARY_DENSITY_OPTIONS.map(({ id }) => id);
 const SORT_VALUES: Readonly<Record<SortableUnifiedScope, readonly string[]>> = Object.freeze({
 	artists: ['az', 'za', 'most-albums', 'fewest-albums'],
-	albums: ['az', 'za', 'by-artist', 'shuffle', 'year-asc', 'year-desc'],
+	albums: ['az', 'za', 'by-artist', 'shuffle'],
 	genres: ['az', 'za', 'most-albums'],
-	artist: ['az', 'za', 'shuffle', 'year-asc', 'year-desc'],
-	genre: ['az', 'za', 'by-artist', 'shuffle', 'year-asc', 'year-desc']
+	artist: ['az', 'za', 'shuffle'],
+	genre: ['az', 'za', 'by-artist', 'shuffle']
 });
 const SORTABLE_SCOPES = Object.keys(SORT_VALUES) as readonly SortableUnifiedScope[];
 
@@ -63,7 +64,14 @@ export const DEFAULT_UNIFIED_LIBRARY_PREFS: UnifiedLibraryPrefs = Object.freeze(
 		genres: 'az',
 		artist: 'az',
 		genre: 'az'
-	}) as UnifiedLibrarySorts
+	}) as UnifiedLibrarySorts,
+	groupByLetter: Object.freeze({
+		artists: true,
+		albums: false,
+		genres: false,
+		artist: false,
+		genre: false
+	})
 });
 
 interface UnifiedLibraryPrefsStorage {
@@ -80,6 +88,7 @@ export interface UnifiedLibraryPrefsStore extends Readable<UnifiedLibraryPrefs> 
 	setArtistView(value: unknown): boolean;
 	setDensity(value: unknown): boolean;
 	setSort(scope: SortableUnifiedScope, value: unknown): boolean;
+	setGroupByLetter(scope: SortableUnifiedScope, value: unknown): boolean;
 	/** Detach the cross-tab storage listener (tests and teardown). */
 	destroy(): void;
 }
@@ -100,7 +109,7 @@ export function parseUnifiedLibraryPrefs(raw: string | null): UnifiedLibraryPref
 		const value = JSON.parse(raw) as unknown;
 		if (!isRecord(value)) return DEFAULT_UNIFIED_LIBRARY_PREFS;
 		const legacy = value.version === 3;
-		const keys = Object.keys(value).sort().join(',');
+		const keys = Object.keys(value).filter(key => key !== 'groupByLetter').sort().join(',');
 		if (keys !== (legacy ? 'density,sorts,version' : 'artistView,density,sorts,version') &&
 			!(value.version === UNIFIED_LIBRARY_PREFS_VERSION && keys === 'density,sorts,version')) {
 			return DEFAULT_UNIFIED_LIBRARY_PREFS;
@@ -116,11 +125,23 @@ export function parseUnifiedLibraryPrefs(raw: string | null): UnifiedLibraryPref
 		if (Object.keys(sorts).sort().join(',') !== 'albums,artist,artists,genre,genres') {
 			return DEFAULT_UNIFIED_LIBRARY_PREFS;
 		}
+		// Retired date sorts carried no public data. Migrate only those values;
+		// preserve the user's density, artist view and every other valid sort.
+		for (const scope of ['albums', 'artist', 'genre'] as const) {
+			if (sorts[scope] === 'year-asc' || sorts[scope] === 'year-desc') sorts[scope] = 'az';
+		}
 		for (const scope of SORTABLE_SCOPES) {
 			const sort = sorts[scope];
 			if (typeof sort !== 'string' || !SORT_VALUES[scope].includes(sort)) {
 				return DEFAULT_UNIFIED_LIBRARY_PREFS;
 			}
+		}
+		const groupByLetter = value.groupByLetter === undefined
+			? DEFAULT_UNIFIED_LIBRARY_PREFS.groupByLetter : value.groupByLetter;
+		if (!isRecord(groupByLetter) ||
+			Object.keys(groupByLetter).sort().join(',') !== 'albums,artist,artists,genre,genres' ||
+			SORTABLE_SCOPES.some(scope => typeof groupByLetter[scope] !== 'boolean')) {
+			return DEFAULT_UNIFIED_LIBRARY_PREFS;
 		}
 		return {
 			artistView: !legacy && value.artistView === 'all-artists' ? 'all-artists' : 'album-artists',
@@ -131,7 +152,8 @@ export function parseUnifiedLibraryPrefs(raw: string | null): UnifiedLibraryPref
 				genres: sorts.genres as UnifiedGenresSort,
 				artist: sorts.artist as UnifiedArtistDrillSort,
 				genre: sorts.genre as UnifiedGenreDrillSort
-			}
+			},
+			groupByLetter: { ...groupByLetter } as Readonly<Record<SortableUnifiedScope, boolean>>
 		};
 	} catch {
 		return DEFAULT_UNIFIED_LIBRARY_PREFS;
@@ -143,7 +165,8 @@ function serializePrefs(prefs: UnifiedLibraryPrefs): string {
 		version: UNIFIED_LIBRARY_PREFS_VERSION,
 		artistView: prefs.artistView,
 		density: prefs.density,
-		sorts: prefs.sorts
+		sorts: prefs.sorts,
+		groupByLetter: prefs.groupByLetter
 	});
 }
 
@@ -206,6 +229,13 @@ export function createUnifiedLibraryPrefsStore({
 			return commit({
 				...current,
 				sorts: { ...current.sorts, [scope]: value }
+			});
+		},
+		setGroupByLetter(scope: SortableUnifiedScope, value: unknown): boolean {
+			if (!SORTABLE_SCOPES.includes(scope) || typeof value !== 'boolean') return false;
+			return commit({
+				...current,
+				groupByLetter: { ...current.groupByLetter, [scope]: value }
 			});
 		},
 		destroy(): void {

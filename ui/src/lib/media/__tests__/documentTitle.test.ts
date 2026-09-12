@@ -64,19 +64,19 @@ describe('formatDocumentTitle', () => {
 		);
 	});
 
-	it('falls back to the album artist when the track has no artist', () => {
+	it('keeps the track title when the public data has no artist', () => {
 		expect(
 			formatDocumentTitle(
-				{ ...playing, nowPlaying: nowPlaying({ artist: undefined, album_artist: 'Fixture Choir' }) },
+				{ ...playing, nowPlaying: nowPlaying({ artist: undefined }) },
 				DEFAULT_TITLE
 			)
-		).toBe('Placeholder Track One – Fixture Choir · Songr');
+		).toBe('Placeholder Track One · Songr');
 	});
 
 	it('drops the artist half rather than leaving it empty', () => {
 		expect(
 			formatDocumentTitle(
-				{ ...playing, nowPlaying: nowPlaying({ artist: '  ', album_artist: undefined }) },
+				{ ...playing, nowPlaying: nowPlaying({ artist: '  ' }) },
 				DEFAULT_TITLE
 			)
 		).toBe('Placeholder Track One · Songr');

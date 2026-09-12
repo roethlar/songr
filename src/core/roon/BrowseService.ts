@@ -197,95 +197,6 @@ export class BrowseService {
   }
 
   /**
-   * Perform a search using the browse hierarchy.
-   *
-   * Roon's search top level mixes direct hits with CATEGORY rows
-   * ("Albums — 1 Result", "Tracks — 17 Results", hint 'list'), which
-   * are useless to render as content. Each category is expanded in
-   * its own multi-session (parallel, isolated from the caller's
-   * session — same pattern as the welcome-stats fetch) and its items
-   * are returned typed by the category, so clients get real grouped
-   * results instead of category stubs.
-   */
-  public async search(options: BrowseSearchOptions): Promise<SearchResult[]> {
-    this.logger.debug({ options }, "BrowseService search invoked");
-    const browseOptions: BrowseOptions = {
-      hierarchy: "search",
-      zoneId: options.zoneId,
-      input: options.input,
-      offset: options.offset,
-      multiSessionKey: options.multiSessionKey,
-      popAll: options.popAll ?? true,
-    };
-
-    const result = await this.browse(browseOptions);
-    const categories = result.items.filter((item) => this.isSearchCategory(item));
-    const direct = result.items
-      .filter((item) => !categories.includes(item))
-      .map((item) => this.toSearchResult(item));
-
-    // Hold a side-session generation for the lifetime of this search
-    // so an overlapping search (rapid re-submit, second client) can
-    // never re-seed a category session out from under this one
-    // (rev-2). The pool reuses released numbers, so the Core-side key
-    // space stays bounded by peak concurrency — a fixed rotation was
-    // reopened in review because a slow search still collided once
-    // the counter wrapped.
-    const generation = this.acquireCategoryGeneration();
-    let anyExpansionFailed = false;
-    let firstExpansionError: unknown;
-    const expanded = (
-      await Promise.all(
-        categories.map((category) =>
-          this.expandSearchCategory(options, category, generation).catch(
-            (error: unknown) => {
-              // One broken category must not sink the whole search.
-              if (!anyExpansionFailed) firstExpansionError = error;
-              anyExpansionFailed = true;
-              this.logger.warn(
-                { err: error, category: category.title },
-                "Search category expansion failed"
-              );
-              return [] as SearchResult[];
-            }
-          )
-        )
-      )
-    ).flat();
-    // Quarantine on failure (rev-2 round 2): a timed-out Roon call is
-    // uncancellable and can still mutate its session when it lands
-    // late, so a generation whose expansion failed is never returned
-    // to the pool — the next search mints a fresh one instead of
-    // inheriting a possibly-dirty session.
-    if (!anyExpansionFailed) {
-      this.releaseCategoryGeneration(generation);
-    }
-
-    const searchResults = [...direct, ...expanded];
-    // A false empty is materially misleading (rev-3): if nothing else
-    // matched and a category expansion failed, returning [] renders as
-    // "No results — check the spelling" for content the library may
-    // well contain. Propagate the failure so clients surface an error
-    // instead. Partial omissions alongside surviving results remain
-    // tolerated (warn-logged above), per the isolation intent.
-    if (anyExpansionFailed && searchResults.length === 0) {
-      throw firstExpansionError instanceof Error
-        ? firstExpansionError
-        : new Error("[BrowseService] search category expansion failed");
-    }
-    this.logger.debug(
-      {
-        query: options.input,
-        direct: direct.length,
-        categories: categories.map((c) => c.title),
-        count: searchResults.length,
-      },
-      "BrowseService search result"
-    );
-    return searchResults;
-  }
-
-  /**
    * Expand grouped Classic search results inside one coordinator-owned search
    * channel. Category rows are walked sequentially because derived session
    * names would escape the coordinator's bounded Classic generation. Returned
@@ -466,22 +377,6 @@ export class BrowseService {
   private static readonly SEARCH_CATEGORY_PAGE = 50;
 
   /**
-   * Category side-session generation pool (see search()). A generation
-   * is held while one search() is in flight and released afterwards;
-   * released numbers are reused before new ones are minted.
-   */
-  private readonly freeCategoryGenerations: number[] = [];
-  private nextCategoryGeneration = 0;
-
-  private acquireCategoryGeneration(): number {
-    return this.freeCategoryGenerations.pop() ?? this.nextCategoryGeneration++;
-  }
-
-  private releaseCategoryGeneration(generation: number): void {
-    this.freeCategoryGenerations.push(generation);
-  }
-
-  /**
    * A search-top-level category row: a 'list' row whose title is a
    * known result-type bucket and whose subtitle is a "N Results"
    * count. Real content rows never combine all three.
@@ -500,50 +395,6 @@ export class BrowseService {
       isLoadable: false,
       isPlayable: false,
     });
-  }
-
-  /**
-   * Drill one search category in a dedicated multi-session and return
-   * its first page of items, typed by the category. The extra session
-   * re-runs the search (Roon item_keys are only valid within the
-   * session that produced them), so the caller's session never moves.
-   * Failures propagate to search(), which isolates them per category
-   * and quarantines the generation.
-   */
-  private async expandSearchCategory(
-    options: BrowseSearchOptions,
-    category: BrowseItem,
-    generation: number
-  ): Promise<SearchResult[]> {
-    const type = this.searchCategoryType(category.title);
-    const sessionKey = `${options.multiSessionKey ?? "search"}:cat:${type}:g${generation}`;
-    const root = await this.browse({
-      hierarchy: "search",
-      input: options.input,
-      zoneId: options.zoneId,
-      multiSessionKey: sessionKey,
-      popAll: true,
-    });
-    const row = root.items.find(
-      (i) => i.itemKey && i.hint === "list" && i.title === category.title
-    );
-    if (!row?.itemKey) return [];
-
-    const page = await this.browse({
-      hierarchy: "search",
-      itemKey: row.itemKey,
-      zoneId: options.zoneId,
-      multiSessionKey: sessionKey,
-      pageSize: BrowseService.SEARCH_CATEGORY_PAGE,
-    });
-    return page.items.map((item) => ({
-      ...this.toSearchResult(item),
-      resultType: type,
-      // Lets the UI show "See all N" when this page truncated the
-      // category (rev-4) and navigate back into it by title.
-      categoryTitle: category.title,
-      categoryTotal: page.totalCount ?? page.count,
-    }));
   }
 
   // ── Roon API Invocation ──────────────────────────────────────────────
@@ -922,7 +773,7 @@ export class BrowseService {
 
   private toBrowseItem(item: any): BrowseItem {
     // Every display string is repaired here — the one boundary browse,
-    // coordinated search, and catalog ingestion all flow through. The
+    // coordinated search, and live-library reads all flow through. The
     // live Core delivers UTF-8-as-CP1252 mojibake in some tags.
     return {
       title: repairEncoding(item?.title ?? ""),

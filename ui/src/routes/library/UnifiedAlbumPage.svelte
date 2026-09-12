@@ -1,15 +1,21 @@
 <script lang="ts">
-	import { tick, type Snippet } from 'svelte';
+	import { tick, untrack, type Snippet } from 'svelte';
 	import { readable } from 'svelte/store';
 	import type { LibraryAlbumTrack } from '@shared/libraryAlbumContracts';
+	import type { AddFavoriteRequest } from '@shared/types';
+	import { bookmarkPayload, albumTrackBookmarkPayload } from '$lib/bookmarks';
+	import BookmarkButton from '$lib/components/BookmarkButton.svelte';
+	import ArtworkPlay from '$lib/components/ArtworkPlay.svelte';
+	import EntityActionMenu from '$lib/components/EntityActionMenu.svelte';
+	import EntityFeedback from '$lib/components/EntityFeedback.svelte';
+	import LibraryActionButton from '$lib/components/LibraryActionButton.svelte';
 	import type { AlbumActionSemantic } from '@shared/albumActionContracts';
 	import { prepareLibraryGrid } from '$lib/preparedLibraryGrid';
+	import { createTrackSelection } from '$lib/trackSelection';
 	import { normalizeLibraryText } from '@shared/libraryText';
 	import { imageUrl } from '$lib/imageUrl';
 	import { monogram } from '$lib/monogram';
 	import { libraryArtwork } from '$lib/actions/libraryArtwork';
-	import { albumTrackNumber } from '$lib/trackTitle';
-	import { shouldHandleLibraryAnchorClick } from '$lib/libraryPageNavigation';
 	import type {
 		LibraryAlbumController,
 		LibraryAlbumState,
@@ -18,6 +24,7 @@
 	import type { LibraryAlbumEntry } from '$lib/libraryEntries';
 	import type { AlbumActionController, AlbumActionState } from '$lib/library/AlbumActionController';
 	import UnifiedItemPageFrame from './UnifiedItemPageFrame.svelte';
+	import TrackSelectionControls from './TrackSelectionControls.svelte';
 
 	type PageTrackTarget = { readonly index: number; readonly title: string };
 
@@ -29,8 +36,22 @@
 		phase: 'opening' | 'details' | 'failed';
 		error?: string | null;
 		tracks: readonly LibraryAlbumTrack[];
-		controls: Snippet;
-		trackControls: Snippet<[number]>;
+		onPlayAlbum?: () => void;
+		albumActionsEnabled: boolean;
+		entityActionsEnabled: boolean;
+		entityMore?: Snippet<[() => void]>;
+		onOpenEntityMore?: () => void;
+		entityMenuActive?: boolean;
+		onBatchAction: (tracks: readonly LibraryAlbumTrack[], semantic: AlbumActionSemantic) => void;
+		selectionMore?: Snippet<[LibraryAlbumTrack[], () => void]>;
+		hasSelectionMore?: boolean;
+		selectionMenuActive?: boolean;
+		onOpenSelectionMore?: (tracks: LibraryAlbumTrack[]) => void;
+		actionsEnabled: boolean;
+		busy: boolean;
+		status?: string | null;
+		onCancel?: () => void;
+		onCloseMore?: () => void;
 		feedback?: Snippet;
 		footer?: Snippet;
 	}
@@ -79,23 +100,15 @@
 		onBeginAction?: (
 			track: PageTrackTarget | null,
 			zoneId: string,
-			desiredSemantic: AlbumActionSemantic
+			desiredSemantic: AlbumActionSemantic | null
 		) => void;
-		onOpenArtist?: () => void;
-		/**
-		 * Opens the exact-track child for a ZERO-BASED position in this
-		 * version's ordered tracks (plan Slice 5). Offered only on
-		 * single-version pages — the exact album/version/index binding.
-		 */
-		onOpenTrackInfo?: (trackPosition: number) => void;
-		/** Leaves that child and returns to the album's own view. */
-		onCloseTrackInfo?: () => void;
-		hrefForTrack?: (trackTitle: string) => string | null;
-		/**
-		 * A restored exact-track title: consumed once when the single-version
-		 * track order arrives; zero or several matches are never guessed.
-		 */
-		initialTrackInfoTitle?: string | null;
+		onBeginBatchAction?: (tracks: readonly PageTrackTarget[], zoneId: string, semantic: AlbumActionSemantic) => void;
+		batchBusy?: boolean;
+		batchStatus?: string | null;
+		onCancelBatch?: () => void;
+		onBookmark?: (items: readonly AddFavoriteRequest[]) => void;
+		bookmarkBusy?: boolean;
+		bookmarkStatus?: string | null;
 	}
 
 	const {
@@ -113,20 +126,17 @@
 		actionRetryAvailable = false,
 		onRetryAction = () => {},
 		onBeginAction,
-		onOpenArtist,
-		onOpenTrackInfo = undefined,
-		onCloseTrackInfo = () => {},
-		hrefForTrack = undefined,
-		initialTrackInfoTitle = null
+		onBeginBatchAction,
+		batchBusy = false,
+		batchStatus = null,
+		onCancelBatch,
+		onBookmark,
+		bookmarkBusy = false,
+		bookmarkStatus = null
 	}: Props = $props();
 
 	let trackList: HTMLElement | null = $state(null);
-	/**
-	 * The live public track target (ri5-2): the child view renders from
-	 * the page's own exact data.
-	 */
-	let trackInfo = $state<{ position: number; title: string } | null>(null);
-
+	const trackSelection = createTrackSelection<LibraryAlbumTrack>();
 	const pageStore = $derived(controller ?? emptyPageStore);
 	const actionStore = $derived(actionController ?? emptyActionStore);
 	const sheet = $derived<AlbumDisplayState>(publicPage ? {
@@ -162,8 +172,22 @@
 		focusedTrackPosition < 0 ? null : (sheet.orderedTracks[focusedTrackPosition]?.index ?? null)
 	);
 	const actionBusy = $derived(
-		action.phase === 'resolving' || action.phase === 'choosing' || action.phase === 'executing'
+		batchBusy || publicPage?.busy === true || action.phase === 'resolving' || action.phase === 'choosing' || action.phase === 'executing'
 	);
+	const albumActionsDisabled = $derived(publicPage
+		? !publicPage.albumActionsEnabled || actionBusy
+		: !sheet.albumActionsAvailable || sheet.phase !== 'details' || actionBusy || zoneId === null);
+	const selectedActionsDisabled = $derived(publicPage
+		? !publicPage.actionsEnabled || actionBusy
+		: !sheet.actionsAvailable || actionBusy || zoneId === null || !onBeginBatchAction);
+	const selectedActions = $derived([
+		{ id: 'play', label: 'Play', disabled: selectedActionsDisabled, run: (tracks: LibraryAlbumTrack[]) => beginSelected(tracks, 'play-now') },
+		{ id: 'next', label: 'Add next', disabled: selectedActionsDisabled, run: (tracks: LibraryAlbumTrack[]) => beginSelected(tracks, 'add-next') },
+		{ id: 'queue', label: 'Queue', disabled: selectedActionsDisabled, run: (tracks: LibraryAlbumTrack[]) => beginSelected(tracks, 'queue') }
+	]);
+	$effect(() => { trackSelection.retain(sheet.phase === 'details' ? sheet.orderedTracks : [], sheet.orderedTracks); });
+	$effect(() => { void activationGeneration; trackSelection.clear(); });
+	$effect(() => { void $trackSelection; untrack(() => publicPage?.onCloseMore?.()); });
 	const displayTitle = $derived(sheet.title ?? album?.title ?? 'Album');
 	const displayArtist = $derived(sheet.artist ?? album?.artist ?? '');
 	const displayImageKey = $derived(publicPage?.imageKey ?? selectedVersion?.imageKeyHint ?? album?.imageKey ?? null);
@@ -176,7 +200,6 @@
 		void sheet.orderedTracks;
 		void activationGeneration;
 		const focusPosition = focusedTrackPosition;
-		trackInfo = null;
 		if (focusPosition >= 0) {
 			void tick().then(() => {
 				trackList
@@ -190,33 +213,10 @@
 		return version.editionText || `Version ${index + 1}`;
 	}
 
-	function durationLabel(seconds: number): string {
-		const rounded = Math.round(seconds);
-		const hours = Math.floor(rounded / 3600);
-		const minutes = Math.floor((rounded % 3600) / 60);
-		const remainder = rounded % 60;
-		return hours > 0
-			? `${hours}:${minutes.toString().padStart(2, '0')}:${remainder.toString().padStart(2, '0')}`
-			: `${minutes}:${remainder.toString().padStart(2, '0')}`;
-	}
-
 	function versionFacts(version: LibraryAlbumVersionState): string[] {
-		const facts: string[] = [];
-		if (version.trackCount !== null) {
-			facts.push(`${version.trackCount} ${version.trackCount === 1 ? 'track' : 'tracks'}`);
-		}
-		if (version.durationSeconds !== undefined) facts.push(durationLabel(version.durationSeconds));
-		if (version.releaseDate) facts.push(version.releaseDate);
-		if (version.sourceLabel) facts.push(version.sourceLabel);
-		if (version.available === false) facts.push('Unavailable');
-		if (version.isFavorite) facts.push('Favorite');
-		if (version.isListenLater) facts.push('Listen Later');
-		if (version.isBanned) facts.push('Banned');
-		if (version.playCount !== undefined) {
-			facts.push(`${version.playCount} ${version.playCount === 1 ? 'play' : 'plays'}`);
-		}
-		if (version.lastPlayedAt) facts.push(`Last played ${version.lastPlayedAt.slice(0, 10)}`);
-		return facts;
+		return version.trackCount === null ? [] : [
+			`${version.trackCount} ${version.trackCount === 1 ? 'track' : 'tracks'}`
+		];
 	}
 
 	function versionMeta(version: LibraryAlbumVersionState): string {
@@ -234,65 +234,78 @@
 
 	function pickTarget(
 		track: PageTrackTarget | null,
-		desiredSemantic: AlbumActionSemantic
+		desiredSemantic: AlbumActionSemantic | null
 	): void {
 		// The guard matches the button that reaches it: a whole-album verb asks
-		// the album-level answer, a track row asks the track-level one. They are
-		// the same answer on a catalog page and may differ on a live one.
+		// the album-level answer, a track row asks the track-level one.
+		// These capabilities may differ.
 		const available = track === null ? sheet.albumActionsAvailable : sheet.actionsAvailable;
 		if (!available || actionBusy || zoneId === null) return;
 		onBeginAction?.(track, zoneId, desiredSemantic);
 	}
 
-	function openTrackInfo(position: number, title: string): void {
-		trackInfo = { position, title };
-		onOpenTrackInfo?.(position);
+	function beginSelected(tracks: readonly LibraryAlbumTrack[], semantic: AlbumActionSemantic): void {
+		if (selectedActionsDisabled || !tracks.length || tracks.some(track => !sheet.orderedTracks.includes(track))) return;
+		if (publicPage) publicPage.onBatchAction(tracks, semantic);
+		else if (zoneId !== null) onBeginBatchAction?.(tracks, zoneId, semantic);
 	}
 
-	function followTrackInfo(event: MouseEvent, href: string | null, position: number, title: string): void {
-		if (href !== null) {
-			if (!shouldHandleLibraryAnchorClick(event)) return;
-			event.preventDefault();
-		}
-		openTrackInfo(position, title);
+	function bookmarkAlbum(): void {
+		const title = sheet.title ?? album?.title;
+		if (!onBookmark || bookmarkBusy || !title?.trim()) return;
+		onBookmark([bookmarkPayload('album', { title, artist: displayArtist, imageKey: displayImageKey })]);
 	}
 
-	function closeTrackInfo(): void {
-		trackInfo = null;
-		onCloseTrackInfo();
+	function bookmarkTracks(tracks: readonly LibraryAlbumTrack[]): void {
+		if (!onBookmark || bookmarkBusy || sheet.phase !== 'details' || tracks.length === 0) return;
+		const currentTracks = new Set(sheet.orderedTracks);
+		if (tracks.some(track => !currentTracks.has(track) || !track.title.trim())) return;
+		onBookmark(tracks.map(track => albumTrackBookmarkPayload(track, {
+			artist: displayArtist, album: sheet.title ?? album?.title, imageKey: displayImageKey
+		})));
 	}
 
-	// Restores a persisted exact-track child by its rendering, never by list
-	// position. A catalog page must identify one version; a live page already
-	// is one exact rendering. Zero or several exact rows keep the parent until
-	// the route's missing/group outcome can say what happened.
-	$effect(() => {
-		if (initialTrackInfoTitle === null || trackInfo !== null) return;
-		if ((sheet.live == null && sheet.versions.length !== 1) || onOpenTrackInfo === undefined) return;
-		const matches = sheet.orderedTracks.filter((track) => track.title === initialTrackInfoTitle);
-		if (matches.length !== 1) return;
-		const position = sheet.orderedTracks.indexOf(matches[0]);
-		const title = matches[0].title;
-		// The version/track reset effect and this restoration are invalidated by
-		// the same level publication. Restore after that reset has settled.
-		void tick().then(() => {
-			if (initialTrackInfoTitle !== title || trackInfo !== null) return;
-			if (sheet.orderedTracks[position]?.title !== title) return;
-			openTrackInfo(position, title);
-		});
-	});
 </script>
+
+{#snippet headingActions()}
+	{#if onBookmark}<BookmarkButton title="Bookmark album" onclick={bookmarkAlbum} disabled={bookmarkBusy || !(sheet.title ?? album?.title)?.trim()} />{/if}
+	{#if publicPage?.entityMore || (!publicPage && sheet.albumActionsAvailable)}
+		<EntityActionMenu label="More actions for album {displayTitle}" disabled={publicPage ? !publicPage.entityActionsEnabled || actionBusy : albumActionsDisabled} generation={sheet.orderedTracks}
+			remoteActive={publicPage ? publicPage.entityMenuActive : !['idle', 'executed', 'canceled'].includes(action.phase)}
+			onOpen={() => { if (publicPage) publicPage.onOpenEntityMore?.(); else pickTarget(null, null); }}
+			onClose={() => { if (publicPage) publicPage.onCloseMore?.(); else if (action.phase === 'choosing' || action.phase === 'resolving') actionController?.cancel(); }}>
+			{#snippet children(close)}
+				{#if publicPage?.entityMore}{@render publicPage.entityMore(close)}{:else}
+					{#if action.phase === 'resolving' || action.phase === 'executing'}<span class="menu-status" role="status">Working…</span>{/if}
+					{#if action.error}<span class="menu-status" role="alert">{action.error}</span>{/if}
+					{#each action.actions.filter(choice => choice.semantic !== 'play-now') as choice (choice.actionId)}
+						{#if choice.semantic === 'other'}
+							<button class="advertised-choice" type="button" role="menuitem" disabled={action.phase !== 'choosing'} onclick={() => actionController?.execute(choice.actionId)}>{choice.label}</button>
+						{:else}
+							<LibraryActionButton icon={choice.semantic === 'add-next' ? 'add-next' : 'queue'} label={choice.label} role="menuitem" disabled={action.phase !== 'choosing'} onclick={() => actionController?.execute(choice.actionId)} />
+						{/if}
+					{/each}
+					{#if action.phase === 'choosing' && !action.actions.some(choice => choice.semantic !== 'play-now')}<span class="menu-status">No other actions are available.</span>{/if}
+					{#if action.phase === 'failed' && actionRetryAvailable}<button class="advertised-choice" type="button" role="menuitem" onclick={onRetryAction}>Retry action</button>{/if}
+				{/if}
+			{/snippet}
+		</EntityActionMenu>
+	{/if}
+{/snippet}
 
 <UnifiedItemPageFrame
 	label="Album page"
 	heading={displayTitle}
 	headingTestId="unified-album-title"
+	{headingActions}
 	{backLabel}
 	backTestId="unified-album-back"
 	{onBack}
 >
 	<div class="item-page-body" data-testid="unified-album-page">
 		<div class="pleft">
+			<ArtworkPlay label="Play album {displayTitle}" disabled={albumActionsDisabled} generation={sheet.orderedTracks}
+				onclick={() => { if (publicPage) publicPage.onPlayAlbum?.(); else pickTarget(null, 'play-now'); }}>
 			<div class="art">
 				<!-- The monogram is the permanent placeholder layer (q6): a
 				     failed image load hides the img in place — libraryArtwork keeps
@@ -314,40 +327,21 @@
 					/>
 				{/if}
 			</div>
-			<div class:pb={!publicPage} class:public-album-controls={Boolean(publicPage)}>
-				{#if publicPage}
-					{@render publicPage.controls()}
-				{:else}
-					<button
-						type="button"
-						data-testid="unified-album-play"
-						disabled={!sheet.albumActionsAvailable || sheet.phase !== 'details' || actionBusy || zoneId === null}
-						onclick={() => pickTarget(null, 'play-now')}
-					>
-						Play album
-					</button>
-					<button
-						type="button"
-						data-testid="unified-album-queue"
-						disabled={!sheet.albumActionsAvailable || sheet.phase !== 'details' || actionBusy || zoneId === null}
-						onclick={() => pickTarget(null, 'queue')}
-					>
-						Queue album
-					</button>
-					<button
-						type="button"
-						data-testid="unified-album-artist-link"
-						disabled={!onOpenArtist}
-						onclick={onOpenArtist}
-					>
-						All by artist
-					</button>
-				{/if}
-			</div>
+			</ArtworkPlay>
 		</div>
 
 		<div class="pright">
-			<div class="pa" data-testid="unified-album-artist">{displayArtist}</div>
+			<div class="album-metadata">
+				<div class="pa" data-testid="unified-album-artist" title={displayArtist}>{displayArtist}</div>
+				<div class="album-selection">
+					<TrackSelectionControls selection={trackSelection} orderedItems={sheet.orderedTracks} visibleItems={sheet.orderedTracks}
+						actions={selectedActions} busy={actionBusy} status={publicPage?.status ?? batchStatus}
+						onBookmark={onBookmark ? bookmarkTracks : undefined} bookmarkDisabled={bookmarkBusy || sheet.phase !== 'details'}
+						onCancel={publicPage?.onCancel ?? onCancelBatch} label={track => track.title} more={publicPage?.selectionMore} hasMore={Boolean(publicPage?.hasSelectionMore && $trackSelection.count === 1)}
+					onOpenMore={publicPage?.onOpenSelectionMore} onCloseMore={publicPage?.onCloseMore} remoteMenuActive={publicPage?.selectionMenuActive} />
+				</div>
+			</div>
+			<EntityFeedback label="Album status" error={action.phase === 'failed' || action.phase === 'outcome-unknown'} message={bookmarkStatus ?? (action.phase === 'failed' || action.phase === 'outcome-unknown' ? action.error ?? 'The action failed.' : action.phase === 'executing' ? 'Working…' : null)} />
 
 
 			{#if sheet.versions.length > 1}
@@ -380,30 +374,6 @@
 
 			{#if publicPage?.feedback}
 				{@render publicPage.feedback()}
-			{/if}
-			{#if action.phase === 'choosing'}
-				<div class="action-choices" data-testid="unified-album-action-choices">
-					{#each action.actions as choice (choice.actionId)}
-						<button type="button" onclick={() => actionController?.execute(choice.actionId)}>{choice.label}</button>
-					{/each}
-					<button type="button" class="ghost" onclick={() => actionController?.cancel()}>Cancel</button>
-				</div>
-			{:else if action.phase === 'resolving' || action.phase === 'executing'}
-				<p class="status" data-testid="unified-album-action-busy">Working…</p>
-			{:else if action.phase === 'failed' || action.phase === 'outcome-unknown'}
-				<p class="status error" data-testid="unified-album-action-error">
-					{action.error ?? 'The action failed.'}
-				</p>
-				{#if action.phase === 'failed' && actionRetryAvailable}
-					<button
-						type="button"
-						class="retry"
-						onclick={onRetryAction}
-						data-testid="unified-album-action-retry"
-					>
-						Retry action
-					</button>
-				{/if}
 			{/if}
 
 			{#if sheet.phase === 'opening'}
@@ -467,70 +437,22 @@
 					<span>{versionFacts(selectedVersion).join(' · ')}</span>
 					</div>
 				{/if}
+
 				<div role="list" class="tl tracks" class:public-tracks={Boolean(publicPage)} data-testid="unified-album-tracks" use:prepareLibraryGrid={[sheet.orderedTracks, activationGeneration]} bind:this={trackList}>
-					{#each sheet.orderedTracks as track, offset (track.index)}
-						{@const number = publicPage ? null : albumTrackNumber(track)}
+					{#each sheet.orderedTracks as track (track.index)}
 						<div role="listitem"
 							class="tr"
 							class:song-focus={track.index === focusedTrackIndex}
 							data-testid="unified-track-row-{track.index}"
 							data-song-highlight={track.index === focusedTrackIndex ? 'true' : undefined}
-						>
-							{#if number !== null}<span class="tn mono">{number}</span>{/if}
-							<span class="tnm">{track.title}</span>
-							{#if onOpenTrackInfo && (sheet.live != null || sheet.versions.length === 1)}
-								{@const href = hrefForTrack?.(track.title) ?? null}
-								<svelte:element
-									this={href === null ? 'button' : 'a'}
-									role={href === null ? 'button' : 'link'}
-									type={href === null ? 'button' : undefined}
-									{href}
-									class="tinfo"
-									data-testid="unified-track-info-{track.index}"
-									onclick={(event: MouseEvent) =>
-										followTrackInfo(event, href, offset, track.title)}
-								>Info</svelte:element>
-							{/if}
-							{#if publicPage}
-								{@render publicPage.trackControls(track.index)}
-							{:else}
-								<button
-									type="button"
-									class="tgo"
-									data-testid="unified-track-action-{track.index}"
-									disabled={!sheet.actionsAvailable || actionBusy || zoneId === null}
-									onclick={() => pickTarget({ index: track.index, title: track.title }, 'play-now')}
-								>Play</button>
-								<button
-									type="button"
-									class="tq"
-									data-testid="unified-track-queue-{track.index}"
-									disabled={!sheet.actionsAvailable || actionBusy || zoneId === null}
-									onclick={() => pickTarget({ index: track.index, title: track.title }, 'queue')}
-								>Queue</button>
-							{/if}
+							data-track-select-row
+							use:trackSelection.row={{ item: track, ordered: () => sheet.orderedTracks, disabled: actionBusy, generation: sheet.orderedTracks }}
+							>
+							<button type="button" class="tnm" data-track-select-target aria-label="Select {track.title}" aria-pressed="false">{track.title}</button>
 						</div>
 					{/each}
 				</div>
 
-					{#if sheet.live != null || sheet.versions.length === 1}
-						{#if trackInfo !== null}
-							<!-- Exact-track child view (Slice 5): the page's OWN exact track
-							     title, which is what the address names, and the way back to
-							     the album's own view. -->
-							<section class="track-child" data-testid="unified-album-track-info">
-								<h3>{trackInfo.title}</h3>
-								<button
-									type="button"
-									class="follow-back"
-									data-testid="unified-album-track-info-back"
-									onclick={closeTrackInfo}
-								>
-									Back to album info
-								</button>
-							</section>
-						{/if}
-					{/if}
 				{#if publicPage?.footer}
 					{@render publicPage.footer()}
 				{/if}
@@ -540,9 +462,18 @@
 </UnifiedItemPageFrame>
 
 <style>
-	.public-album-controls {
-		margin-top: 14px;
-	}
+ .advertised-choice { border: 0; border-radius: 3px; background: transparent; color: var(--songr-accent); font: inherit;
+  font-size: 12px; padding: 8px 10px; min-height: 36px; text-align: left; cursor: pointer; }
+ .advertised-choice:hover:not(:disabled) { background: var(--songr-hover-subtle); }
+ .advertised-choice:focus-visible { outline: 2px solid var(--songr-accent); outline-offset: -2px; }
+ .advertised-choice:disabled { color: var(--songr-dim); cursor: default; }
+ :global([data-density="compact"]) .advertised-choice { min-height: 32px; }
+ :global([data-density="pi"]) .advertised-choice { min-height: 44px; }
+ @media (any-pointer: coarse) { .advertised-choice, :global([data-density="compact"]) .advertised-choice { min-height: 44px; } }
+
+	.album-metadata { display: flex; align-items: center; gap: 12px; min-height: 48px; min-width: 0; position: sticky; top: var(--library-toolbar-top, 0px); z-index: 5; background: var(--bg); }
+	.album-metadata .pa { flex: 0 1 auto; max-width: 45%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 0; }
+	.album-selection { flex: 1 0 160px; min-width: min-content; }
 	.public-tracks {
 		overflow: visible;
 	}
@@ -695,13 +626,6 @@
 		color: var(--soft);
 		font-size: 11px;
 	}
-	.action-choices {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 8px;
-		margin-top: 12px;
-	}
 	.tracks {
 		list-style: none;
 		margin-bottom: 0;
@@ -713,45 +637,8 @@
 		background: color-mix(in srgb, var(--accent) 18%, var(--songr-surface-11));
 		box-shadow: inset 3px 0 0 var(--accent);
 	}
-	.ghost {
-		opacity: 0.7;
-	}
 	.retry {
 		margin-top: 12px;
 	}
-	.track-child {
-		margin-top: 18px;
-	}
-	/* Child identity heading (q6): the child title reads as identity, not a
-	   section label. */
-	.track-child h3 {
-		margin: 0 0 6px;
-		font-size: 15px;
-		font-weight: 600;
-	}
-	.follow-back {
-		padding: 0;
-		border: 0;
-		background: transparent;
-		color: var(--accent);
-		font-size: 12px;
-		cursor: pointer;
-	}
-	.follow-back:hover {
-		color: var(--accent2);
-	}
-	.tinfo {
-		padding: 2px 8px;
-		border: 1px solid var(--line-subtle);
-		border-radius: 5px;
-		background: transparent;
-		color: var(--soft);
-		font-size: 11px;
-		cursor: pointer;
-		text-decoration: none;
-	}
-	.tinfo:hover {
-		border-color: var(--accent);
-		color: var(--songr-control-text);
-	}
+	@media (max-width: 620px) { .item-page-body { flex-direction: column; } }
 </style>

@@ -58,11 +58,6 @@
 .unified-surface button.prow {
   width: 100%;
 }
-.unified-surface .smenu .why {
-  display: block;
-  font-size: 10.5px;
-  color: var(--dim);
-}
 .unified-surface {
   --bg: var(--songr-bg);
   --header: var(--songr-header);
@@ -187,7 +182,9 @@
   top: 58px;
   right: 18px;
   z-index: 40;
-  width: 288px;
+  width: min(288px, calc(100vw - 36px));
+  max-height: calc(100dvh - 76px);
+  overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -244,6 +241,32 @@
 .unified-surface .aboutpanel .ab-close:focus-visible {
   color: var(--accent2);
   border-color: var(--accent);
+}
+.unified-surface .aboutpanel .ab-updates { margin-bottom: 12px; }
+.unified-surface .aboutpanel .ab-update {
+  min-height: 44px;
+  color: var(--accent2);
+  letter-spacing: 0.05em;
+}
+.unified-surface .aboutpanel .ab-update:disabled { opacity: 0.6; cursor: wait; }
+.unified-surface .aboutpanel .ab-update-result p {
+  margin: 8px 0 0;
+  color: var(--soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.unified-surface .aboutpanel .ab-update-result .ab-update-error { color: var(--songr-error); }
+.unified-surface .aboutpanel .ab-update-release {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent2);
+  font-size: 12px;
+}
+.unified-surface .aboutpanel .ab-update:focus-visible,
+.unified-surface .aboutpanel .ab-update-release:focus-visible {
+  outline: 2px solid var(--accent2);
+  outline-offset: 2px;
 }
 .unified-surface .findbtn {
   background: none;
@@ -370,7 +393,7 @@
   /* Sticky insets include the pane's content padding; scroll padding is
      measured from the scrollport edge. Reserve both plus a small gap. */
   scroll-padding-top: calc(var(--pane-pad-block) + var(--library-toolbar-top) + var(--library-toolbar-height, 0px) + 12px);
-  scroll-behavior: smooth;
+  scroll-behavior: var(--songr-scroll-behavior, auto);
 }
 .unified-surface .u-main::-webkit-scrollbar {
   width: 10px;
@@ -574,15 +597,6 @@
   color: var(--accent2);
   font-weight: 600;
 }
-.unified-surface .so.dis {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.unified-surface .so .why {
-  display: block;
-  font-size: 10px;
-  color: var(--dim);
-}
 .unified-surface[data-d="pi"] .sortc {
   font-size: 14px;
   padding: 10px 14px;
@@ -592,7 +606,8 @@
   font-size: 14.5px;
 }
 
-.unified-surface .grp {
+.unified-surface .grp,
+.unified-surface [data-letter] {
   scroll-margin-top: 8px;
 }
 .unified-surface .gl {
@@ -609,6 +624,17 @@
   column-count: var(--col);
   column-gap: 24px;
 }
+.unified-surface .alist.artist-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--col), minmax(0, 1fr));
+  column-count: initial;
+  column-gap: 24px;
+}
+.unified-surface .so.grouping-option {
+  margin-top: 6px;
+  border-top: 1px solid var(--line-subtle);
+}
+.unified-surface .so.grouping-option:disabled { opacity: .4; cursor: default; }
 .unified-surface .arow {
   display: flex;
   align-items: baseline;
@@ -652,6 +678,9 @@
   gap: var(--gap);
 }
 .unified-surface .tile {
+  display: block;
+  align-self: start;
+  min-width: 0;
   cursor: pointer;
 }
 .unified-surface .tile .art {
@@ -668,6 +697,14 @@
   box-shadow:
     0 10px 24px rgba(0, 0, 0, 0.7),
     0 0 0 1.5px var(--accent);
+}
+/* Keyboard focus remains inside the artwork without changing its geometry. */
+.unified-surface .tile:focus-visible {
+  outline: none;
+}
+.unified-surface .tile:focus-visible .art {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .unified-surface .tile .art img {
   width: 100%;
@@ -939,38 +976,6 @@
   font-size: 14px;
   color: var(--soft);
   margin-top: 5px;
-  cursor: pointer;
-}
-.unified-surface .pa:hover {
-  color: var(--accent2);
-}
-.unified-surface .pb {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  margin-top: 14px;
-}
-.unified-surface .pb div,
-.unified-surface .pb button {
-  width: 100%;
-  padding: 10px;
-  border-radius: 7px;
-  background: var(--songr-surface-16);
-  border: 1px solid var(--line);
-  font: inherit;
-  font-size: 12.5px;
-  text-align: center;
-  cursor: pointer;
-  color: var(--songr-control-text);
-}
-.unified-surface .pb div:hover,
-.unified-surface .pb button:hover:not(:disabled) {
-  background: var(--songr-surface-20);
-  border-color: var(--accent);
-}
-.unified-surface .pb button:disabled {
-  cursor: default;
-  opacity: 1;
 }
 .unified-surface .tl {
   margin-top: 14px;
@@ -1010,35 +1015,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.unified-surface .tgo,
-.tq {
-  background: transparent;
-  border: 0;
-  font: inherit;
-  font-size: 11px;
-  color: var(--accent2);
-  opacity: 0;
-  padding: 2px 6px;
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-.unified-surface .tq {
-  color: var(--soft);
-}
-.unified-surface .tr:hover .tgo,
-.tr:hover .tq {
-  opacity: 1;
-}
-.unified-surface .tgo:hover,
-.tq:hover {
-  background: var(--scrollbar);
-}
-.unified-surface[data-d="pi"] .tgo,
-.unified-surface[data-d="pi"] .tq {
-  opacity: 1;
-  font-size: 13px;
-  padding: 6px 10px;
 }
 .unified-surface[data-d="pi"] .tr {
   padding: 10px 8px;
@@ -1086,7 +1062,7 @@
   flex-direction: column;
   max-height: 66vh;
 }
-.unified-surface .palbox input {
+.unified-surface .palbox > input {
   background: transparent;
   border: 0;
   outline: none;
@@ -1096,7 +1072,7 @@
   padding: 17px 20px;
   border-bottom: 1px solid var(--line);
 }
-.unified-surface .palbox input::placeholder {
+.unified-surface .palbox > input::placeholder {
   color: var(--dim);
 }
 .unified-surface .pres {
@@ -1137,6 +1113,8 @@
   flex-shrink: 0;
 }
 .unified-surface .prow .p1 {
+  min-width: 0;
+  flex: 1;
   font-size: 14px;
   color: var(--songr-result-text);
   white-space: nowrap;
@@ -1144,18 +1122,16 @@
   text-overflow: ellipsis;
 }
 .unified-surface .prow .p2 {
+  min-width: 0;
+  max-width: 55%;
   font-size: 11.5px;
   color: var(--dim);
   margin-left: auto;
-  flex-shrink: 0;
+  flex-shrink: 1;
   padding-left: 12px;
-}
-.unified-surface .prow.dis {
-  opacity: 0.45;
-  cursor: default;
-}
-.unified-surface .prow.dis:hover {
-  background: transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .unified-surface .prow.filter .p1 {
   color: var(--accent2);
@@ -1167,7 +1143,7 @@
   border-top: 1px solid var(--line);
   letter-spacing: 0.03em;
 }
-.unified-surface[data-d="pi"] .palbox input {
+.unified-surface[data-d="pi"] .palbox > input {
   font-size: 19px;
   padding: 19px 20px;
 }
@@ -1273,3 +1249,14 @@
 .unified-surface .scope-overflow button { display: block; width: 100%; min-height: 44px; border: 0; border-radius: 7px; padding: 10px 13px; text-align: left; font: inherit; font-size: 14px; color: var(--text); background: transparent; cursor: pointer; }
 .unified-surface .scope-overflow button:hover, .unified-surface .scope-overflow button:focus-visible { background: var(--songr-surface-1d); outline: 1px solid var(--line-strong); }
 .unified-surface .scope-overflow button.on { color: var(--accent); }
+
+/* Selection tools occupy the existing list heading, with stable room while empty. */
+.unified-surface .recent-selection-header { flex: 1 1 160px; min-width: min-content; }
+/* A native tap anywhere in a track row selects; scrolling still owns movement. */
+.unified-surface[data-d="pi"] [data-track-select-row] { min-height: 44px; box-sizing: border-box; }
+@media (any-pointer: coarse) {
+  .unified-surface [data-track-select-row] { min-height: 44px; box-sizing: border-box; }
+}
+
+.unified-surface .ctx:has(.recent-selection-header) { flex-wrap: nowrap; }
+.unified-surface .ctx:has(.recent-selection-header) h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

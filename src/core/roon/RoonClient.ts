@@ -16,6 +16,8 @@ const RoonApi = require("node-roon-api");
 const RoonApiTransport = require("node-roon-api-transport");
 const RoonApiBrowse = require("node-roon-api-browse");
 const RoonApiImage = require("node-roon-api-image");
+// The engine manifest is staged with both server and desktop builds.
+const { version: SONGR_VERSION } = require("../../../package.json") as { version: string };
 const SONGR_EVER_PAIRED_KEY = "songr_ever_paired";
 
 export interface RoonClientOptions {
@@ -81,18 +83,14 @@ export class RoonClient extends EventEmitter {
 
   private createApi(generation: number): any {
     const roon = new RoonApi({
-      // The product's own vendor id. The historical
-      // "com.roonlabs.webcontroller" both squatted Roon Labs' namespace and
-      // collided across every install of this codebase's ancestors; Roon
-      // treats an id change as a new extension, so upgrading past this
-      // commit requires one re-enable in Roon Settings → Extensions.
+      // Keep this identity stable across builds so Roon reuses existing pairing.
       extension_id: "app.songr.controller",
       // Base name shared with the UI so the onboarding step can tell the
       // user the exact label to look for in Roon Settings → Extensions; the
       // host name disambiguates multiple instances paired to one Core.
       display_name: `${ROON_EXTENSION_DISPLAY_NAME} (${os.hostname()})`,
-      display_version: "1.1.4",
-      publisher: "roethlar",
+      display_version: SONGR_VERSION,
+      publisher: ROON_EXTENSION_DISPLAY_NAME,
       email: "mcoelho@gmail.com",
       website: "https://github.com/roethlar/songr",
       log_level: this.options.logger.level ?? "info",

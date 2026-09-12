@@ -41,7 +41,6 @@ import {
 	__getNavigationLog,
 	__resetNavigation
 } from '../../../test/app-stubs/navigation';
-import { NO_IMPORT_DATES_REASON, NO_RELEASE_DATES_REASON } from '$lib/unifiedLibrarySorts';
 import type { NamedCountEntry } from '$lib/stores/unifiedNamedCountsStore';
 import { COLLECTION_DRILL_SOURCE_CONTRACT } from '@shared/collectionDrillContracts';
 import { setZonesSnapshot } from '$lib/stores/zonesStore';
@@ -449,7 +448,7 @@ describe('UnifiedLibraryMode — shell', () => {
 			'Genres',
 			'Tracks',
 			'Recently played',
-			'Favorites',
+			'Bookmarks',
 			'Surprise me'
 		]);
 		expect(activeLibraryScreen.queryByText('Most played')).toBeNull();
@@ -464,7 +463,7 @@ describe('UnifiedLibraryMode — shell', () => {
 		await waitFor(() => expect(screen.getByTestId('unified-summary')).toHaveTextContent('2 TOTAL'));
 	});
 
-	it('re-homes Favorites listing, search activation, and removal in Unified', async () => {
+	it('shows Bookmarks listing, search activation, and removal in Unified', async () => {
 		const favoritesStore = writable({
 			entries: [
 				{
@@ -488,10 +487,11 @@ describe('UnifiedLibraryMode — shell', () => {
 
 		await fireEvent.click(screen.getByTestId('unified-scope-favorites'));
 		expect(screen.getByTestId('unified-favorites-view')).toHaveTextContent('Heroes');
-		await fireEvent.click(screen.getByRole('button', { name: 'Search favorite Heroes' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Select Heroes' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Open' }));
 		expect(screen.getByTestId('unified-palette-input')).toHaveValue('Heroes');
 		await fireEvent.keyDown(window, { key: 'Escape' });
-		await fireEvent.click(screen.getByRole('button', { name: 'Remove Heroes from favorites' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove selected' }));
 
 		expect(removeFavoriteData).toHaveBeenCalledWith(expect.anything(), 'favorite-1');
 		await waitFor(() => expect(screen.getByTestId('unified-favorites-empty')).toBeInTheDocument());
@@ -944,7 +944,7 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 		expect(actions.open).toHaveBeenCalledTimes(2);
 	});
 
-	it('keeps Favorite available after See All enters a keyless Tracks hierarchy', async () => {
+	it('keeps Bookmark available after See All enters a keyless Tracks hierarchy', async () => {
 		const actions = fakeBrowseActionController();
 		mountMode({
 			liveLibrary: harnessLibrary(),
@@ -979,7 +979,7 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 		});
 
 		await waitFor(() =>
-			expect(screen.getByTestId('unified-browse-action-favorite')).toBeEnabled()
+			expect(screen.getByRole('button', { name: 'Bookmark' })).toBeEnabled()
 		);
 	});
 
@@ -1225,24 +1225,13 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		expect(tile?.querySelector('.ta')).not.toHaveTextContent('Album must not appear');
 	});
 
-	/**
-	 * Slice 2: the Albums list is Roon's own root, and one of its rows renders a
-	 * title and a credit line — no date and no genre. So the menu offers what it
-	 * can perform and nothing else, the same ruling the drill menus carry
-	 * (Slice 8d): an offered sort that cannot order is a fabricated affordance,
-	 * and here it is structural rather than a matter of timing, because the date
-	 * features being present would not put a date on a Roon browse row. A sort
-	 * persisted from the catalog listing falls back to A-Z rather than selecting
-	 * an entry the menu no longer offers.
-	 */
-	it('offers the live Albums list no chronological or genre order, date features or not', async () => {
+	it('offers only supported sorts over the live Albums list', async () => {
 		const harness = mountMode({
 			liveLibrary: harnessLibrary({
 				albums: [harnessAlbum('Beta'), harnessAlbum('Alpha')]
 			})
 		});
-		// Persisted as if selected while the old catalog listing was on screen.
-		harness.prefsStore.setSort('albums', 'year-asc');
+		expect(harness.prefsStore.setSort('albums', 'year-asc')).toBe(false);
 
 		await fireEvent.click(screen.getByTestId('unified-scope-albums'));
 		expect(screen.getByTestId('unified-sort')).toHaveTextContent('Sort: A to Z');
@@ -1350,9 +1339,6 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		expect(screen.queryByTestId('unified-drill-label')).toBeNull();
 	});
 
-
-
-
 	it('never offers the Recently added chip, having no import date to order by', async () => {
 		// Roon's public browse API exposes no import date, and Slice 4 deleted
 		// the native layer that used to supply one. The chip is therefore gone
@@ -1366,31 +1352,18 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		expect(activeLibraryScreen.queryByText('Recently added')).toBeNull();
 	});
 
-	it('gates a restored Recently added page on the one honest reason (Slice 5)', async () => {
-		// A page state written before the chip was withdrawn still restores, and
-		// the surface has exactly one thing left to say about it: Roon does not
-		// give it import dates. There is no second, carried reason any more.
+	it('restores a retired Recently added destination to Albums', async () => {
 		const harness = mountMode({
 			withContext: true,
 			liveLibrary: harnessLibrary({ albums: [harnessAlbum('Alpha')] })
 		});
 		harness.registered.lifecycle!.resume({
 			cause: 'initial',
-			pageState: buildUnifiedLibraryPageState({
-				scope: 'recently-added',
-				collectionDrill: null,
-				itemTarget: null,
-				filterText: '',
-				surpriseSeed: null
-			})
+			pageState: libraryPageStateFromRoute({ kind: 'root', scope: 'recently-added' })
 		} as CommittedLibraryModeActivation);
 
-		await waitFor(() =>
-			expect(activeLibraryScreen.getByTestId('unified-recently-added-gated')).toHaveTextContent(
-				NO_IMPORT_DATES_REASON
-			)
-		);
-		expect(activeLibraryScreen.queryByTestId('unified-tile')).toBeNull();
+		await waitFor(() => expect(renderedTileTitles()).toEqual(['Alpha']));
+		expect(activeLibraryScreen.queryByTestId('unified-recently-added-gated')).toBeNull();
 	});
 
 	it('reverses the rail buckets under za so letters mirror the list', async () => {
@@ -1412,7 +1385,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		expect(za).toEqual([...az].reverse());
 	});
 
-	it('hides the rail whenever the active sort has no letter-grouped result order', async () => {
+	it('hides the rail whenever the active sort has no alphabetical result order', async () => {
 		const albums = Array.from({ length: 52 }, (_unused, index) =>
 			harnessAlbum(
 				`${'abcd'[index % 4]} Album ${index.toString().padStart(2, '0')}`,
@@ -1465,7 +1438,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		expect(screen.queryByTestId('unified-rail')).toBeNull();
 	});
 
-	it('switches Albums to the reference article-stripped artist groups without duplicate keys', async () => {
+	it('keeps artist-sorted Albums flat until letter grouping is explicitly enabled', async () => {
 		const albums = [
 			harnessAlbum('Angel Dust', 'Faith No More'),
 			harnessAlbum('King’s Mouth', 'The Flaming Lips'),
@@ -1491,6 +1464,9 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			'The The',
 			'The Verve'
 		]);
+		expect(activeLibraryElements('.grp .gl')).toHaveLength(0);
+		await fireEvent.click(screen.getByTestId('unified-sort'));
+		await fireEvent.click(screen.getByRole('button', { name: 'Group by letter' }));
 		expect(Array.from(activeLibraryElements('.grp .gl'), (group) => group.textContent)).toEqual([
 			'F',
 			'J',
@@ -1499,7 +1475,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		]);
 	});
 
-	it('buckets every non-A–Z genre initial into one reference # group', async () => {
+	it('groups non-A–Z genre initials only after explicit opt-in', async () => {
 		const genresStore = fakeNamedCountsStore([
 			{ label: '60s', albumCount: 1, itemKey: 'genre:60s', imageKey: null },
 			{ label: 'Alternative', albumCount: 1, itemKey: 'genre:a', imageKey: null },
@@ -1510,6 +1486,9 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		mountMode({ liveLibrary: harnessLibrary(), genresStore });
 
 		await fireEvent.click(screen.getByTestId('unified-scope-genres'));
+		expect(activeLibraryElements('.grp .gl')).toHaveLength(0);
+		await fireEvent.click(screen.getByTestId('unified-sort'));
+		await fireEvent.click(screen.getByRole('button', { name: 'Group by letter' }));
 		await waitFor(() =>
 			expect(Array.from(activeLibraryElements('.grp .gl'), (group) => group.textContent)).toEqual([
 				'#',
@@ -1523,8 +1502,6 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			)
 		).toEqual([['60s', 'Česká', 'Électronique'], ['Alternative'], ['Dance']]);
 	});
-
-
 
 	it('labels the back button with the artist name when an album opens from the artist page (issue #6)', async () => {
 		const album = fakeModeAlbumController();
@@ -1601,7 +1578,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		expect(screen.getByTestId('unified-album-artist-link')).toBeDisabled();
 	});
 
-	function trackChildFixture() {
+	function legacyTrackAlbumFixture() {
 		const entry = harnessAlbum('Album');
 		const album = fakeModeAlbumController();
 		const detailsState = {
@@ -1634,98 +1611,8 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		return { entry, album, detailsState };
 	}
 
-	it('persists the exact-track child as a page-chain entry (Slice 8)', async () => {
-		const { entry, album, detailsState } = trackChildFixture();
-		const harness = mountMode({
-			withContext: true,
-			liveLibrary: harnessLibrary({ albums: [entry] }),
-			albumController: album.controller,
-			albumActionController: fakeModeActionController(),
-		});
-
-		resumeCollectionAlbum(harness);
-		await waitFor(() => expect(album.open).toHaveBeenCalled());
-		album.store.set(detailsState);
-		await waitFor(() => screen.getByTestId('unified-track-info-0'));
-		await fireEvent.click(screen.getByTestId('unified-track-info-0'));
-
-		// The child transition pushed exactly one semantic entry carrying
-		// the reconstructible index — and never editorial content.
-		const navigation = __getNavigationLog();
-		const latest = navigation.at(-1);
-		// The page was opened from a genre drill's own locator, so its address
-		// names that genre: the route says where the reader actually is.
-		expect(decodeLibraryRoute(new URL(latest!.url))).toEqual({
-			kind: 'genre-album-track',
-			genre: 'Bright Machinery',
-			album: { title: 'Arrival', credit: 'Artist of Arrival', edition: '' },
-			track: 'T1'
-		});
-		expect(latest?.state).toEqual({});
-	});
-
-	it('closes a live-pushed track child by traversing to the parent entry (ri8-1)', async () => {
-		const { entry, album, detailsState } = trackChildFixture();
-		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
-		const harness = mountMode({
-			withContext: true,
-			liveLibrary: harnessLibrary({ albums: [entry] }),
-			albumController: album.controller,
-			albumActionController: fakeModeActionController(),
-		});
-
-		resumeCollectionAlbum(harness);
-		await waitFor(() => expect(album.open).toHaveBeenCalled());
-		album.store.set(detailsState);
-		await waitFor(() => screen.getByTestId('unified-track-info-0'));
-		await fireEvent.click(screen.getByTestId('unified-track-info-0'));
-
-		// The in-page Back traverses to the parent entry it pushed over —
-		// no duplicate rewrite, and the browser Back button stays honest.
-		const writesBefore = __getNavigationLog().length;
-		await fireEvent.click(screen.getByTestId('unified-album-track-info-back'));
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(browserBack).toHaveBeenCalledTimes(1);
-		const writes = __getNavigationLog()
-			.slice(writesBefore)
-			.filter((entry_) => entry_.operation === 'pushState' || entry_.operation === 'replaceState');
-		expect(writes).toHaveLength(0);
-		browserBack.mockRestore();
-	});
-
-	it('keeps traversal ownership across a retried track child (ri8-1 reopen)', async () => {
-		const { entry, album, detailsState } = trackChildFixture();
-		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
-		const harness = mountMode({
-			withContext: true,
-			liveLibrary: harnessLibrary({ albums: [entry] }),
-			albumController: album.controller,
-			albumActionController: fakeModeActionController(),
-		});
-
-		resumeCollectionAlbum(harness);
-		await waitFor(() => expect(album.open).toHaveBeenCalled());
-		album.store.set(detailsState);
-		await waitFor(() => screen.getByTestId('unified-track-info-0'));
-		await fireEvent.click(screen.getByTestId('unified-track-info-0'));
-
-		// Re-opening the same child deduplicates against the child's own entry;
-		// ownership must survive that, so the in-page Back still traverses
-		// instead of rewriting a duplicate entry.
-		await fireEvent.click(screen.getByTestId('unified-track-info-0'));
-		const writesBefore = __getNavigationLog().length;
-		await fireEvent.click(screen.getByTestId('unified-album-track-info-back'));
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(browserBack).toHaveBeenCalledTimes(1);
-		const writes = __getNavigationLog()
-			.slice(writesBefore)
-			.filter((entry_) => entry_.operation === 'pushState' || entry_.operation === 'replaceState');
-		expect(writes).toHaveLength(0);
-		browserBack.mockRestore();
-	});
-
-	it('restores a persisted exact-track child on resume (Slice 8)', async () => {
-		const { entry, album, detailsState } = trackChildFixture();
+	it('restores a retired track child to its complete album parent', async () => {
+		const { entry, album, detailsState } = legacyTrackAlbumFixture();
 		const harness = mountMode({
 			withContext: true,
 			liveLibrary: harnessLibrary({ albums: [entry] }),
@@ -1753,40 +1640,13 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			]
 		} as LibraryAlbumState);
 
-		// The page resolves the title after a reorder; the child surface
-		// names T1 at its new position.
-		await waitFor(() => screen.getByTestId('unified-album-track-info'));
-		expect(screen.getByTestId('unified-album-track-info').textContent).toContain('T1');
-		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
-		await fireEvent.click(screen.getByTestId('unified-album-track-info-back'));
-		expect(browserBack).not.toHaveBeenCalled();
-		expect(decodeLibraryRoute(new URL(__getNavigationLog().at(-1)!.url))).toEqual({
-			kind: 'genre-album',
-			genre: 'Bright Machinery',
-			album: { title: 'Arrival', credit: 'Artist of Arrival', edition: '' }
-		});
+		await waitFor(() => expect(screen.getByTestId('unified-album-tracks')).toHaveTextContent('New opening track'));
+		expect(screen.getByTestId('unified-album-tracks')).toHaveTextContent('T1');
 		expect(screen.queryByTestId('unified-album-track-info')).toBeNull();
-		browserBack.mockRestore();
-
-		// A popstate activation can restore the same album component without
-		// publishing a new album sheet. Its parent entry must still close the
-		// local exact-track child.
-		harness.registered.lifecycle!.resume({
-			cause: 'history-pop',
-			pageState: buildUnifiedLibraryPageState({
-				scope: 'albums',
-				collectionDrill: null,
-				itemTarget: { kind: 'collection', locator: albumLocator() },
-				itemDetail: null,
-				filterText: '',
-				surpriseSeed: null
-			})
-		} as CommittedLibraryModeActivation);
-		await waitFor(() => expect(screen.queryByTestId('unified-album-track-info')).toBeNull());
 	});
 
 	it('keeps the parent page when a restored track title is gone', async () => {
-		const { entry, album, detailsState } = trackChildFixture();
+		const { entry, album, detailsState } = legacyTrackAlbumFixture();
 		const harness = mountMode({
 			withContext: true,
 			liveLibrary: harnessLibrary({ albums: [entry] }),
@@ -1800,8 +1660,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 				scope: 'albums',
 				collectionDrill: null,
 				itemTarget: { kind: 'collection', locator: albumLocator() },
-				// The album shrank since this entry was pushed: index 7 no
-				// longer resolves in the one-track order.
+				// Retired track details do not need a current matching title.
 				itemDetail: { kind: 'track', title: 'Gone track' },
 				filterText: '',
 				surpriseSeed: null
@@ -1810,8 +1669,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		await waitFor(() => expect(album.open).toHaveBeenCalled());
 		album.store.set(detailsState);
 
-		// Session-bound restoration rule: the stale child is dropped and the
-		// parent album page stands.
+		// A retired track address keeps the album, even when that track is gone.
 		await waitFor(() => screen.getByTestId('unified-album-page'));
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(screen.queryByTestId('unified-album-track-info')).toBeNull();
@@ -2816,7 +2674,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 		browserBack.mockRestore();
 	});
 
-	it('restores an exact track URL onto the live album child', async () => {
+	it('restores a retired track URL onto its live album parent', async () => {
 		const album = fakeModeAlbumController();
 		const harness = mountLive({
 			withContext: true,
@@ -2836,40 +2694,8 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 		await waitFor(() => expect(album.adoptLiveLevel).toHaveBeenCalledTimes(1));
 		expect(get(album.store).orderedTracks.map((track) => track.title)).toEqual(['Kyrie', 'Gloria']);
 		expect(get(album.store).live).not.toBeNull();
-		expect(await screen.findByTestId('unified-album-track-info')).toHaveTextContent('Gloria');
-	});
-
-	it('gives live track info a durable address and leaves modified clicks native', async () => {
-		const album = fakeModeAlbumController();
-		mountLive({
-			albumController: album.controller,
-			albumActionController: fakeModeActionController()
-		});
-
-		await waitFor(() => expect(activeLibraryScreen.getAllByTestId('unified-row')).toHaveLength(2));
-		await fireEvent.click(rowNamed('Alfheim Consort'));
-		await fireEvent.click(await activeLibraryScreen.findByTestId('unified-tile'));
-		await waitFor(() => expect(album.adoptLiveLevel).toHaveBeenCalledTimes(1));
-
-		const trackLink = await screen.findByTestId('unified-track-info-1');
-		expect(trackLink.tagName).toBe('A');
-		expect(decodeLibraryRoute(new URL(trackLink.getAttribute('href')!, window.location.href))).toEqual({
-			kind: 'artist-album-track',
-			artist: 'Alfheim Consort',
-			album: {
-				title: 'Winter Vespers',
-				credit: 'Alfheim Consort',
-				edition: ''
-			},
-			track: 'Gloria'
-		});
-
-		trackLink.addEventListener('click', (event) => event.preventDefault(), { once: true });
-		await fireEvent.click(trackLink, { ctrlKey: true });
+		expect(await screen.findByTestId('unified-album-tracks')).toHaveTextContent('Gloria');
 		expect(screen.queryByTestId('unified-album-track-info')).toBeNull();
-
-		await fireEvent.click(trackLink);
-		expect(await screen.findByTestId('unified-album-track-info')).toHaveTextContent('Gloria');
 	});
 
 	it('opens the artist the reader clicked, by that row\'s own reference', async () => {
@@ -3472,135 +3298,6 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		expect(activeLibraryScreen.getByText('Dear Theodosia').closest('a,button')).toHaveClass('sel');
 	});
 
-	it('starts one background relationship lookup without delaying a song action', async () => {
-		setZonesSnapshot([
-			{
-				zone_id: 'zone-1',
-				display_name: 'Living Room',
-				state: 'paused',
-				is_play_allowed: true,
-				is_pause_allowed: true,
-				is_previous_allowed: true,
-				is_next_allowed: true,
-				is_seek_allowed: true,
-				outputs: []
-			}
-		]);
-		const paletteSearchStore = writable<PaletteSearchState>({
-			phase: 'ready',
-			query: 'dear theodosia',
-			groups: [
-				{
-					title: 'Tracks',
-					rows: [
-						{
-							resultId: 'song-dear-theodosia',
-							title: 'Dear Theodosia',
-							subtitle: 'Orlando Ballet Chorus',
-							imageKey: null
-						}
-					]
-				}
-			],
-			error: null
-		});
-		const pendingRelationship = deferred<{
-			songTitle: string;
-			albums: [];
-			composerLabels: [];
-		}>();
-		const relationship = vi.fn(() => pendingRelationship.promise);
-		const action = vi.fn().mockResolvedValue({ authorityRetired: false });
-		mountMode({
-			liveLibrary: harnessLibrary(),
-			paletteSearchStore,
-			songRelationshipClient: { relationship },
-			songActionController: new UnifiedSongActionController({ action })
-		});
-
-		await fireEvent.click(screen.getByTestId('unified-find'));
-		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
-			target: { value: 'dear theodosia' }
-		});
-		await fireEvent.click(activeLibraryScreen.getByText('Dear Theodosia').closest('a,button')!);
-
-		expect(relationship).toHaveBeenCalledTimes(1);
-		expect(screen.getByTestId('unified-song-relationship-status')).toHaveTextContent(
-			'Finding album'
-		);
-		await fireEvent.click(screen.getByTestId('unified-song-add-next'));
-		await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
-		expect(relationship).toHaveBeenCalledTimes(1);
-
-		pendingRelationship.resolve({
-			songTitle: 'Dear Theodosia',
-			albums: [],
-			composerLabels: []
-		});
-		await waitFor(() =>
-			expect(screen.getByTestId('unified-song-relationship-status')).toHaveTextContent(
-				'No matching album'
-			)
-		);
-	});
-
-	it('keeps song actions available when the relationship lookup fails', async () => {
-		setZonesSnapshot([
-			{
-				zone_id: 'zone-1',
-				display_name: 'Living Room',
-				state: 'paused',
-				is_play_allowed: true,
-				is_pause_allowed: true,
-				is_previous_allowed: true,
-				is_next_allowed: true,
-				is_seek_allowed: true,
-				outputs: []
-			}
-		]);
-		const paletteSearchStore = writable<PaletteSearchState>({
-			phase: 'ready',
-			query: 'dear theodosia',
-			groups: [
-				{
-					title: 'Tracks',
-					rows: [
-						{
-							resultId: 'song-dear-theodosia',
-							title: 'Dear Theodosia',
-							subtitle: 'Orlando Ballet Chorus',
-							imageKey: null
-						}
-					]
-				}
-			],
-			error: null
-		});
-		const relationship = vi.fn().mockRejectedValue(new Error('Album links are unavailable'));
-		const action = vi.fn().mockResolvedValue({ authorityRetired: false });
-		mountMode({
-			liveLibrary: harnessLibrary(),
-			paletteSearchStore,
-			songRelationshipClient: { relationship },
-			songActionController: new UnifiedSongActionController({ action })
-		});
-
-		await fireEvent.click(screen.getByTestId('unified-find'));
-		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
-			target: { value: 'dear theodosia' }
-		});
-		await fireEvent.click(activeLibraryScreen.getByText('Dear Theodosia').closest('a,button')!);
-
-		await waitFor(() =>
-			expect(screen.getByTestId('unified-song-relationship-status')).toHaveTextContent(
-				'Album links are unavailable'
-			)
-		);
-		expect(screen.getByTestId('unified-song-play-now')).toBeEnabled();
-		await fireEvent.click(screen.getByTestId('unified-song-play-now'));
-		await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
-	});
-
 	it('hides the library pane under the search-track page (ri5-1)', async () => {
 		const paletteSearchStore = writable<PaletteSearchState>({
 			phase: 'ready',
@@ -3620,11 +3317,9 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 			],
 			error: null
 		});
-		const relationship = vi.fn().mockRejectedValue(new Error('unavailable'));
 		mountMode({
 			liveLibrary: harnessLibrary(),
-			paletteSearchStore,
-			songRelationshipClient: { relationship }
+			paletteSearchStore
 		});
 
 		await fireEvent.click(screen.getByTestId('unified-find'));
@@ -3639,92 +3334,6 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		expect(screen.getByTestId('unified-pane').closest('.body')).toHaveAttribute('hidden');
 		await fireEvent.click(screen.getByTestId('unified-song-back'));
 		expect(screen.getByTestId('unified-pane').closest('.body')).not.toHaveAttribute('hidden');
-	});
-
-	it('does not apply a late relationship from an older song to the new panel', async () => {
-		const paletteSearchStore = writable<PaletteSearchState>({
-			phase: 'ready',
-			query: 'songs',
-			groups: [
-				{
-					title: 'Tracks',
-					rows: [
-						{
-							resultId: 'song-first',
-							title: 'First Song',
-							subtitle: 'First Artist',
-							imageKey: null
-						},
-						{
-							resultId: 'song-second',
-							title: 'Second Song',
-							subtitle: 'Second Artist',
-							imageKey: null
-						}
-					]
-				}
-			],
-			error: null
-		});
-		const firstRelationship = deferred<{
-			songTitle: string;
-			albums: [];
-			composerLabels: [];
-		}>();
-		const relationship = vi
-			.fn()
-			.mockImplementationOnce(() => firstRelationship.promise)
-			.mockResolvedValue({
-				songTitle: 'Second Song',
-				albums: [
-					{
-						albumLocalId: 'album-second',
-						artistLocalId: 'artist-second',
-						title: 'Second Album',
-						artist: 'Second Artist',
-						editionText: ''
-					}
-				],
-				composerLabels: []
-			});
-		mountMode({
-			liveLibrary: harnessLibrary(),
-			paletteSearchStore,
-			clearPaletteSearchData: vi.fn(async () => {}),
-			songRelationshipClient: { relationship }
-		});
-
-		await fireEvent.click(screen.getByTestId('unified-find'));
-		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
-			target: { value: 'songs' }
-		});
-		await fireEvent.click(activeLibraryScreen.getByText('First Song').closest('a,button')!);
-		await fireEvent.click(screen.getByRole('button', { name: 'Close search' }));
-
-		await fireEvent.click(screen.getByTestId('unified-find'));
-		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
-			target: { value: 'songs' }
-		});
-		await fireEvent.click(activeLibraryScreen.getByText('Second Song').closest('a,button')!);
-		// The panel's own heading is what says which song it is now; the album
-		// link is no longer offered here, because there is no catalog album
-		// page for it to open.
-		await waitFor(() =>
-			expect(screen.getByTestId('unified-song-title')).toHaveTextContent('Second Song')
-		);
-
-		firstRelationship.resolve({
-			songTitle: 'First Song',
-			albums: [],
-			composerLabels: []
-		});
-		await Promise.resolve();
-		await Promise.resolve();
-
-		expect(screen.getByTestId('unified-song-title')).toHaveTextContent('Second Song');
-		expect(screen.getByTestId('unified-song-relationship-status')).toHaveTextContent(
-			'One matching album'
-		);
 	});
 
 	it('wires a named song action to the retained result and chosen zone', async () => {

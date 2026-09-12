@@ -13,7 +13,7 @@ const expected = [
   'homebrew/Casks/songr.rb',
   'scoop/bucket/songr.json',
   ...['installer', 'locale.en-US', ''].map((suffix) =>
-    `winget/manifests/r/roethlar/Songr/${version}/roethlar.Songr${suffix ? `.${suffix}` : ''}.yaml`),
+    `winget/manifests/r/Roethlar/Songr/${version}/Roethlar.Songr${suffix ? `.${suffix}` : ''}.yaml`),
 ].sort();
 
 function fixture(t) {

@@ -14,6 +14,7 @@ export interface AppConfig {
   readonly recentlyPlayedCap: number;
   readonly favoritesPath: string;
   readonly navigationSettingsPath: string;
+  readonly presentationSettingsPath: string;
   /**
    * Whether the browse canary runs (post-connect load trial, plan
    * `.agents/plans/core-wedge-postconnect.md` §A0).
@@ -324,6 +325,7 @@ export const loadConfig = (): AppConfig => {
     recentlyPlayedCap,
     favoritesPath,
     navigationSettingsPath: path.join(dataDir, "navigation-preferences.json"),
+    presentationSettingsPath: path.join(dataDir, "presentation-preferences.json"),
     browseCanaryEnabled,
     browseCanaryBaselineP95Ms,
   };

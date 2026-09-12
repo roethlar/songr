@@ -11,12 +11,7 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"test": "vitest run",
-		"test:watch": "vitest",
-		"prototype:timeline": "vite --config prototypes/timeline-canvas/vite.config.ts",
-		"prototype:timeline:check": "svelte-check --tsconfig ./prototypes/timeline-canvas/tsconfig.json",
-		"prototype:timeline:test": "vite build --config prototypes/timeline-canvas/vite.config.ts && vitest run --config prototypes/timeline-canvas/vitest.config.ts",
-		"prototype:timeline:build": "vite build --config prototypes/timeline-canvas/vite.config.ts",
-		"prototype:timeline:preview": "vite preview --config prototypes/timeline-canvas/vite.config.ts"
+		"test:watch": "vitest"
 	},
 	"devDependencies": {
 		"@fontsource/fira-mono": "^5.2.7",

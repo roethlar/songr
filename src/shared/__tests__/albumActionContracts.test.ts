@@ -425,6 +425,12 @@ describe("album action claim and execution contracts", () => {
       outcome: "outcome-unknown",
       error: "Roon call did not settle",
     },
+    {
+      claimed: true,
+      outcome: "rejected",
+      code: "ROON_REJECTED",
+      error: "This album is unavailable",
+    },
   ])("normalizes execute result %#", (data) => {
     expect(normalizeAlbumActionExecuteAck({ success: true, data })).toEqual({
       success: true,

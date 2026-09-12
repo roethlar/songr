@@ -10,8 +10,6 @@ export interface FavoritesServiceOptions {
    * created if it doesn't exist.
    */
   filePath: string;
-  /** Maximum number of entries kept. Oldest dropped beyond it. */
-  cap?: number;
   /** Optional clock for tests (ms since epoch). */
   now?: () => number;
 }
@@ -54,8 +52,8 @@ export function favoriteDedupeKey(entry: {
 }
 
 /**
- * FavoritesService — user-curated list of favorite tracks / albums /
- * artists, persisted to disk. Deliberately simpler than
+ * FavoritesService — user-curated Songr bookmarks for tracks / albums /
+ * artists, persisted to disk without automatic eviction. Deliberately simpler than
  * RecentlyPlayedService: mutations only arrive via explicit REST
  * calls (no Roon event ingestion), there's no socket broadcast, and
  * therefore no epoch/revision ordering machinery. Multiple open
@@ -77,7 +75,6 @@ export class FavoritesService {
   private startPromise: Promise<void> | null = null;
   private opChain: Promise<unknown> = Promise.resolve();
   private readonly filePath: string;
-  private readonly cap: number;
   private readonly now: () => number;
 
   constructor(
@@ -85,7 +82,6 @@ export class FavoritesService {
     options: FavoritesServiceOptions
   ) {
     this.filePath = options.filePath;
-    this.cap = Math.max(1, Math.floor(options.cap ?? 500));
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -112,9 +108,9 @@ export class FavoritesService {
         );
         return;
       }
-      this.entries = rawEntries
-        .filter((it): it is FavoriteEntry => isPlausibleFavorite(it))
-        .slice(0, this.cap);
+      this.entries = rawEntries.filter(
+        (it): it is FavoriteEntry => isPlausibleFavorite(it)
+      );
     } catch (err) {
       const code = (err as NodeJS.ErrnoException)?.code;
       if (code === "ENOENT") return; // legit first run
@@ -161,7 +157,6 @@ export class FavoritesService {
 
       const previous = this.entries;
       const next = [entry, ...this.entries];
-      if (next.length > this.cap) next.length = this.cap;
       this.entries = next;
       try {
         await this.persist();
@@ -196,7 +191,7 @@ export class FavoritesService {
 
   private assertNotDegraded(): void {
     if (this.degraded) {
-      throw new Error("FavoritesService is degraded; mutation refused");
+      throw new Error("Bookmarks unavailable (persistence degraded); mutation refused");
     }
   }
 

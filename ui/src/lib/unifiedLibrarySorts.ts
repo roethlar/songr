@@ -13,20 +13,9 @@ import type {
 	UnifiedGenresSort
 } from '$lib/stores/unifiedLibraryPrefsStore';
 
-/** Sorting for the live Library; saved unsupported date orders fall back to A–Z. */
-
-export const NO_RELEASE_DATES_REASON =
-	'Roon does not expose release dates to controllers, so year ordering would be a guess.';
-
-/** A restored Recently added address cannot fabricate unavailable import dates. */
-export const NO_IMPORT_DATES_REASON =
-	'Roon does not expose import dates to controllers, so recently-added ordering would be a guess.';
-
 export interface SortMenuEntry {
 	readonly id: string;
 	readonly label: string;
-	/** Present exactly when the entry renders disabled. */
-	readonly disabledReason?: string;
 }
 
 export const ARTIST_SORT_MENU: readonly SortMenuEntry[] = Object.freeze([
@@ -76,11 +65,6 @@ export function artistDrillSortMenu(): readonly SortMenuEntry[] {
 		{ id: 'za', label: 'Z to A' },
 		{ id: 'shuffle', label: 'Shuffle' }
 	]);
-}
-
-/** Chronological album orders; the A–Z rail hides for exactly these. */
-export function isChronologicalAlbumSort(sort: string): boolean {
-	return sort === 'year-asc' || sort === 'year-desc';
 }
 
 /** Deterministic 32-bit PRNG so a persisted seed replays one shuffle. */
@@ -139,10 +123,6 @@ export function sortAlbums(
 					compareLibrarySearchKeys(a.searchKey, b.searchKey)
 				);
 			});
-		case 'year-asc':
-		case 'year-desc':
-			// Migrate saved date sorts to the supported alphabetical order.
-			return [...entries];
 		case 'shuffle':
 			return seededShuffle(entries, shuffleSeed);
 	}

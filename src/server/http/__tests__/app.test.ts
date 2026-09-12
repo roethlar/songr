@@ -312,12 +312,17 @@ describe('HTTP app routing', () => {
     try {
       const res = await fetch(`${app.url}/api/favorites`);
       expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: 'Bookmarks unavailable (persistence degraded)' });
       const post = await fetch(`${app.url}/api/favorites`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ type: 'track', title: 'X' }),
       });
       expect(post.status).toBe(503);
+      expect(await post.json()).toEqual({ error: 'Bookmarks unavailable (persistence degraded)' });
+      const removed = await fetch(`${app.url}/api/favorites/retained-id`, { method: 'DELETE' });
+      expect(removed.status).toBe(503);
+      expect(await removed.json()).toEqual({ error: 'Bookmarks unavailable (persistence degraded)' });
     } finally {
       svc.degraded = saved;
     }

@@ -28,13 +28,11 @@ const TEST_CLAIM = {
 
 const search = vi.fn<UnifiedSearchClient['search']>();
 const action = vi.fn<UnifiedSearchClient['action']>();
-const relationship = vi.fn<UnifiedSearchClient['relationship']>();
 const clear = vi.fn<UnifiedSearchClient['clear']>().mockResolvedValue();
 const browseCategories = vi.fn<PaletteBrowseSearch>().mockResolvedValue([]);
 const TEST_CLIENT: UnifiedSearchClient = {
 	search,
 	action,
-	relationship,
 	clear
 };
 
@@ -58,7 +56,6 @@ function mockSearchResolving(results: UnifiedSongSearchResult[]): void {
 beforeEach(() => {
 	search.mockReset();
 	action.mockReset();
-	relationship.mockReset();
 	clear.mockReset().mockResolvedValue();
 	browseCategories.mockReset();
 	browseCategories.mockResolvedValue([]);

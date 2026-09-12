@@ -132,13 +132,15 @@ describe('UnifiedQueuePanel', () => {
 		});
 	});
 
-	it('hands queued titles and split artist credits to Unified Library search', async () => {
+	it('finds selected queued tracks and opens split artist credits in Unified Library search', async () => {
 		const onlibraryintent = vi.fn();
 		render(UnifiedQueuePanel, { props: { onclose: vi.fn(), onlibraryintent } });
 
 		await fireEvent.click(
-			await screen.findByRole('button', { name: 'Search Library for A Sort of Homecoming' })
+			await screen.findByRole('button', { name: 'Select A Sort of Homecoming' })
 		);
+		expect(onlibraryintent).not.toHaveBeenCalled();
+		await fireEvent.click(screen.getByRole('button', { name: 'Find in Library' }));
 		expect(onlibraryintent).toHaveBeenLastCalledWith({
 			kind: 'track',
 			destination: 'search',

@@ -82,7 +82,7 @@ test('root heading and Sort stay pinned below one-row navigation and Touch densi
 test('rail jumps and focused rows land below both pinned bars', async ({ page }) => {
 	await deepScroll(page);
 	await page.getByTestId('unified-rail').getByRole('button', { name: 'M', exact: true }).click();
-	const target = page.locator('[data-grp="M"]:visible');
+	const target = page.locator('[data-letter="M"]:visible').first();
 	await expect.poll(async () => {
 		const group = await target.boundingBox();
 		const toolbar = await page.locator(TOOLBAR).boundingBox();

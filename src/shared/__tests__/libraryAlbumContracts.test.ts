@@ -394,29 +394,19 @@ describe("library album resolved events", () => {
     expect(normalizeLibraryAlbumResolvedEvent(summaryless, correlation())).toBeNull();
   });
 
-  it("accepts bounded exact track metadata and a matching version summary", () => {
+  it("preserves raw ordered titles and a matching public version summary", () => {
     const event = {
       ...resolvedEvent(),
       versionId: "version-01",
       versionSummary: {
         versionId: "version-01",
         editionText: "Deluxe",
-        sourceLabel: "Local",
-        releaseDate: "2003-09-16",
+        imageKeyHint: "public-artwork",
         trackCount: 2,
-        durationSeconds: 401,
-        available: true,
       },
       orderedTracks: [
-        {
-          index: 0,
-          title: "First",
-          trackNumber: 1,
-          mediaNumber: 1,
-          lengthSeconds: 200,
-          available: true,
-        },
-        { index: 1, title: "Second", lengthSeconds: null, available: false },
+        { index: 0, title: "1-1 First" },
+        { index: 1, title: "2. Second" },
       ],
     };
     expect(normalizeLibraryAlbumResolvedEvent(event, correlation())).toEqual(event);
@@ -517,19 +507,11 @@ describe("library album version page contracts", () => {
     ).toBeNull();
   });
 
-  it("normalizes richer display metadata but rejects private identity fields", () => {
+  it("normalizes public version facts but rejects private identity fields", () => {
     const summary = {
       ...version("version-01", "Deluxe"),
-      sourceLabel: "Local",
-      releaseDate: "2003",
+      imageKeyHint: "public-artwork",
       trackCount: 12,
-      durationSeconds: 2_401,
-      available: true,
-      playCount: 4,
-      lastPlayedAt: "2026-08-01T12:30:00.000Z",
-      isFavorite: true,
-      isListenLater: false,
-      isBanned: false,
     };
     expect(normalizeLibraryAlbumVersionSummary(summary)).toEqual(summary);
     expect(
@@ -537,9 +519,6 @@ describe("library album version page contracts", () => {
     ).toBeNull();
     expect(
       normalizeLibraryAlbumVersionSummary({ ...summary, albumId: "123" })
-    ).toBeNull();
-    expect(
-      normalizeLibraryAlbumVersionSummary({ ...summary, releaseDate: "2003-00" })
     ).toBeNull();
   });
 
@@ -617,5 +596,38 @@ describe("library album cancel contracts", () => {
       `{"requestId":"${REQUEST_ID}","__proto__":{"admin":true}}`
     ) as Record<string, unknown>;
     expect(normalizeLibraryAlbumCancelRequest(polluted)).toBeNull();
+  });
+});
+
+
+describe("public album data boundary", () => {
+  it.each([
+    ["sourceLabel", "Local"],
+    ["releaseDate", "2003-09-16"],
+    ["durationSeconds", 401],
+    ["available", true],
+    ["playCount", 4],
+    ["lastPlayedAt", "2026-08-01T12:30:00.000Z"],
+    ["isFavorite", true],
+    ["isListenLater", false],
+    ["isBanned", false],
+  ])("rejects retired version enrichment field %s", (field, value) => {
+    expect(normalizeLibraryAlbumVersionSummary({
+      ...version("version-01", "Deluxe"), [field as string]: value,
+    })).toBeNull();
+  });
+
+  it.each([
+    ["trackNumber", 1],
+    ["mediaNumber", 1],
+    ["lengthSeconds", 200],
+    ["available", true],
+  ])("rejects retired track enrichment field %s", (field, value) => {
+    const event = resolvedEvent();
+    expect(normalizeLibraryAlbumResolvedEvent({
+      ...event,
+      orderedTracks: event.orderedTracks.map((track, index) =>
+        index === 0 ? { ...track, [field as string]: value } : track),
+    }, correlation())).toBeNull();
   });
 });

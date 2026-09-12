@@ -62,7 +62,6 @@ export const UNIFIED_FILTER_TEXT_MAX_LENGTH = 256;
 // restore (finding gh6-1).
 export const UNIFIED_ITEM_ORIGIN_NAME_MAX_LENGTH = LIBRARY_DISPLAY_TEXT_MAX_LENGTH;
 export const UNIFIED_BROWSE_RESTORE_COUNT_MAX = 100_000;
-/** Mirrors the editorial contract's zero-based track-anchor bound. */
 
 export type UnifiedLibraryScope =
 	| 'artists'
@@ -70,9 +69,6 @@ export type UnifiedLibraryScope =
 	| 'genres'
 	| 'favorites'
 	| 'recently-played'
-	| 'most-played'
-	| 'playlists'
-	| 'recently-added'
 	| 'surprise'
 	| 'browse';
 
@@ -130,12 +126,8 @@ export type UnifiedItemTarget =
 	 */
 	| { kind: 'live'; path: LibraryRenderingPath };
 
-/**
- * A reconstructible child surface over an open album page, named by the exact
- * track title Roon rendered. Position is not identity: a reorder must still
- * find the same track, while duplicate titles must resolve to candidates.
- */
-export type UnifiedItemDetailTarget = { kind: 'track'; title: string };
+/** Legacy Track Info identity, validated only to recover its existing album parent. */
+type LegacyTrackInfoTarget = { kind: 'track'; title: string };
 
 /**
  * The composition surface over a composer collection drill (Slice 8):
@@ -159,8 +151,8 @@ export interface UnifiedLibrarySnapshot {
 	 * context with it.
 	 */
 	itemTarget: UnifiedItemTarget | null;
-	/** Optional child surface over an ALBUM item page (v7). */
-	itemDetail: UnifiedItemDetailTarget | null;
+	/** Retired Track Info field, kept null after migrating saved navigation. */
+	itemDetail: null;
 	/** Optional composition surface over a COMPOSER collection drill (v7). */
 	composition: UnifiedCompositionSurface | null;
 	/**
@@ -241,9 +233,6 @@ const UNIFIED_SCOPES: readonly UnifiedLibraryScope[] = [
 	'genres',
 	'favorites',
 	'recently-played',
-	'most-played',
-	'playlists',
-	'recently-added',
 	'surprise',
 	'browse'
 ] as const;
@@ -355,10 +344,11 @@ export function normalizeBrowseHistorySnapshot(value: unknown): BrowseHistorySna
 	}
 }
 
-function isUnifiedScope(value: unknown): value is UnifiedLibraryScope {
-	return (
-		typeof value === 'string' && (UNIFIED_SCOPES as readonly string[]).includes(value)
-	);
+/** Retired root destinations reopen Albums without discarding other saved state. */
+export function normalizeLibraryScope(value: unknown): UnifiedLibraryScope | null {
+	if (value === 'recently-added' || value === 'most-played' || value === 'playlists') return 'albums';
+	return typeof value === 'string' && (UNIFIED_SCOPES as readonly string[]).includes(value)
+		? value as UnifiedLibraryScope : null;
 }
 
 function isUnifiedDensity(value: unknown): value is UnifiedLibraryDensity {
@@ -491,7 +481,7 @@ function normalizeItemTarget(
 	return null;
 }
 
-function normalizeItemDetail(value: unknown): UnifiedItemDetailTarget | null {
+function normalizeItemDetail(value: unknown): LegacyTrackInfoTarget | null {
 	if (!isRecord(value)) return null;
 	if (value.kind !== 'track') return null;
 	return hasExactKeys(value, ['kind', 'title']) && isNonEmptyString(value.title, LIVE_PATH_TEXT_MAX)
@@ -551,7 +541,8 @@ function normalizeUnifiedSnapshot(
 				? LEGACY_V7_UNIFIED_SNAPSHOT_KEYS
 				: legacyTier === null ? UNIFIED_SNAPSHOT_KEYS : LEGACY_V10_UNIFIED_SNAPSHOT_KEYS;
 	if (!isRecord(value) || !hasExactKeys(value, keys)) return null;
-	if (!isUnifiedScope(value.scope)) return null;
+	const scope = normalizeLibraryScope(value.scope);
+	if (scope === null) return null;
 	const collectionDrill =
 		value.collectionDrill === null
 			? null
@@ -566,7 +557,7 @@ function normalizeUnifiedSnapshot(
 					legacyTier === null || legacyTier === 'v10'
 				);
 	if (value.itemTarget !== null && !itemTarget) return null;
-	let itemDetail: UnifiedItemDetailTarget | null = null;
+	let itemDetail: LegacyTrackInfoTarget | null = null;
 	let composition: UnifiedCompositionSurface | null = null;
 	if (legacyTier !== 'v6') {
 		itemDetail =
@@ -626,12 +617,13 @@ function normalizeUnifiedSnapshot(
 		}
 	}
 	return {
-		scope: value.scope,
+		scope,
 		artistView,
 		albumCredit,
 		collectionDrill,
 		itemTarget,
-		itemDetail,
+		// Validate old child identity above, then retain only its existing album parent.
+		itemDetail: null,
 		composition,
 		itemOriginName,
 		...shared,
@@ -659,7 +651,8 @@ function normalizeLegacyUnifiedSnapshot(
 		? LEGACY_UNIFIED_SNAPSHOT_WITHOUT_BROWSE_KEYS
 		: LEGACY_UNIFIED_SNAPSHOT_KEYS;
 	if (!isRecord(value) || !hasExactKeys(value, expectedKeys)) return null;
-	if (!isUnifiedScope(value.scope)) return null;
+	const scope = normalizeLibraryScope(value.scope);
+	if (scope === null) return null;
 	const drill = value.drill === null ? null : normalizeUnifiedDrillTarget(value.drill);
 	if (value.drill !== null && !drill) return null;
 	if (
@@ -681,7 +674,7 @@ function normalizeLegacyUnifiedSnapshot(
 		? { kind: drill.kind, label: drill.label }
 		: null;
 	return {
-		scope: value.scope,
+		scope,
 		artistView: 'all-artists',
 		albumCredit: null,
 		collectionDrill,
@@ -834,7 +827,7 @@ export function buildUnifiedLibraryPageState(
 		readonly albumCredit?: AlbumCreditSelector | null;
 		readonly density?: UnifiedLibraryDensity | null;
 		readonly browseHistory?: BrowseHistorySnapshot;
-		readonly itemDetail?: UnifiedItemDetailTarget | null;
+		readonly itemDetail?: LegacyTrackInfoTarget | null;
 		readonly composition?: UnifiedCompositionSurface | null;
 		readonly itemOriginName?: string | null;
 	}

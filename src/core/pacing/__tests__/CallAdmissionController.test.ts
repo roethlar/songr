@@ -1,15 +1,6 @@
 /**
- * The pacing controller's own suite — `.agents/plans/library-walk-binding.md`
- * (r3) Slice 3.
- *
- * The control logic itself is proven by the extended pass's governor suite,
- * which drives this class through its adapter and asserts exactly what it
- * asserted before the logic moved here. What this suite covers is what is NEW:
- * that the two things the pass had hard-coded are genuinely parameters, and
- * that the parameterization has no way to lie about a baseline.
- *
- * Like that suite, there is no clock in here. Every assertion is reached by
- * settling calls.
+ * The pacing controller's parameterization, baseline and admission safeguards.
+ * There is no clock in the controller; assertions advance it by settling calls.
  */
 import type { Logger } from "pino";
 

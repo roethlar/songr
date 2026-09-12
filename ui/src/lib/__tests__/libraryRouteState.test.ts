@@ -17,12 +17,9 @@ describe('Library route activation state', () => {
 		{ kind: 'artist-filter', filter: '>30 albums' },
 		{ kind: 'artist', artist: 'Mara' },
 		{ kind: 'artist-album', artist: 'Mara', album },
-		{ kind: 'artist-album-track', artist: 'Mara', album, track: 'Finale' },
 		{ kind: 'album', album },
-		{ kind: 'album-track', album, track: 'Finale' },
 		{ kind: 'genre', genre: 'New / Music' },
 		{ kind: 'genre-album', genre: 'New / Music', album },
-		{ kind: 'genre-album-track', genre: 'New / Music', album, track: 'Finale' },
 		{ kind: 'composer', composer: 'Mara' },
 		{ kind: 'composition', composer: 'Mara', composition: 'Night; Windows' },
 		{
@@ -65,6 +62,30 @@ describe('Library route activation state', () => {
 		}
 	);
 
+
+	it.each([
+		[{ kind: 'album-track', album, track: 'Finale' }, { kind: 'album', album }],
+		[{ kind: 'artist-album-track', artist: 'Mara', album, track: 'Finale' }, { kind: 'artist-album', artist: 'Mara', album }],
+		[{ kind: 'genre-album-track', genre: 'New / Music', album, track: 'Finale' }, { kind: 'genre-album', genre: 'New / Music', album }],
+		[{ kind: 'credit-album-track', selector: { kind: 'credit', credit: album.credit }, album, track: 'Finale' },
+		 { kind: 'credit-album', selector: { kind: 'credit', credit: album.credit }, album }]
+	] satisfies readonly (readonly [LibraryRoute, LibraryRoute])[])(
+		'migrates retired Track Info route %j to its album without losing its origin',
+		(route, parent) => {
+			const restored = libraryPageStateFromRoute(route);
+			expect(restored.snapshot.itemDetail).toBeNull();
+			expect(libraryRouteFromPageState(restored)).toEqual(parent);
+		}
+	);
+
+	it.each(['recently-added', 'most-played', 'playlists'] as const)(
+		'migrates retired %s root to Albums', scope => {
+			const state = libraryPageStateFromRoute({ kind: 'root', scope });
+			expect(state.snapshot.scope).toBe('albums');
+			expect(libraryRouteFromPageState(state)).toEqual({ kind: 'root', scope: 'albums' });
+		}
+	);
+
 	it('keeps an album edition on the live path when it is nonempty', () => {
 		const state = libraryPageStateFromRoute({ kind: 'album', album: edition });
 		expect(state.snapshot.itemTarget).toEqual({
@@ -103,7 +124,7 @@ describe('Library route activation state', () => {
 		expect(libraryRouteFromPageState(state)).toEqual(route);
 	});
 
-	it('represents an album-track fallback as an album page plus exact child', () => {
+	it('migrates an old album-track fallback to its existing album parent', () => {
 		const route: LibraryRoute = {
 			kind: 'live-path',
 			path: {
@@ -122,8 +143,8 @@ describe('Library route activation state', () => {
 			kind: 'live',
 			path: { origin: 'composers', steps: route.path.steps.slice(0, -1) }
 		});
-		expect(state.snapshot.itemDetail).toEqual({ kind: 'track', title: 'Finale' });
-		expect(libraryRouteFromPageState(state)).toEqual(route);
+		expect(state.snapshot.itemDetail).toBeNull();
+		expect(libraryRouteFromPageState(state)).toEqual({ ...route, path: { ...route.path, steps: route.path.steps.slice(0, -1) } });
 	});
 
 	it.each([
@@ -137,7 +158,7 @@ describe('Library route activation state', () => {
 		],
 		[
 			{ kind: 'artist-album-track' as const, artist: 'Mara', album, track: 'Finale' },
-			{ kind: 'artist-album' as const, artist: 'Mara', album }
+			{ kind: 'artist' as const, artist: 'Mara' }
 		],
 		[
 			{ kind: 'genre' as const, genre: 'New / Music' },

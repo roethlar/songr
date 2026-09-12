@@ -7,6 +7,7 @@ import {
 	type ClassicBrowseRole
 } from '@shared/classicBrowseContracts';
 import type { BrowseItem, BrowseResult, SearchResult } from '@shared/types';
+import { classifyBrowseActionOutcome } from '@shared/browseActionOutcome';
 import {
 	normalizeBrowseHistorySnapshot,
 	type BrowseBreadcrumb,
@@ -430,7 +431,7 @@ export type UnifiedBrowseActionSource =
 	  };
 
 export interface UnifiedBrowseActionState {
-	readonly phase: 'idle' | 'loading' | 'ready' | 'executing' | 'success' | 'error';
+	readonly phase: 'idle' | 'loading' | 'ready' | 'executing' | 'success' | 'rejected' | 'outcome-unknown' | 'error';
 	readonly source: UnifiedBrowseActionSource | null;
 	/**
 	 * The zone `available` was probed under, so a caller can tell whether the
@@ -453,7 +454,8 @@ export interface UnifiedBrowseActionController extends Readable<UnifiedBrowseAct
 	execute(
 		claim: ClassicBrowseSessionClaim,
 		semantic: UnifiedSongActionSemantic,
-		zoneId: string
+		zoneId: string,
+		beforeDispatch?: () => void
 	): Promise<boolean>;
 	executeItem(
 		claim: ClassicBrowseSessionClaim,
@@ -818,7 +820,8 @@ export function createUnifiedBrowseActionController(
 	async function execute(
 		claim: ClassicBrowseSessionClaim,
 		semantic: UnifiedSongActionSemantic,
-		zoneId: string
+		zoneId: string,
+		beforeDispatch?: () => void
 	): Promise<boolean> {
 		const retained = currentActions(claim, zoneId);
 		const exactAction = retained?.rows[semantic];
@@ -833,7 +836,7 @@ export function createUnifiedBrowseActionController(
 			const action = actionRows(await discoverActionRows(current, target, 'search', zoneId))[semantic];
 			if (!action) throw new Error(`${ACTION_LABELS[semantic]} is no longer available`);
 			return action;
-		});
+		}, beforeDispatch);
 	}
 
 	async function executeItem(
@@ -851,41 +854,47 @@ export function createUnifiedBrowseActionController(
 		claim: ClassicBrowseSessionClaim,
 		source: UnifiedBrowseActionSource,
 		zoneId: string,
-		resolveAction: (transaction: ClassicBrowseApiTransaction) => Promise<ExactItem>
+		resolveAction: (transaction: ClassicBrowseApiTransaction) => Promise<ExactItem>,
+		beforeDispatch?: () => void
 	): Promise<boolean> {
 		fence += 1;
 		const token = fence;
+		let issued = false;
 		publish({ ...state, phase: 'executing', error: null });
 		try {
 			const role: ClassicBrowseRole =
 				source.kind === 'search' || source.snapshot.context.hierarchy === 'search'
 					? 'classic-search'
 					: 'classic-browse';
-			await runTransaction(role, claim, async (transaction) => {
+			const result = await runTransaction(role, claim, async (transaction) => {
 				const current = fencedTransaction(transaction, claim, source, token);
 				const action = await resolveAction(current);
-				await current.browse({
+				beforeDispatch?.();
+				issued = true;
+				return current.browse({
 					hierarchy: role === 'classic-search' ? 'search' : 'browse',
 					itemKey: action.itemKey,
 					zoneId
 				});
 			});
 			if (token !== fence || actionClaim !== claim || !isClaimCurrent(claim)) return false;
+			const outcome = classifyBrowseActionOutcome(result);
 			clearAuthority();
 			publish({
 				...state,
-				phase: 'success',
+				phase: outcome.kind === 'executed' ? 'success' : outcome.kind === 'refused' ? 'rejected' : 'outcome-unknown',
 				available: emptyAvailability(),
 				actions: [],
-				error: null
+				error: outcome.kind === 'refused' ? outcome.message : outcome.kind === 'unknown'
+					? 'Roon received the action, but its outcome could not be confirmed.' : null
 			});
-			return true;
+			return outcome.kind === 'executed';
 		} catch (error) {
 			if (token !== fence) return false;
 			clearAuthority();
 			publish({
 				...state,
-				phase: error instanceof ClassicBrowseSupersededError ? 'idle' : 'error',
+				phase: error instanceof ClassicBrowseSupersededError ? 'idle' : issued ? 'outcome-unknown' : 'error',
 				available: emptyAvailability(),
 				actions: [],
 				error:

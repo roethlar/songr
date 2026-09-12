@@ -196,8 +196,7 @@ describe('explicit track controls', () => {
 		await fireEvent.click(within(row).getByLabelText('More actions for Same title'));
 		await fireEvent.click(within(row).getByRole('button', { name: 'Add Next' }));
 		expect(onAction).toHaveBeenLastCalledWith(item, 'add-next');
-		await fireEvent.click(within(row).getByLabelText('More actions for Same title'));
-		await fireEvent.click(within(row).getByRole('button', { name: 'Favorite' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Bookmark' }));
 		expect(onFavorite).toHaveBeenCalledWith(item);
 		expect(onItem).not.toHaveBeenCalled();
 	});

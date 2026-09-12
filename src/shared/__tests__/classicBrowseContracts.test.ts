@@ -91,6 +91,25 @@ describe("classic browse wire contracts", () => {
     ).toBeNull();
   });
 
+  it.each(["browse", "load", "pop"])(
+    "refuses the undocumented tracks hierarchy for %s while retaining the public browse hierarchy",
+    (operation) => {
+      const request = {
+        requestId: "request-2",
+        tabId: "tab-1",
+        session,
+        role: "classic-browse",
+        operation,
+        options: { hierarchy: "browse" },
+      };
+      expect(normalizeClassicBrowseCommandRequest(request)).toEqual(request);
+      expect(normalizeClassicBrowseCommandRequest({
+        ...request,
+        options: { hierarchy: "tracks" },
+      })).toBeNull();
+    }
+  );
+
   it("binds successful acknowledgments to request and generation", () => {
     const acquire = { requestId: "request-3", tabId: "tab-1" };
     expect(

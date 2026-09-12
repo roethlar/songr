@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Songr 1.4.1 screenshots</title>
+<style>
+:root { color-scheme:light dark; --bg:#f5f4f0; --text:#242623; --soft:#60665d; --line:#d8dcd2; --link:#37533a; }
+@media(prefers-color-scheme:dark) { :root { --bg:#151714; --text:#ecede8; --soft:#adb4a6; --line:#383e33; --link:#b2d393; } }
+* { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 system-ui,sans-serif; }
+main { max-width:1600px; margin:auto; padding:40px 28px 64px; } a { color:var(--link); text-underline-offset:3px; }
+a:focus-visible { outline:3px solid currentColor; outline-offset:4px; }
+h1 { font-size:clamp(26px,3vw,40px); font-weight:600; letter-spacing:-.025em; margin:0 0 12px; }
+header p { max-width:760px; color:var(--soft); margin:8px 0; }
+nav { display:flex; flex-wrap:wrap; gap:10px 24px; padding:22px 0; margin-top:16px; border-block:1px solid var(--line); }
+section { margin-top:44px; scroll-margin-top:20px; } h2 { font-size:25px; font-weight:600; border-bottom:1px solid var(--line); padding-bottom:12px; }
+article { margin:32px 0 44px; scroll-margin-top:20px; } h3 { font-size:19px; font-weight:600; margin:0 0 12px; }
+.pair { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; } figure { margin:0; min-width:0; } figure a { display:block; }
+img { width:100%; height:auto; display:block; border:1px solid var(--line); } figcaption { color:var(--soft); font-size:14px; margin:6px 0; }
+.note { color:var(--soft); font-size:14px; margin:12px 0 0; } .single { grid-template-columns:minmax(0,1fr); max-width:calc(50% - 10px); }
+footer { border-top:1px solid var(--line); padding-top:16px; margin-top:48px; color:var(--soft); }
+@media(max-width:760px) { main { padding:24px 16px 40px; } .pair { grid-template-columns:1fr; gap:18px; } .single { max-width:none; } }
+</style>
+</head>
+<body><main>
+<header><h1>Songr 1.4.1 screenshots</h1>
+<p>Songr 1.4.1, captured from a real Roon library. Select an image to view it at full size.</p>
+<p><a href="README.md">Markdown gallery</a> · <a href="../../../README.md">Back to Songr</a></p></header>
+<nav aria-label="Gallery sections"><a href="#library">Library</a><a href="#details">Details</a><a href="#settings">Settings</a></nav>
+<section id="library" aria-labelledby="library-title"><h2 id="library-title">Library</h2>
+<article id="view-artists-album" aria-labelledby="view-artists-album-title"><h3 id="view-artists-album-title">Album artists</h3>
+<div class="pair">
+<figure><a href="light/artists-album.png"><img src="light/artists-album.png" alt="Album artists — Light" loading="lazy" decoding="async"></a><figcaption>Light</figcaption></figure>
+<figure><a href="dark/artists-album.png"><img src="dark/artists-album.png" alt="Album artists — Dark" loading="lazy" decoding="async"></a><figcaption>Dark</figcaption></figure>
+</div>
+</article>
+<article id="view-artists-all" aria-labelledby="view-artists-all-title"><h3 id="view-artists-all-title">All artists</h3>
+<div class="pair">
+<figure><a href="light/artists-all.png"><img src="light/artists-all.png" alt="All artists — Light" loading="lazy" decoding="async"></a><figcaption>Light</figcaption></figure>
+<figure><a href="dark/artists-all.png"><img src="dark/artists-all.png" alt="All artists — Dark" loading="lazy" decoding="async"></a><figcaption>Dark</figcaption></figure>
+</div>
+</article>
+<article id="view-albums" aria-labelledby="view-albums-title"><h3 id="view-albums-title">Albums</h3>
+<div class="pair">
+<figure><a href="light/albums.png"><img src="light/albums.png" alt="Albums — Light" loading="lazy" decoding="async"></a><figcaption>Light</figcaption></figure>
+<figure><a href="dark/albums.png"><img src="dark/albums.png" alt="Albums — Dark" loading="lazy" decoding="async"></a><figcaption>Dark</figcaption></figure>
+</div>
+</article>
+<article id="view-genres" aria-labelledby="view-genres-title"><h3 id="view-genres-title">Genres</h3>
+<div class="pair">
+<figure><a href="light/genres.png"><img src="light/genres.png" alt="Genres — Light" loading="lazy" decoding="async"></a><figcaption>Light</figcaption></figure>
+<figure><a href="dark/genres.png"><img src="dark/genres.png" alt="Genres — Dark" loading="lazy" decoding="async"></a><figcaption>Dark</figcaption></figure>
+</div>
+</article>
+<article id="view-tracks" aria-labelledby="view-tracks-title"><h3 id="view-tracks-title">Tracks</h3>
+<div class="pair">
+<figure><a href="light/tracks.png"><img src="light/tracks.png" alt="Tracks — Light" loading="lazy" decoding="async"></a><figcaption>Light</figcaption></figure>
+<figure><a href="dark/tracks.png"><img src="dark/tracks.png" alt="Tracks — Dark" loading="lazy" decoding="async"></a><figcaption>Dark</figcaption></figure>
+</div>
+</article>
+<article id="view-composers" aria-labelledby="view-composers-title"><h3 id="view-composers-title">Composers</h3>
+<div class="pair">
+<figure><a href="light/composers.png"><img src="light/composers.png" alt="Composers — Light" loading="lazy" decoding="async"></a><figcaption>Light</figcaption></figure>
+<figure><a href="dark/composers.png"><img src="dark/composers.png" alt="Composers — Dark" loading="lazy" decoding="async"></a><figcaption>Dark</figcaption></figure>
+</div>
+</article>
+<article id="view-tags" aria-labelledby="view-tags-title"><h3 id="view-tags-title">Tags</h3>
+<div class="pair">
+<figure><a href="light/tags.png"><img src="light/tags.png" alt="Tags — Light" loading="lazy" decoding="async"></a><figcaption>Light</figcaption></figure>
+<figure><a href="dark/tags.png"><img src="dark/tags.png" alt="Tags — Dark" loading="lazy" decoding="async"></a><figcaption>Dark</figcaption></figure>
+</div>
+</article>
+<article id="view-radio" aria-labelledby="view-radio-title"><h3 id="view-radio-title">Live radio</h3>
+<div class="pair">
+<figure><a href="light/radio.png"><img src="light/radio.png" alt="Live radio — Light" loading="lazy" decoding="async"></a><figcaption>Light</figcaption></figure>
+<figure><a href="dark/radio.png"><img src="dark/radio.png" alt="Live radio — Dark" loading="lazy" decoding="async"></a><figcaption>Dark</figcaption></figure>
+</div>
+<p class="note">Roon returned “No Results” for Live radio at capture time.</p>
+</article>
+<article id="view-recently-played" aria-labelledby="view-recently-played-title"><h3 id="view-recently-played-title">Recently played</h3>
+<div class="pair">
+<figure><a href="light/recently-played.png"><img src="light/recently-played.png" alt="Recently played — Light" loading="lazy" decoding="async"></a><figcaption>Light</figcaption></figure>
+<figure><a href="dark/recently-played.png"><img src="dark/recently-played.png" alt="Recently played — Dark" loading="lazy" decoding="async"></a><figcaption>Dark</figcaption></figure>
+</div>
+</article>
+<article id="view-favorites" aria-labelledby="view-favorites-title"><h3 id="view-favorites-title">Favorites</h3>
+<div class="pair">
+<figure><a href="light/favorites.png"><img src="light/favorites.png" alt="Favorites — Light" loading="lazy" decoding="async"></a><figcaption>Light</figcaption></figure>
+<figure><a href="dark/favorites.png"><img src="dark/favorites.png" alt="Favorites — Dark" loading="lazy" decoding="async"></a><figcaption>Dark</figcaption></figure>
+</div>
+<p class="note">No Songr favorites at capture time.</p>
+</article>
+<article id="view-surprise" aria-labelledby="view-surprise-title"><h3 id="view-surprise-title">Surprise me</h3>
+<div class="pair">
+<figure><a href="light/surprise.png"><img src="light/surprise.png" alt="Surprise me — Light" loading="lazy" decoding="async"></a><figcaption>Light</figcaption></figure>
+<figure><a href="dark/surprise.png"><img src="dark/surprise.png" alt="Surprise me — Dark" loading="lazy" decoding="async"></a><figcaption>Dark</figcaption></figure>
+</div>
+</article>
+</section>
+<section id="details" aria-labelledby="details-title"><h2 id="details-title">Details</h2>
+<article id="view-album-artist" aria-labelledby="view-album-artist-title"><h3 id="view-album-artist-title">Album-artist collection</h3>
+<div class="pair">
+<figure><a href="light/album-artist.png"><img src="light/album-artist.png" alt="Album-artist collection — Light" loading="lazy" decoding="async"></a><figcaption>Light</figcaption></figure>
+<figure><a href="dark/album-artist.png"><img src="dark/album-artist.png" alt="Album-artist collection — Dark" loading="lazy" decoding="async"></a><figcaption>Dark</figcaption></figure>
+</div>
+</article>
+</section>
+<section id="settings" aria-labelledby="settings-title"><h2 id="settings-title">Settings</h2>
+<article id="view-settings" aria-labelledby="view-settings-title"><h3 id="view-settings-title">Controller settings</h3>
+<div class="pair">
+<figure><a href="light/settings.png"><img src="light/settings.png" alt="Controller settings — Light" loading="lazy" decoding="async"></a><figcaption>Light</figcaption></figure>
+<figure><a href="dark/settings.png"><img src="dark/settings.png" alt="Controller settings — Dark" loading="lazy" decoding="async"></a><figcaption>Dark</figcaption></figure>
+</div>
+</article>
+</section>
+<footer><h2>Coverage notes</h2><ul>
+<li>The gallery includes the available library pages, entity details, playback controls and settings.</li>
+<li>Playlists is not shown: the public Roon API does not reliably identify which playlists are supported.</li>
+<li>Empty at capture time: Favorites, Live radio.</li>
+</ul></footer>
+</main></body></html>

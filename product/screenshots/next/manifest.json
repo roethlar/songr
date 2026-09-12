@@ -1,0 +1,1068 @@
+{
+  "schemaVersion": 1,
+  "title": "Current Songr candidate 1.4.2 — rev ae462990",
+  "applicationVersion": "1.4.2",
+  "sourceRevision": "ae462990",
+  "generatedAt": "2026-09-11T03:48:38.053646+00:00",
+  "reviewStatus": "capture-review-pending",
+  "publicationStatus": "blocked-pending-Info-resolution-and-release-approval",
+  "proposedReleaseVersion": "1.4.3",
+  "proposedReleaseApproved": false,
+  "inventoryFinalized": true,
+  "counts": {
+    "views": 43,
+    "pngFiles": 85,
+    "normalThemePairs": 41,
+    "nativeDarkOnly": 1,
+    "blockedObservationViews": 1
+  },
+  "coverageNotes": [
+    "Captured from the real owner library in Songr 1.4.2, source ae462990. This is a local review gallery; publication and proposed version 1.4.3 approval are pending.",
+    "41 normal light/dark pairs, one fixed-dark native window, and a separate Track Info observation.",
+    "Every PNG in this folder is listed in manifest.json. Theme pairs have matching PNG dimensions; normal app captures are 1600 × 1000 pixels. Image inventory checks do not establish functional or performance acceptance.",
+    "Track Info remained pending at capture and appears only under Observations. Source inspection found the missing listener; the terminal timeout state was not captured. It is not counted as a completed normal detail view.",
+    "The light Search selection capture shows horizontal overflow and a clipped long credit line. That actual layout remains visible and has not been corrected.",
+    "Favorites is genuinely empty. Live radio shows Roon’s “No Results” response; no station has been invented for the gallery.",
+    "Playlists has no available UI and is not represented by a fabricated screenshot.",
+    "There is no standalone Now Playing page. The persistent playback dock is visible throughout the app captures; Queue, Zones and grouping have their own captures.",
+    "Native desktop Advanced Settings is always dark and is included once. Its server-address and network-sharing controls belong to that separate desktop window.",
+    "The images are original captures, not edited or composited. A bounded sample was visually inspected; the gallery does not claim a UI test campaign."
+  ],
+  "notCaptured": [
+    {
+      "id": "playlists",
+      "reason": "No available Playlists UI."
+    },
+    {
+      "id": "now-playing",
+      "reason": "No standalone page; the persistent playback dock is captured in the other app views."
+    }
+  ],
+  "views": [
+    {
+      "id": "artists-album",
+      "group": "library",
+      "title": "Album artists",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/artists-album.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 172529,
+          "sha256": "6578897e6caf0e2d049c47062326718d88333fea186655210d92baf2096826ad"
+        },
+        "dark": {
+          "path": "dark/artists-album.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 147201,
+          "sha256": "e96393a6a47b418098ebc761c30fb586c00e4127cdabbb880836f0845c035f79"
+        }
+      }
+    },
+    {
+      "id": "artists-all",
+      "group": "library",
+      "title": "All artists",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/artists-all.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 159806,
+          "sha256": "dfd3ec4f3b677eca7f21a8d1ebbef7f1ba603473d877b01ad60405d75a217bc2"
+        },
+        "dark": {
+          "path": "dark/artists-all.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 137761,
+          "sha256": "8afbf96bb830cca73017bfa604dea401da17f3952d8a03f741b037bc287935aa"
+        }
+      }
+    },
+    {
+      "id": "albums",
+      "group": "library",
+      "title": "Albums",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/albums.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1241086,
+          "sha256": "b5be46b3cb5343f24d2bb70c2fb4d37810b4f69a256d17304bebf4f1300a567d"
+        },
+        "dark": {
+          "path": "dark/albums.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1212268,
+          "sha256": "901007ea1d23f5a8e6101f9d0d8baef302d7e50c002545b320154bda5d465428"
+        }
+      }
+    },
+    {
+      "id": "genres",
+      "group": "library",
+      "title": "Genres",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/genres.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 97751,
+          "sha256": "1b6650d2f11c0bc4c0d15bc3659ecc4c1da04c6111c42625b6c8706c1b659f0f"
+        },
+        "dark": {
+          "path": "dark/genres.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 87620,
+          "sha256": "c0183a8bff9a8814a047faefebed3d043e8e227d1d77afb8b4a11ea37970543c"
+        }
+      }
+    },
+    {
+      "id": "tracks",
+      "group": "library",
+      "title": "Tracks",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/tracks.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 148994,
+          "sha256": "09a2f80af8e0aedafa83170d907ac96bdf14070f2bc80a5ff319efdee3e54103"
+        },
+        "dark": {
+          "path": "dark/tracks.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 123522,
+          "sha256": "5ba7702a2b32a88bab868f4ce62362f4cadeb112b867f01fc51e61b5b0eccbb9"
+        }
+      }
+    },
+    {
+      "id": "composers",
+      "group": "library",
+      "title": "Composers",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/composers.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 97431,
+          "sha256": "0af238772fd92f55dd198b228881fa3f3e52fb4ae3d58ab3ce7e5069216e5264"
+        },
+        "dark": {
+          "path": "dark/composers.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 87033,
+          "sha256": "2e8d44146b6509d8f286b8984ab0e1f588d767341b9dd03fba4474dfa4ffb3f1"
+        }
+      }
+    },
+    {
+      "id": "composers-filtered",
+      "group": "library",
+      "title": "Composers — filtered",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/composers-filtered.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 85316,
+          "sha256": "8223781c745b837d74e87564f06c7b2cf6c1def513f54e7d21dca9aa036d1706"
+        },
+        "dark": {
+          "path": "dark/composers-filtered.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 77514,
+          "sha256": "e1fa1daa4239f4a2165b75e5f88838363a319d8b80121ab9faf9d1bae76b7952"
+        }
+      }
+    },
+    {
+      "id": "tags",
+      "group": "library",
+      "title": "Tags",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/tags.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 38460,
+          "sha256": "2c66852b5b5a5d8c99afce7b8fc8df6edf82446c0dffb8c635648e65fafbca6b"
+        },
+        "dark": {
+          "path": "dark/tags.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 35344,
+          "sha256": "2ae8eaf1c32a6621a6ce361508dc179c61f45734f61cf76d69984a5c56a101fc"
+        }
+      }
+    },
+    {
+      "id": "radio",
+      "group": "library",
+      "title": "Live radio",
+      "status": "captured",
+      "note": "Roon returned “No Results” at capture time. The displayed count is not a claim that one station is available.",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/radio.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 35460,
+          "sha256": "62cf1c2b39079aa5a950d8e1d0075f86232d08583e5d8eb05f2826fd0a8f609a"
+        },
+        "dark": {
+          "path": "dark/radio.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 32571,
+          "sha256": "f238bcf469cb92dda4b2a56a38612b63a0ad189f16531f1213cd541f2cfa747c"
+        }
+      }
+    },
+    {
+      "id": "recently-played",
+      "group": "library",
+      "title": "Recently played",
+      "status": "captured",
+      "note": "Recorded history from this Songr server.",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/recently-played.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 334025,
+          "sha256": "38ab9747b77d2f6c857b94fa667fd0c168a29d30b61b82cd7f051b569af76148"
+        },
+        "dark": {
+          "path": "dark/recently-played.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 323246,
+          "sha256": "d979d5afc75a25329705ad39325105ba263543dcf81bb9903f19894ef364b931"
+        }
+      }
+    },
+    {
+      "id": "favorites",
+      "group": "library",
+      "title": "Favorites",
+      "status": "captured",
+      "note": "The real Songr Favorites list was empty at capture time.",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/favorites.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 40688,
+          "sha256": "eb25508d9d5cc15ea277a08221a3d09a0aaa34cee96712cacb1cb279291aaec0"
+        },
+        "dark": {
+          "path": "dark/favorites.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 37789,
+          "sha256": "4d9a0dbfa0b6a002fdb0ce63f305768dedda0b96441457cf310f72f9e6fee76c"
+        }
+      }
+    },
+    {
+      "id": "surprise",
+      "group": "library",
+      "title": "Surprise me",
+      "status": "captured",
+      "note": "The selection is generated from the real library; the two captures can show different suggestions.",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/surprise.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1138665,
+          "sha256": "a6dec9acda40b0d208e9c5a3699ca04a9c6dc61f8f972b9c66585826ade4aa95"
+        },
+        "dark": {
+          "path": "dark/surprise.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 609456,
+          "sha256": "bf6090cec196023508b35efa096be119a6daf23dcda07e2559d56ab259e1a13a"
+        }
+      }
+    },
+    {
+      "id": "more",
+      "group": "library",
+      "title": "More navigation",
+      "status": "captured",
+      "note": "Unpinned pages remain available here.",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/more.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 186657,
+          "sha256": "b90e923cf42bd8e595ea17b4e80c16e36b5252f475eb5a6319d7091c471ee90a"
+        },
+        "dark": {
+          "path": "dark/more.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 153525,
+          "sha256": "43d5b0077044c9db32abba3b91dbbbc42663472fddaa626413c672c45f3cc32a"
+        }
+      }
+    },
+    {
+      "id": "search",
+      "group": "library",
+      "title": "Search",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/search.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 651919,
+          "sha256": "ddc2cda440979936de3884d8c30e109f26ddfe97f270bbecddd35c6be498c918"
+        },
+        "dark": {
+          "path": "dark/search.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 483517,
+          "sha256": "943116b22d3a98f06ac87a56a85a8a620747c967ccc4425f5c49d978627e6962"
+        }
+      }
+    },
+    {
+      "id": "album-artist",
+      "group": "details",
+      "title": "Album-artist collection",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/album-artist.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 225793,
+          "sha256": "48d303d43298d0be3d5184723187245f5b25c3fbc986e332803876fd51a1b8ae"
+        },
+        "dark": {
+          "path": "dark/album-artist.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 216488,
+          "sha256": "661bcce9a66319e6e6e4635108defe09e28d16d6ef53c6d564d3dda532dd6743"
+        }
+      }
+    },
+    {
+      "id": "artist",
+      "group": "details",
+      "title": "Artist",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/artist.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 326924,
+          "sha256": "b6792f7e078e5301534b0ccfc048feddde6ff90b0553b5a6446b993b202dbef9"
+        },
+        "dark": {
+          "path": "dark/artist.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 313279,
+          "sha256": "135a2809f1a8f34e1c8df457c43e91865e9b69bf54bf5448f381acc6554369eb"
+        }
+      }
+    },
+    {
+      "id": "album",
+      "group": "details",
+      "title": "Album",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/album.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 106445,
+          "sha256": "4d0cff748ecf956d3a22cb071f3568dbca00ab3533f5f86ec0bb78d2cc892815"
+        },
+        "dark": {
+          "path": "dark/album.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 97983,
+          "sha256": "f9131ea99722f18acee8c3a69fa66441bbb31fc899aa7bbf65da49011c681546"
+        }
+      }
+    },
+    {
+      "id": "genre",
+      "group": "details",
+      "title": "Genre",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/genre.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 760294,
+          "sha256": "ea5a54cc773537d45dc65b02f5ff79c2cbf92f68c14537b893060b756e960eb4"
+        },
+        "dark": {
+          "path": "dark/genre.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 715344,
+          "sha256": "5443936fb87c49007b20201b675efb7f4a08e312401970cd6054a930f84c4fa2"
+        }
+      }
+    },
+    {
+      "id": "genre-artists",
+      "group": "details",
+      "title": "Genre artists",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/genre-artists.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 88013,
+          "sha256": "bc73d14c3fa1ab67b9fd32c8f7ea9b8e0bac33df098ba8c04e7cfba67093b3b9"
+        },
+        "dark": {
+          "path": "dark/genre-artists.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 79881,
+          "sha256": "dc16c903a1cb4cb6d6e81e7ebc40d5cd33f46ec7e461a339dd2d9c9de29968b3"
+        }
+      }
+    },
+    {
+      "id": "genre-albums",
+      "group": "details",
+      "title": "Genre albums",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/genre-albums.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 936052,
+          "sha256": "2ee62f6fb2bb97c318913670836c018798fea342993adc380270546c8cdb30c9"
+        },
+        "dark": {
+          "path": "dark/genre-albums.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 899069,
+          "sha256": "89ba69433e879e2e363c0307109a1b1155acb7dd26d58b7bd5bd988b3027e023"
+        }
+      }
+    },
+    {
+      "id": "compositions",
+      "group": "details",
+      "title": "Composer compositions",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/compositions.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 198607,
+          "sha256": "dcda994f222f0bea600e1fcfb55a9e02d7f6f3a763f1f458ddef6e1b241b915f"
+        },
+        "dark": {
+          "path": "dark/compositions.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 160833,
+          "sha256": "f1cfb9662bd309deced540efbe65454aa8c7e110d70c74c87c06cd24f94b0b70"
+        }
+      }
+    },
+    {
+      "id": "recordings",
+      "group": "details",
+      "title": "Composition recordings",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/recordings.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 132293,
+          "sha256": "a498466d389e21b2f1c2e2515ae1c204649fa890980d280e0597e3acd525e416"
+        },
+        "dark": {
+          "path": "dark/recordings.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 111820,
+          "sha256": "14d859cbbdb3b800b50942e870f6eca3b5c1894e2f8767832b8f140123ce92fa"
+        }
+      }
+    },
+    {
+      "id": "tag-albums",
+      "group": "details",
+      "title": "Tag contents — albums",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/tag-albums.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 39488,
+          "sha256": "5394a7f8d9f6a90205444024040e5ad86464e0b9e06e9dd3faf6011d76973efa"
+        },
+        "dark": {
+          "path": "dark/tag-albums.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 36104,
+          "sha256": "db58f9825487d3cae4a44d8a8fd2b3335be1b030847f7f78d3bc4cc5595cbef8"
+        }
+      }
+    },
+    {
+      "id": "tag-artists",
+      "group": "details",
+      "title": "Tag contents — artists",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/tag-artists.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 41006,
+          "sha256": "6b5e266edcc34e8ee927d31005a03c9fc400f182c840d2b4023313817e30541a"
+        },
+        "dark": {
+          "path": "dark/tag-artists.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 37353,
+          "sha256": "27d2a71953292bbc7db58201ed77b45abc8dbf6a27c9ed41a0706a2a384889b0"
+        }
+      }
+    },
+    {
+      "id": "tag-works",
+      "group": "details",
+      "title": "Tag contents — works",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/tag-works.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 41171,
+          "sha256": "a69546cab5a31ba40e610f1df0ee458ba58107c3d032675e9503ed70769417da"
+        },
+        "dark": {
+          "path": "dark/tag-works.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 37513,
+          "sha256": "512b8d9eec6b36b969984a1d66b9d9f0e0fa67e02026e6f7f955b7d1b35ef028"
+        }
+      }
+    },
+    {
+      "id": "tagged-album",
+      "group": "details",
+      "title": "Tagged album",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/tagged-album.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 110626,
+          "sha256": "6be7c2efc76d6ede8f1f46088ad84c11b449da58dfe7b376ba73e21d5927fdf3"
+        },
+        "dark": {
+          "path": "dark/tagged-album.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 101980,
+          "sha256": "68e35bf710738317a93818ee2f37fcba1565113c236b046462ce8a715ac497ff"
+        }
+      }
+    },
+    {
+      "id": "tagged-artist",
+      "group": "details",
+      "title": "Tagged artist",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/tagged-artist.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 798148,
+          "sha256": "ab08f40587f28b375a2a4d965042a8de09a245618895ce06ca0589aa15709200"
+        },
+        "dark": {
+          "path": "dark/tagged-artist.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 775133,
+          "sha256": "5ecfa2f9f9edf1453c0779d1b480689f9698396084df3e12f6369062420a0887"
+        }
+      }
+    },
+    {
+      "id": "tagged-work",
+      "group": "details",
+      "title": "Tagged work",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/tagged-work.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 58590,
+          "sha256": "7fd9fe6f8f15f182168313509dab16cfa7406db762e93401e30c121f18e853ed"
+        },
+        "dark": {
+          "path": "dark/tagged-work.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 52548,
+          "sha256": "ef4e84235f7b36687833f276fdb210ae67793c33e0e9b30ebaee2294fa6ff3fb"
+        }
+      }
+    },
+    {
+      "id": "tracks-selection",
+      "group": "selection",
+      "title": "Track selection",
+      "status": "captured",
+      "note": "Three selected tracks with shared controls.",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/tracks-selection.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 105677,
+          "sha256": "8d09cc4c05c0385f154d83a58321280a575749d2df7c0bdd39307f7f63b191c8"
+        },
+        "dark": {
+          "path": "dark/tracks-selection.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 94121,
+          "sha256": "a9690254f005850bf9201bbe864d70de501056a559c2b62b5f237a6696e82405"
+        }
+      }
+    },
+    {
+      "id": "track-actions",
+      "group": "selection",
+      "title": "Selected track actions",
+      "status": "captured",
+      "note": "The shared More menu for three selected tracks, with Add Next and Favorite.",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/track-actions.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 109104,
+          "sha256": "753778adc830f6b342573358ec5d18379a1f419a208b40f1718e9b2674359f66"
+        },
+        "dark": {
+          "path": "dark/track-actions.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 94936,
+          "sha256": "38486116c2321f7055022b40495977f987478a4e148cecdf9e2258ce994446af"
+        }
+      }
+    },
+    {
+      "id": "album-selection",
+      "group": "selection",
+      "title": "Album track selection",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/album-selection.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 107042,
+          "sha256": "498b7c7183b8d9268260eb70f00f52147fc2c8edad96731f65093bd20a990a2f"
+        },
+        "dark": {
+          "path": "dark/album-selection.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 99904,
+          "sha256": "2b67fe1295a53c017f2cb19f65e34862db55030e2bd65a4167684510e5e38923"
+        }
+      }
+    },
+    {
+      "id": "recordings-selection",
+      "group": "selection",
+      "title": "Recording selection",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/recordings-selection.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 133048,
+          "sha256": "b624285f44b75e3b8e1297b0ca497bb3fbcf9db9a2000b4710e40e726e23d1c6"
+        },
+        "dark": {
+          "path": "dark/recordings-selection.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 116797,
+          "sha256": "e22b4820d2b2b8d721695ac39f5ff54bd3291e55fea6a86ee6ae05d6816f67be"
+        }
+      }
+    },
+    {
+      "id": "search-selection",
+      "group": "selection",
+      "title": "Search selection",
+      "status": "captured",
+      "note": "The light capture retains the observed horizontal scrollbar and clipped long credit line. This is the current layout, not a corrected state.",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/search-selection.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 705371,
+          "sha256": "9d615a0bc5bd104560d63017dab96137f8200136fdf210eeb7bda2f8f2738d08"
+        },
+        "dark": {
+          "path": "dark/search-selection.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 528974,
+          "sha256": "3a4abff6d71e92b8c340a8cf678b01bbf02983fd6fbcb8f269de575e94ed111b"
+        }
+      }
+    },
+    {
+      "id": "queue",
+      "group": "playback",
+      "title": "Queue",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/queue.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 667168,
+          "sha256": "ccb1d25ae6ee6816e7a12ee56d7bcdcd007a36208615a91609dd11c03b92f889"
+        },
+        "dark": {
+          "path": "dark/queue.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 529952,
+          "sha256": "00eaa1e70e6a9982d50b9ab54dec6c9ace2c8adacf99942af4940e805f1727e2"
+        }
+      }
+    },
+    {
+      "id": "zones",
+      "group": "playback",
+      "title": "Zones",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/zones.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1145208,
+          "sha256": "247c1d40716f806d4555d9c4cbd5247397c73e679bff5d05148e391fc6ffd8fe"
+        },
+        "dark": {
+          "path": "dark/zones.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1110428,
+          "sha256": "28f64add9540afe38d6a3c098068b15fb84111683f0afd595376cd7c5babad02"
+        }
+      }
+    },
+    {
+      "id": "grouping",
+      "group": "playback",
+      "title": "Zone grouping",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/grouping.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 893194,
+          "sha256": "e282a4d215bb0c6a7d3cea3101af4c23a70cbf55f37db2296eb15fcf6edc64ad"
+        },
+        "dark": {
+          "path": "dark/grouping.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 719642,
+          "sha256": "3d71905b7bf5d5305a72fbad90277db007264d182943e3e959f58c565a997edf"
+        }
+      }
+    },
+    {
+      "id": "settings",
+      "group": "settings",
+      "title": "Controller settings",
+      "status": "captured",
+      "note": "Appearance and the shared track selection preference.",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/settings.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 196699,
+          "sha256": "fb56a03a2bd4cf1794e71c55b341fd0c5765bca05c5f742db641a115ba90c518"
+        },
+        "dark": {
+          "path": "dark/settings.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 149298,
+          "sha256": "3758a81ea5b75bc15a98931b0cc16aaeb63699d507f0e72476024da1246124be"
+        }
+      }
+    },
+    {
+      "id": "settings-navigation",
+      "group": "settings",
+      "title": "Library navigation settings",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/settings-navigation.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 724887,
+          "sha256": "c9b1a250250e8a130d2db9547f88893d5946565eb2c22306f32e391cf9255c74"
+        },
+        "dark": {
+          "path": "dark/settings-navigation.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 581170,
+          "sha256": "2eb81ab0d94a5e0165c999d2579b9123fe02f9438328861ba20168dfd7a867a6"
+        }
+      }
+    },
+    {
+      "id": "settings-roon",
+      "group": "settings",
+      "title": "Roon settings",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/settings-roon.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 722018,
+          "sha256": "a17b8c0c10ae900113a8116bb9c184d5784287c3b468d24e084f0652be8cdfed"
+        },
+        "dark": {
+          "path": "dark/settings-roon.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 580276,
+          "sha256": "7c852db86907ac407bdf883cd45daa5313449e9eb99b20dcb75572e2f7e0b949"
+        }
+      }
+    },
+    {
+      "id": "settings-roon-display",
+      "group": "settings",
+      "title": "Roon display settings",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/settings-roon-display.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 725189,
+          "sha256": "b2d0b6c30d08bf96fc9faf5fb37aedb7278f025b968d762f8e2e5925dcd9e802"
+        },
+        "dark": {
+          "path": "dark/settings-roon-display.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 582617,
+          "sha256": "a0f9066ec42cbaa2ae59f1e2b0ecb2293c14c7e53a28df850ef5c63ba0aef0d4"
+        }
+      }
+    },
+    {
+      "id": "desktop-server-settings",
+      "group": "settings",
+      "title": "Desktop server settings",
+      "status": "fixed-dark-native",
+      "note": "Native Advanced Settings uses a fixed dark appearance. Captured at 1240 × 1456 pixels from its 620 × 728 CSS-pixel window; there is no light variant.",
+      "paired": false,
+      "images": {
+        "dark": {
+          "path": "dark/desktop-server-settings.png",
+          "width": 1240,
+          "height": 1456,
+          "bytes": 184232,
+          "sha256": "46d0bb0f89d4fd19046180a2689226f874a6d6faf819ebed610456c081352f3e"
+        }
+      }
+    },
+    {
+      "id": "about",
+      "group": "settings",
+      "title": "About",
+      "status": "captured",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/about.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1122380,
+          "sha256": "6539021327992c797078fdbcdcdc0f965916ab5fddd7eef87111626921a04adb"
+        },
+        "dark": {
+          "path": "dark/about.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1085262,
+          "sha256": "1477bd9f85648f258659074fddc9c029f53af09e5f1443779bd2d97b1bfc9d09"
+        }
+      }
+    },
+    {
+      "id": "track-details-observed",
+      "group": "observations",
+      "title": "Track Info — pending (blocked)",
+      "status": "blocked-observation",
+      "note": "The captures still show “Finding album, artist, and composer links…”. No terminal unavailable state was captured. Source inspection found a missing detail-request listener and a 75-second timeout. This is a blocked observation, not completed Info coverage.",
+      "paired": true,
+      "images": {
+        "light": {
+          "path": "light/track-details-observed.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 77705,
+          "sha256": "daf07129432d1e8885bc0aa87781b2d3bc21006d7282b3b5048f49030a7de027"
+        },
+        "dark": {
+          "path": "dark/track-details-observed.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 75157,
+          "sha256": "70e6b01a51afef53518ff04d8307ee85ee45c4148eae3cac6d87fce03e9aa27b"
+        }
+      }
+    }
+  ]
+}

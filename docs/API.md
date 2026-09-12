@@ -165,12 +165,36 @@ Most Played APIs.
 
 ---
 
-### Favorites
+### Presentation settings
 
-User-curated favorites (tracks / albums / artists). Entries store
-display metadata only — no Roon item keys; the UI re-resolves a
-favorite against Roon search when clicked. Persisted to
-`FAVORITES_PATH`. All endpoints return the full current list.
+`GET /api/settings/presentation` returns the confirmed server preferences:
+
+```json
+{ "version": 1, "revision": 0, "actionDisplay": "icons", "smoothScroll": true, "interfaceMotion": true }
+```
+
+`PUT /api/settings/presentation` accepts the three choices plus `expectedRevision`.
+`actionDisplay` is `icons`, `text` or `both`; the two motion values are booleans.
+Successful writes persist atomically before returning and broadcasting the full
+snapshot as `presentation-settings-updated`. Invalid input returns 400, a stale
+revision returns 409 with `current`, and unavailable persistence returns 503.
+Settings live in `DATA_DIR/presentation-preferences.json`; a client's system
+reduced-motion preference affects rendering without rewriting the shared choices.
+
+---
+
+### Bookmarks
+
+Songr Bookmarks save tracks, albums and artists independently of Roon Favorites.
+Entries store display metadata, not Roon item keys. Songr opens an album or
+artist only when its metadata identifies one current public library row;
+otherwise it opens Search for a fresh selection. Tracks open Search.
+
+Bookmarks persist on the connected Songr server, including the desktop app's
+embedded server. The `/favorites` endpoints and `FAVORITES_PATH` setting retain
+their existing names for compatibility. All endpoints return the full current
+list. Other clients see changes on their next fetch; there is no bookmark
+Socket.IO broadcast.
 
 #### GET /favorites
 
@@ -192,7 +216,7 @@ favorite against Roon search when clicked. Persisted to
 ```
 
 #### POST /favorites
-Add a favorite. Idempotent on `(type, title, artist, album)`.
+Add a bookmark. Idempotent on `(type, title, artist, album)`.
 
 **Request**:
 ```json
@@ -202,12 +226,12 @@ Add a favorite. Idempotent on `(type, title, artist, album)`.
 **Response**: `{ "entries": [...] }` (400 on invalid payload)
 
 #### DELETE /favorites/:id
-Remove a favorite by id. Idempotent.
+Remove a bookmark by id. Idempotent.
 
 **Response**: `{ "entries": [...] }`
 
-All three return **503** when favorites persistence is degraded
-(unreadable favorites file — fix or remove the file and restart).
+All three return **503** when bookmark persistence is degraded
+(unreadable or invalid data at `FAVORITES_PATH`; repair the file and restart).
 
 ---
 
@@ -499,7 +523,7 @@ Shared TypeScript contracts are organized by boundary rather than collected in
 one file:
 
 - `src/shared/types.ts` — common Core, zone, transport, queue, health,
-  favorites, and recently-played API types
+  bookmark (legacy `Favorite*` names), and recently-played API types
 - `src/shared/classicBrowseContracts.ts` — browse-session wire contract (the
   legacy filename matches the retained `classic-*` protocol identifiers)
 - `src/shared/browseHierarchies.ts` — accepted public browse hierarchy values

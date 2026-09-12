@@ -1,0 +1,2589 @@
+{
+  "schemaVersion": 3,
+  "title": "Songr 1.4.3 Bookmarks candidate review",
+  "currentCandidate": {
+    "applicationVersion": "1.4.3",
+    "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5"
+  },
+  "generatedAt": "2026-09-11T13:31:42.838959+00:00",
+  "reviewStatus": "capture-review-pending",
+  "publicationStatus": "pending-owner-review",
+  "counts": {
+    "views": 45,
+    "referencedPngFiles": 89,
+    "freshPngFiles": 50,
+    "retainedPngFiles": 39,
+    "themePairs": 44,
+    "nativeDarkOnly": 1
+  },
+  "localImageBundle": true,
+  "previousGallery": "../1.4.3/README.md",
+  "retainedManifest": "../1.4.3/manifest.json",
+  "captureReceipts": [
+    {
+      "name": "captures.jsonl",
+      "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+    }
+  ],
+  "supersededCaptures": [
+    {
+      "view": "search-selection",
+      "newView": "search-selection",
+      "images": {
+        "light": {
+          "path": "../next/light/search-selection.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 705371,
+          "sha256": "9d615a0bc5bd104560d63017dab96137f8200136fdf210eeb7bda2f8f2738d08",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990"
+        },
+        "dark": {
+          "path": "../next/dark/search-selection.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 528974,
+          "sha256": "3a4abff6d71e92b8c340a8cf678b01bbf02983fd6fbcb8f269de575e94ed111b",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990"
+        }
+      }
+    },
+    {
+      "view": "track-details-observed",
+      "newView": "track-info",
+      "images": {
+        "light": {
+          "path": "../next/light/track-details-observed.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 77705,
+          "sha256": "daf07129432d1e8885bc0aa87781b2d3bc21006d7282b3b5048f49030a7de027",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990"
+        },
+        "dark": {
+          "path": "../next/dark/track-details-observed.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 75157,
+          "sha256": "70e6b01a51afef53518ff04d8307ee85ee45c4148eae3cac6d87fce03e9aa27b",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990"
+        }
+      }
+    },
+    {
+      "view": "about",
+      "newView": "about",
+      "images": {
+        "light": {
+          "path": "../next/light/about.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1122380,
+          "sha256": "6539021327992c797078fdbcdcdc0f965916ab5fddd7eef87111626921a04adb",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990"
+        },
+        "dark": {
+          "path": "../next/dark/about.png",
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1085262,
+          "sha256": "1477bd9f85648f258659074fddc9c029f53af09e5f1443779bd2d97b1bfc9d09",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990"
+        }
+      }
+    },
+    {
+      "view": "artists-album",
+      "newView": "artists-album",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 172529,
+          "sha256": "6578897e6caf0e2d049c47062326718d88333fea186655210d92baf2096826ad",
+          "path": "../1.4.3/light/artists-album.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/artists-album.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 147201,
+          "sha256": "e96393a6a47b418098ebc761c30fb586c00e4127cdabbb880836f0845c035f79",
+          "path": "../1.4.3/dark/artists-album.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/artists-album.png"
+        }
+      }
+    },
+    {
+      "view": "artists-all",
+      "newView": "artists-all",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 159806,
+          "sha256": "dfd3ec4f3b677eca7f21a8d1ebbef7f1ba603473d877b01ad60405d75a217bc2",
+          "path": "../1.4.3/light/artists-all.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/artists-all.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 137761,
+          "sha256": "8afbf96bb830cca73017bfa604dea401da17f3952d8a03f741b037bc287935aa",
+          "path": "../1.4.3/dark/artists-all.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/artists-all.png"
+        }
+      }
+    },
+    {
+      "view": "albums",
+      "newView": "albums",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1241086,
+          "sha256": "b5be46b3cb5343f24d2bb70c2fb4d37810b4f69a256d17304bebf4f1300a567d",
+          "path": "../1.4.3/light/albums.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/albums.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1212268,
+          "sha256": "901007ea1d23f5a8e6101f9d0d8baef302d7e50c002545b320154bda5d465428",
+          "path": "../1.4.3/dark/albums.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/albums.png"
+        }
+      }
+    },
+    {
+      "view": "tracks",
+      "newView": "tracks",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 148994,
+          "sha256": "09a2f80af8e0aedafa83170d907ac96bdf14070f2bc80a5ff319efdee3e54103",
+          "path": "../1.4.3/light/tracks.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/tracks.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 123522,
+          "sha256": "5ba7702a2b32a88bab868f4ce62362f4cadeb112b867f01fc51e61b5b0eccbb9",
+          "path": "../1.4.3/dark/tracks.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/tracks.png"
+        }
+      }
+    },
+    {
+      "view": "tags",
+      "newView": "tags",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 38460,
+          "sha256": "2c66852b5b5a5d8c99afce7b8fc8df6edf82446c0dffb8c635648e65fafbca6b",
+          "path": "../1.4.3/light/tags.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/tags.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 35344,
+          "sha256": "2ae8eaf1c32a6621a6ce361508dc179c61f45734f61cf76d69984a5c56a101fc",
+          "path": "../1.4.3/dark/tags.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/tags.png"
+        }
+      }
+    },
+    {
+      "view": "recently-played",
+      "newView": "recently-played",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 334025,
+          "sha256": "38ab9747b77d2f6c857b94fa667fd0c168a29d30b61b82cd7f051b569af76148",
+          "path": "../1.4.3/light/recently-played.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/recently-played.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 323246,
+          "sha256": "d979d5afc75a25329705ad39325105ba263543dcf81bb9903f19894ef364b931",
+          "path": "../1.4.3/dark/recently-played.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/recently-played.png"
+        }
+      }
+    },
+    {
+      "view": "favorites",
+      "newView": "bookmarks",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 40688,
+          "sha256": "eb25508d9d5cc15ea277a08221a3d09a0aaa34cee96712cacb1cb279291aaec0",
+          "path": "../1.4.3/light/favorites.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/favorites.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 37789,
+          "sha256": "4d9a0dbfa0b6a002fdb0ce63f305768dedda0b96441457cf310f72f9e6fee76c",
+          "path": "../1.4.3/dark/favorites.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/favorites.png"
+        }
+      }
+    },
+    {
+      "view": "more",
+      "newView": "more",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 186657,
+          "sha256": "b90e923cf42bd8e595ea17b4e80c16e36b5252f475eb5a6319d7091c471ee90a",
+          "path": "../1.4.3/light/more.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/more.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 153525,
+          "sha256": "43d5b0077044c9db32abba3b91dbbbc42663472fddaa626413c672c45f3cc32a",
+          "path": "../1.4.3/dark/more.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/more.png"
+        }
+      }
+    },
+    {
+      "view": "search",
+      "newView": "search",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 651919,
+          "sha256": "ddc2cda440979936de3884d8c30e109f26ddfe97f270bbecddd35c6be498c918",
+          "path": "../1.4.3/light/search.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/search.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 483517,
+          "sha256": "943116b22d3a98f06ac87a56a85a8a620747c967ccc4425f5c49d978627e6962",
+          "path": "../1.4.3/dark/search.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/search.png"
+        }
+      }
+    },
+    {
+      "view": "album-artist",
+      "newView": "album-artist",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 225793,
+          "sha256": "48d303d43298d0be3d5184723187245f5b25c3fbc986e332803876fd51a1b8ae",
+          "path": "../1.4.3/light/album-artist.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/album-artist.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 216488,
+          "sha256": "661bcce9a66319e6e6e4635108defe09e28d16d6ef53c6d564d3dda532dd6743",
+          "path": "../1.4.3/dark/album-artist.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/album-artist.png"
+        }
+      }
+    },
+    {
+      "view": "artist",
+      "newView": "artist",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 326924,
+          "sha256": "b6792f7e078e5301534b0ccfc048feddde6ff90b0553b5a6446b993b202dbef9",
+          "path": "../1.4.3/light/artist.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/artist.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 313279,
+          "sha256": "135a2809f1a8f34e1c8df457c43e91865e9b69bf54bf5448f381acc6554369eb",
+          "path": "../1.4.3/dark/artist.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/artist.png"
+        }
+      }
+    },
+    {
+      "view": "album",
+      "newView": "album",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 106445,
+          "sha256": "4d0cff748ecf956d3a22cb071f3568dbca00ab3533f5f86ec0bb78d2cc892815",
+          "path": "../1.4.3/light/album.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/album.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 97983,
+          "sha256": "f9131ea99722f18acee8c3a69fa66441bbb31fc899aa7bbf65da49011c681546",
+          "path": "../1.4.3/dark/album.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/album.png"
+        }
+      }
+    },
+    {
+      "view": "tagged-album",
+      "newView": "tagged-album",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 110626,
+          "sha256": "6be7c2efc76d6ede8f1f46088ad84c11b449da58dfe7b376ba73e21d5927fdf3",
+          "path": "../1.4.3/light/tagged-album.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/tagged-album.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 101980,
+          "sha256": "68e35bf710738317a93818ee2f37fcba1565113c236b046462ce8a715ac497ff",
+          "path": "../1.4.3/dark/tagged-album.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/tagged-album.png"
+        }
+      }
+    },
+    {
+      "view": "tagged-artist",
+      "newView": "tagged-artist",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 798148,
+          "sha256": "ab08f40587f28b375a2a4d965042a8de09a245618895ce06ca0589aa15709200",
+          "path": "../1.4.3/light/tagged-artist.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/tagged-artist.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 775133,
+          "sha256": "5ecfa2f9f9edf1453c0779d1b480689f9698396084df3e12f6369062420a0887",
+          "path": "../1.4.3/dark/tagged-artist.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/tagged-artist.png"
+        }
+      }
+    },
+    {
+      "view": "tracks-selection",
+      "newView": "tracks-selection",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 105677,
+          "sha256": "8d09cc4c05c0385f154d83a58321280a575749d2df7c0bdd39307f7f63b191c8",
+          "path": "../1.4.3/light/tracks-selection.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/tracks-selection.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 94121,
+          "sha256": "a9690254f005850bf9201bbe864d70de501056a559c2b62b5f237a6696e82405",
+          "path": "../1.4.3/dark/tracks-selection.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/tracks-selection.png"
+        }
+      }
+    },
+    {
+      "view": "track-actions",
+      "newView": "track-actions",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 109104,
+          "sha256": "753778adc830f6b342573358ec5d18379a1f419a208b40f1718e9b2674359f66",
+          "path": "../1.4.3/light/track-actions.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/track-actions.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 94936,
+          "sha256": "38486116c2321f7055022b40495977f987478a4e148cecdf9e2258ce994446af",
+          "path": "../1.4.3/dark/track-actions.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/track-actions.png"
+        }
+      }
+    },
+    {
+      "view": "album-selection",
+      "newView": "album-selection",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 107042,
+          "sha256": "498b7c7183b8d9268260eb70f00f52147fc2c8edad96731f65093bd20a990a2f",
+          "path": "../1.4.3/light/album-selection.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/album-selection.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 99904,
+          "sha256": "2b67fe1295a53c017f2cb19f65e34862db55030e2bd65a4167684510e5e38923",
+          "path": "../1.4.3/dark/album-selection.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/album-selection.png"
+        }
+      }
+    },
+    {
+      "view": "search-selection",
+      "newView": "search-selection",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 226421,
+          "sha256": "aa8bdc63af54d82424493b25eaba30f074d4d0e8fe954c5a5c09bf5ced467d96",
+          "path": "../1.4.3/light/search-selection.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "3473f6e4534900779d61da354ccb0c2e549537d3",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T12:20:49.060Z"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 144164,
+          "sha256": "487ea1364a9f34efc1ad4f99b5d9009cc15593bac9a48e12b942989dac4722be",
+          "path": "../1.4.3/dark/search-selection.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "3473f6e4534900779d61da354ccb0c2e549537d3",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T12:21:32.912Z"
+        }
+      }
+    },
+    {
+      "view": "queue",
+      "newView": "queue",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 667168,
+          "sha256": "ccb1d25ae6ee6816e7a12ee56d7bcdcd007a36208615a91609dd11c03b92f889",
+          "path": "../1.4.3/light/queue.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/queue.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 529952,
+          "sha256": "00eaa1e70e6a9982d50b9ab54dec6c9ace2c8adacf99942af4940e805f1727e2",
+          "path": "../1.4.3/dark/queue.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/queue.png"
+        }
+      }
+    },
+    {
+      "view": "settings",
+      "newView": "settings",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 196699,
+          "sha256": "fb56a03a2bd4cf1794e71c55b341fd0c5765bca05c5f742db641a115ba90c518",
+          "path": "../1.4.3/light/settings.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/settings.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 149298,
+          "sha256": "3758a81ea5b75bc15a98931b0cc16aaeb63699d507f0e72476024da1246124be",
+          "path": "../1.4.3/dark/settings.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/settings.png"
+        }
+      }
+    },
+    {
+      "view": "settings-navigation",
+      "newView": "settings-navigation",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 724887,
+          "sha256": "c9b1a250250e8a130d2db9547f88893d5946565eb2c22306f32e391cf9255c74",
+          "path": "../1.4.3/light/settings-navigation.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/light/settings-navigation.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 581170,
+          "sha256": "2eb81ab0d94a5e0165c999d2579b9123fe02f9438328861ba20168dfd7a867a6",
+          "path": "../1.4.3/dark/settings-navigation.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "originalPath": "../next/dark/settings-navigation.png"
+        }
+      }
+    },
+    {
+      "view": "about",
+      "newView": "about",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 197209,
+          "sha256": "b8ab7bbbc453632d1de944bafa6942c390ac71fa8b207780f236db5ddc803f80",
+          "path": "../1.4.3/light/about.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "3473f6e4534900779d61da354ccb0c2e549537d3",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T12:20:52.594Z"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 160353,
+          "sha256": "f9a9dd9cdb37936a0b1e67947d175d3eec6ae658183981bc3c09418e8f2bd699",
+          "path": "../1.4.3/dark/about.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "3473f6e4534900779d61da354ccb0c2e549537d3",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T12:21:36.093Z"
+        }
+      }
+    },
+    {
+      "view": "track-info",
+      "newView": "track-info",
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 74250,
+          "sha256": "9d6bb7a896ea4d9b4e74488c62ba09e92a75501b2471c93362972f68a11db1b0",
+          "path": "../1.4.3/light/track-info.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "3473f6e4534900779d61da354ccb0c2e549537d3",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T12:20:49.582Z"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 72073,
+          "sha256": "ed6ea03691074bb345f21077b7c14eb0f411db0e4ca2dbbbce8085050050ac51",
+          "path": "../1.4.3/dark/track-info.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "3473f6e4534900779d61da354ccb0c2e549537d3",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T12:21:33.268Z"
+        }
+      }
+    }
+  ],
+  "coverageNotes": [
+    "50 images were captured from Songr 1.4.3, revision 2bc1267ec554c8320d7f4743f4fe0578e0de59f5. The other 39 images retain their original application version, source revision and bytes; they were not recaptured for this candidate.",
+    "Local capture review only; publication and candidate acceptance remain pending. This inventory is not a functional or performance test.",
+    "Every image is stored inside this gallery folder for local Safari viewing. Retained images are copied byte for byte; no image is recolored, composited or otherwise edited.",
+    "Earlier galleries and their original captures remain intact. Historical images can show earlier labels or controls; their captions identify the exact source.",
+    "No bookmark records are created by this gallery generator. An empty view is retained as an actual capture rather than populated with invented data.",
+    "Live Radio remains experimental and playback-unverified. A retained No Results view does not establish that a station is available.",
+    "There is no available Playlists UI and no standalone Now Playing page; the playback dock appears within the app captures.",
+    "Native desktop server settings has a fixed dark appearance and is shown once; ordinary fresh app scenes have both themes at 1600 × 1000."
+  ],
+  "notCaptured": [
+    {
+      "id": "playlists",
+      "reason": "No available Playlists UI."
+    },
+    {
+      "id": "now-playing",
+      "reason": "No standalone page; the persistent playback dock is captured in the other app views."
+    }
+  ],
+  "publicationPreparation": {
+    "required": true,
+    "action": "Before public gallery publication after acceptance, remove or exclude diagnostic and superseded-observation links from the public README/gallery. Preserve the old gallery locally and retain accurate per-image source attribution."
+  },
+  "views": [
+    {
+      "id": "artists-album",
+      "group": "library",
+      "title": "Album artists",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 172852,
+          "sha256": "f909a2c4ca0ac8d0856e01d9434a6afa906c84eb4406222a25dce85bd62ed870",
+          "path": "light/artists-album.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:22:48.501Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 2,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 147478,
+          "sha256": "46a58aa7498fa571403b4045413a78e2ff6af688c4361fb9bd3b2d66b0746896",
+          "path": "dark/artists-album.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:22:43.151Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 1,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "artists-all",
+      "group": "library",
+      "title": "All artists",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 160148,
+          "sha256": "af65772ece237b39f565968fc648508d782eb6c6df46b6abaa0e550ad30282f8",
+          "path": "light/artists-all.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:25:58.566Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 24,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 137945,
+          "sha256": "9a2d1ae1ddfebacf1ef6edb22c61bc12a8fd6f26b57faf803e396a3fba985e39",
+          "path": "dark/artists-all.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:25:54.734Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 23,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "albums",
+      "group": "library",
+      "title": "Albums",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1241332,
+          "sha256": "4320e12ed7b0076dd66ccd2d3b48a63d04bbf02d9b2fe16977a19a7150965964",
+          "path": "light/albums.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:22:49.874Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 3,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1212118,
+          "sha256": "53150537936f407b4f0fadffac2640b0ef8f37eb8a60e3879caad54a1e42da7f",
+          "path": "dark/albums.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:22:50.836Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 4,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "genres",
+      "group": "library",
+      "title": "Genres",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 97751,
+          "sha256": "1b6650d2f11c0bc4c0d15bc3659ecc4c1da04c6111c42625b6c8706c1b659f0f",
+          "path": "light/genres.png",
+          "originalPath": "../1.4.3/light/genres.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/genres.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 87620,
+          "sha256": "c0183a8bff9a8814a047faefebed3d043e8e227d1d77afb8b4a11ea37970543c",
+          "path": "dark/genres.png",
+          "originalPath": "../1.4.3/dark/genres.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/genres.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "tracks",
+      "group": "library",
+      "title": "Tracks",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 149280,
+          "sha256": "ed2fc1caa57b13d60308ca73f93acfa65a11fdf3a47b69b83ada0fffb2e20d63",
+          "path": "light/tracks.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:24:29.412Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 12,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 123854,
+          "sha256": "e2e89dd9d2e493447d89a01ec76edb2762213c49b670442bf691711d7dab5cd7",
+          "path": "dark/tracks.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:24:27.602Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 11,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "composers",
+      "group": "library",
+      "title": "Composers",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 97431,
+          "sha256": "0af238772fd92f55dd198b228881fa3f3e52fb4ae3d58ab3ce7e5069216e5264",
+          "path": "light/composers.png",
+          "originalPath": "../1.4.3/light/composers.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/composers.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 87033,
+          "sha256": "2e8d44146b6509d8f286b8984ab0e1f588d767341b9dd03fba4474dfa4ffb3f1",
+          "path": "dark/composers.png",
+          "originalPath": "../1.4.3/dark/composers.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/composers.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "composers-filtered",
+      "group": "library",
+      "title": "Composers — filtered",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 85316,
+          "sha256": "8223781c745b837d74e87564f06c7b2cf6c1def513f54e7d21dca9aa036d1706",
+          "path": "light/composers-filtered.png",
+          "originalPath": "../1.4.3/light/composers-filtered.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/composers-filtered.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 77514,
+          "sha256": "e1fa1daa4239f4a2165b75e5f88838363a319d8b80121ab9faf9d1bae76b7952",
+          "path": "dark/composers-filtered.png",
+          "originalPath": "../1.4.3/dark/composers-filtered.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/composers-filtered.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "tags",
+      "group": "library",
+      "title": "Tags",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 38622,
+          "sha256": "3f920d3f8e627737e9b9d09b8d53eb4f350e51e6158caea55dd35d3b59ea2515",
+          "path": "light/tags.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:26:15.226Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 28,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 35423,
+          "sha256": "28268f15bc3ff236a4f3f9f0b663571427131a4db48d16e8bff7d600c41a3b3a",
+          "path": "dark/tags.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:26:14.872Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 27,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "radio",
+      "group": "library",
+      "title": "Live radio",
+      "status": "retained-capture",
+      "note": "Roon returned “No Results” at capture time. The displayed count is not a claim that one station is available.",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 35460,
+          "sha256": "62cf1c2b39079aa5a950d8e1d0075f86232d08583e5d8eb05f2826fd0a8f609a",
+          "path": "light/radio.png",
+          "originalPath": "../1.4.3/light/radio.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/radio.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 32571,
+          "sha256": "f238bcf469cb92dda4b2a56a38612b63a0ad189f16531f1213cd541f2cfa747c",
+          "path": "dark/radio.png",
+          "originalPath": "../1.4.3/dark/radio.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/radio.png"
+        }
+      },
+      "previousDescription": "Roon returned “No Results” at capture time. The displayed count is not a claim that one station is available."
+    },
+    {
+      "id": "recently-played",
+      "group": "library",
+      "title": "Recently played",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 334623,
+          "sha256": "00de39aa2e1a48dfe510cb70307e53a2fa446302e8eccf82795eb99e904b5fbf",
+          "path": "light/recently-played.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:29:05.537Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 40,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 323468,
+          "sha256": "4a32720327ec0b301146afe7369b528f585230d7130a7cc13b2adeeaac07749d",
+          "path": "dark/recently-played.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:29:05.138Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 39,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "bookmarks",
+      "group": "library",
+      "title": "Bookmarks",
+      "status": "captured-review-pending",
+      "note": "The real Songr Bookmarks list was empty at capture time.",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 40669,
+          "sha256": "17281c1ca8605dc2f7edbb9e67ce603621369248c98511d0309430acd4098176",
+          "path": "light/bookmarks.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:22:51.609Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 6,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 37796,
+          "sha256": "f94036a49376ffcd5fb2a7c311ff44ba2bfff8f6e0d5a517552d9a5a0478ef8a",
+          "path": "dark/bookmarks.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:22:51.250Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 5,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "surprise",
+      "group": "library",
+      "title": "Surprise me",
+      "status": "retained-capture",
+      "note": "The selection is generated from the real library; the two captures can show different suggestions.",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1138665,
+          "sha256": "a6dec9acda40b0d208e9c5a3699ca04a9c6dc61f8f972b9c66585826ade4aa95",
+          "path": "light/surprise.png",
+          "originalPath": "../1.4.3/light/surprise.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/surprise.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 609456,
+          "sha256": "bf6090cec196023508b35efa096be119a6daf23dcda07e2559d56ab259e1a13a",
+          "path": "dark/surprise.png",
+          "originalPath": "../1.4.3/dark/surprise.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/surprise.png"
+        }
+      },
+      "previousDescription": "The selection is generated from the real library; the two captures can show different suggestions."
+    },
+    {
+      "id": "more",
+      "group": "library",
+      "title": "More navigation",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 55693,
+          "sha256": "3161cc4ce556a95f4c2dc443a950061280e52bd750b104bfe847623611f911d8",
+          "path": "light/more.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:23:21.299Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 7,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 44653,
+          "sha256": "e69163e617db05ae41c34f65809a514447c2d00c309036974335de26f3fbb52f",
+          "path": "dark/more.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:24:09.058Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 10,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "search",
+      "group": "library",
+      "title": "Search",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 599078,
+          "sha256": "bd7615c7ffe0dffe4abbcde12700a3cbe52a51af336c34035ed60d42b6a3c712",
+          "path": "light/search.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:27:47.144Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 33,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 440049,
+          "sha256": "245e57ca4e1c5e68d8c668eb1c4927723885b40845021a7dd198b95043472456",
+          "path": "dark/search.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:28:55.979Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 37,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "album-artist",
+      "group": "details",
+      "title": "Album-artist collection",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 226098,
+          "sha256": "c32416cc20e79690447fe8b2bfec150cb5a646464633232e7528a40dc089b8de",
+          "path": "light/album-artist.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:25:11.362Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 17,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 216682,
+          "sha256": "e6406864f7a62e6c8b19f3bf07759e46c9936836e6495db0c472b89ab7eabd9c",
+          "path": "dark/album-artist.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:25:15.647Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 18,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "artist",
+      "group": "details",
+      "title": "Artist",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 331868,
+          "sha256": "e96329e1708b02e43870b695e2d460d410dd9604cfa219df9b23d20d3deb004f",
+          "path": "light/artist.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:26:01.370Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 25,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 318402,
+          "sha256": "3852ed6f84030cdae46c6685a50635f0ce8065bf8f5a2ee58c98e2a442296f9d",
+          "path": "dark/artist.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:26:01.784Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 26,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "album",
+      "group": "details",
+      "title": "Album",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 110307,
+          "sha256": "cdf71ea6004825f1c732d5f6b990fb10bd63cfd027e486efeb5bb895c7b975b4",
+          "path": "light/album.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:25:27.444Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 20,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 101207,
+          "sha256": "cc0e1c06b529f8e5274e781e4acb5906338e3a5e203f5dc605037e849370221d",
+          "path": "dark/album.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:25:27.051Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 19,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "genre",
+      "group": "details",
+      "title": "Genre",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 760294,
+          "sha256": "ea5a54cc773537d45dc65b02f5ff79c2cbf92f68c14537b893060b756e960eb4",
+          "path": "light/genre.png",
+          "originalPath": "../1.4.3/light/genre.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/genre.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 715344,
+          "sha256": "5443936fb87c49007b20201b675efb7f4a08e312401970cd6054a930f84c4fa2",
+          "path": "dark/genre.png",
+          "originalPath": "../1.4.3/dark/genre.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/genre.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "genre-artists",
+      "group": "details",
+      "title": "Genre artists",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 88013,
+          "sha256": "bc73d14c3fa1ab67b9fd32c8f7ea9b8e0bac33df098ba8c04e7cfba67093b3b9",
+          "path": "light/genre-artists.png",
+          "originalPath": "../1.4.3/light/genre-artists.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/genre-artists.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 79881,
+          "sha256": "dc16c903a1cb4cb6d6e81e7ebc40d5cd33f46ec7e461a339dd2d9c9de29968b3",
+          "path": "dark/genre-artists.png",
+          "originalPath": "../1.4.3/dark/genre-artists.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/genre-artists.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "genre-albums",
+      "group": "details",
+      "title": "Genre albums",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 936052,
+          "sha256": "2ee62f6fb2bb97c318913670836c018798fea342993adc380270546c8cdb30c9",
+          "path": "light/genre-albums.png",
+          "originalPath": "../1.4.3/light/genre-albums.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/genre-albums.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 899069,
+          "sha256": "89ba69433e879e2e363c0307109a1b1155acb7dd26d58b7bd5bd988b3027e023",
+          "path": "dark/genre-albums.png",
+          "originalPath": "../1.4.3/dark/genre-albums.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/genre-albums.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "compositions",
+      "group": "details",
+      "title": "Composer compositions",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 198607,
+          "sha256": "dcda994f222f0bea600e1fcfb55a9e02d7f6f3a763f1f458ddef6e1b241b915f",
+          "path": "light/compositions.png",
+          "originalPath": "../1.4.3/light/compositions.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/compositions.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 160833,
+          "sha256": "f1cfb9662bd309deced540efbe65454aa8c7e110d70c74c87c06cd24f94b0b70",
+          "path": "dark/compositions.png",
+          "originalPath": "../1.4.3/dark/compositions.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/compositions.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "recordings",
+      "group": "details",
+      "title": "Composition recordings",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 132293,
+          "sha256": "a498466d389e21b2f1c2e2515ae1c204649fa890980d280e0597e3acd525e416",
+          "path": "light/recordings.png",
+          "originalPath": "../1.4.3/light/recordings.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/recordings.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 111820,
+          "sha256": "14d859cbbdb3b800b50942e870f6eca3b5c1894e2f8767832b8f140123ce92fa",
+          "path": "dark/recordings.png",
+          "originalPath": "../1.4.3/dark/recordings.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/recordings.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "tag-albums",
+      "group": "details",
+      "title": "Tag contents — albums",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 39488,
+          "sha256": "5394a7f8d9f6a90205444024040e5ad86464e0b9e06e9dd3faf6011d76973efa",
+          "path": "light/tag-albums.png",
+          "originalPath": "../1.4.3/light/tag-albums.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/tag-albums.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 36104,
+          "sha256": "db58f9825487d3cae4a44d8a8fd2b3335be1b030847f7f78d3bc4cc5595cbef8",
+          "path": "dark/tag-albums.png",
+          "originalPath": "../1.4.3/dark/tag-albums.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/tag-albums.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "tag-artists",
+      "group": "details",
+      "title": "Tag contents — artists",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 41006,
+          "sha256": "6b5e266edcc34e8ee927d31005a03c9fc400f182c840d2b4023313817e30541a",
+          "path": "light/tag-artists.png",
+          "originalPath": "../1.4.3/light/tag-artists.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/tag-artists.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 37353,
+          "sha256": "27d2a71953292bbc7db58201ed77b45abc8dbf6a27c9ed41a0706a2a384889b0",
+          "path": "dark/tag-artists.png",
+          "originalPath": "../1.4.3/dark/tag-artists.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/tag-artists.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "tag-works",
+      "group": "details",
+      "title": "Tag contents — works",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 41171,
+          "sha256": "a69546cab5a31ba40e610f1df0ee458ba58107c3d032675e9503ed70769417da",
+          "path": "light/tag-works.png",
+          "originalPath": "../1.4.3/light/tag-works.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/tag-works.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 37513,
+          "sha256": "512b8d9eec6b36b969984a1d66b9d9f0e0fa67e02026e6f7f955b7d1b35ef028",
+          "path": "dark/tag-works.png",
+          "originalPath": "../1.4.3/dark/tag-works.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/tag-works.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "tagged-album",
+      "group": "details",
+      "title": "Tagged album",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 111317,
+          "sha256": "55bbddf4307b07cf9329ba1741ec4a0049859933446ad996c94622beefdbc46c",
+          "path": "light/tagged-album.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:26:26.088Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 29,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 102618,
+          "sha256": "72900b417cae63631b06c7ddadf2b0cba95774e54094ba801ecab1026320555b",
+          "path": "dark/tagged-album.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:26:26.466Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 30,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "tagged-artist",
+      "group": "details",
+      "title": "Tagged artist",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 799899,
+          "sha256": "417f2977540087aa0593318428840aaa41669bc9a09f16dd0c7dc2160292ede9",
+          "path": "light/tagged-artist.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:26:28.385Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 32,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 777005,
+          "sha256": "b8d18578fd6100aba7bd1c41cea2eceb2af7d2b6adbd77f660b00cf02a95478e",
+          "path": "dark/tagged-artist.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:26:27.946Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 31,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "tagged-work",
+      "group": "details",
+      "title": "Tagged work",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 58590,
+          "sha256": "7fd9fe6f8f15f182168313509dab16cfa7406db762e93401e30c121f18e853ed",
+          "path": "light/tagged-work.png",
+          "originalPath": "../1.4.3/light/tagged-work.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/tagged-work.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 52548,
+          "sha256": "ef4e84235f7b36687833f276fdb210ae67793c33e0e9b30ebaee2294fa6ff3fb",
+          "path": "dark/tagged-work.png",
+          "originalPath": "../1.4.3/dark/tagged-work.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/tagged-work.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "tracks-selection",
+      "group": "selection",
+      "title": "Track selection",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 149614,
+          "sha256": "c5adb151fe0e914a416e7d81719f9be20b79bb4d9b56dc35befd379dd545e78b",
+          "path": "light/tracks-selection.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:24:31.753Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 13,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 125535,
+          "sha256": "76ebcd6538896a1f62f8c91abf30e41684b1a62c8a77a790fe597ceec83d88dd",
+          "path": "dark/tracks-selection.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:24:33.606Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 14,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "track-actions",
+      "group": "selection",
+      "title": "Selected track actions",
+      "status": "captured-review-pending",
+      "note": "Shared controls for the selected tracks.",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 149037,
+          "sha256": "d22b690dc60c0c7afe32299789c019223c02727717557eeeb5554ab408481232",
+          "path": "light/track-actions.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:24:38.266Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 16,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 128593,
+          "sha256": "6cc23eb8ebead63d2783ac3f1dcab269d126c564ca65ddf3a9d083437d8f7b61",
+          "path": "dark/track-actions.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:24:36.411Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 15,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "album-selection",
+      "group": "selection",
+      "title": "Album track selection",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 110824,
+          "sha256": "c0b6c345218ffbcfc479b630085dd930fe50a92656bf870a7da2e12b626779b7",
+          "path": "light/album-selection.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:25:43.289Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 21,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 102495,
+          "sha256": "1a457f4412f0714e6dce1a6ec28953d5f931e0d82ae6be9d7884fcbf383a086b",
+          "path": "dark/album-selection.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:25:43.670Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 22,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "recordings-selection",
+      "group": "selection",
+      "title": "Recording selection",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 133048,
+          "sha256": "b624285f44b75e3b8e1297b0ca497bb3fbcf9db9a2000b4710e40e726e23d1c6",
+          "path": "light/recordings-selection.png",
+          "originalPath": "../1.4.3/light/recordings-selection.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/recordings-selection.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 116797,
+          "sha256": "e22b4820d2b2b8d721695ac39f5ff54bd3291e55fea6a86ee6ae05d6816f67be",
+          "path": "dark/recordings-selection.png",
+          "originalPath": "../1.4.3/dark/recordings-selection.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/recordings-selection.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "search-selection",
+      "group": "selection",
+      "title": "Search selection",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 600048,
+          "sha256": "3d38bc7bb0e41262090722ad270de1d35a4102e549b2565978d3fe1674478df5",
+          "path": "light/search-selection.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:28:22.784Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 34,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 441507,
+          "sha256": "abdff57d5baeb3e9ccba7b0b3bfdf60c6af709aa829b4bda3f8367bd0fb6bf37",
+          "path": "dark/search-selection.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:28:56.289Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 38,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "queue",
+      "group": "playback",
+      "title": "Queue",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 257921,
+          "sha256": "0b62b0f63db8f357fc4fbeaefdbc4a4f0ba921df70957f4cf1cce3ed47406f8e",
+          "path": "light/queue.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:30:17.631Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 52,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 199123,
+          "sha256": "bcbcdd116ced6f8b95ccd31375a3e292aac2662d85f26a5efc5df93d69dc7fbb",
+          "path": "dark/queue.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:29:20.638Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 43,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "zones",
+      "group": "playback",
+      "title": "Zones",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1145208,
+          "sha256": "247c1d40716f806d4555d9c4cbd5247397c73e679bff5d05148e391fc6ffd8fe",
+          "path": "light/zones.png",
+          "originalPath": "../1.4.3/light/zones.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/zones.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 1110428,
+          "sha256": "28f64add9540afe38d6a3c098068b15fb84111683f0afd595376cd7c5babad02",
+          "path": "dark/zones.png",
+          "originalPath": "../1.4.3/dark/zones.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/zones.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "grouping",
+      "group": "playback",
+      "title": "Zone grouping",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 893194,
+          "sha256": "e282a4d215bb0c6a7d3cea3101af4c23a70cbf55f37db2296eb15fcf6edc64ad",
+          "path": "light/grouping.png",
+          "originalPath": "../1.4.3/light/grouping.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/grouping.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 719642,
+          "sha256": "3d71905b7bf5d5305a72fbad90277db007264d182943e3e959f58c565a997edf",
+          "path": "dark/grouping.png",
+          "originalPath": "../1.4.3/dark/grouping.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/grouping.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "settings",
+      "group": "settings",
+      "title": "Controller settings",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 247247,
+          "sha256": "de9a444871143d7b6f837b12ba39c0b907c0391f853935c5503bf509bcf3e203",
+          "path": "light/settings.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:30:04.336Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 47,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 199077,
+          "sha256": "00223cda454dc26e490328c8fb283465f048dc428e6302e01443a7257b1f39e9",
+          "path": "dark/settings.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:30:04.785Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 48,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "settings-navigation",
+      "group": "settings",
+      "title": "Library navigation settings",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 243150,
+          "sha256": "ec8318d8ed5f58059f147ebf5ef10956272d12fae5a46f730ed77ad7c60bb3d1",
+          "path": "light/settings-navigation.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:30:17.279Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 51,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 195126,
+          "sha256": "3981370560932015d5f71d0a0de89a4e1819284aa6a5faebd6b4e104ce06db7e",
+          "path": "dark/settings-navigation.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:30:16.930Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 50,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "settings-roon",
+      "group": "settings",
+      "title": "Roon settings",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 722018,
+          "sha256": "a17b8c0c10ae900113a8116bb9c184d5784287c3b468d24e084f0652be8cdfed",
+          "path": "light/settings-roon.png",
+          "originalPath": "../1.4.3/light/settings-roon.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/settings-roon.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 580276,
+          "sha256": "7c852db86907ac407bdf883cd45daa5313449e9eb99b20dcb75572e2f7e0b949",
+          "path": "dark/settings-roon.png",
+          "originalPath": "../1.4.3/dark/settings-roon.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/settings-roon.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "settings-roon-display",
+      "group": "settings",
+      "title": "Roon display settings",
+      "status": "retained-capture",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 725189,
+          "sha256": "b2d0b6c30d08bf96fc9faf5fb37aedb7278f025b968d762f8e2e5925dcd9e802",
+          "path": "light/settings-roon-display.png",
+          "originalPath": "../1.4.3/light/settings-roon-display.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/light/settings-roon-display.png"
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 582617,
+          "sha256": "a0f9066ec42cbaa2ae59f1e2b0ecb2293c14c7e53a28df850ef5c63ba0aef0d4",
+          "path": "dark/settings-roon-display.png",
+          "originalPath": "../1.4.3/dark/settings-roon-display.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/settings-roon-display.png"
+        }
+      },
+      "previousDescription": ""
+    },
+    {
+      "id": "desktop-server-settings",
+      "group": "settings",
+      "title": "Desktop server settings",
+      "status": "retained-fixed-dark-native",
+      "note": "Native Advanced Settings uses a fixed dark appearance. Captured at 1240 × 1456 pixels from its 620 × 728 CSS-pixel window; there is no light variant.",
+      "paired": false,
+      "images": {
+        "dark": {
+          "width": 1240,
+          "height": 1456,
+          "bytes": 184232,
+          "sha256": "46d0bb0f89d4fd19046180a2689226f874a6d6faf819ebed610456c081352f3e",
+          "path": "dark/desktop-server-settings.png",
+          "originalPath": "../1.4.3/dark/desktop-server-settings.png",
+          "applicationVersion": "1.4.2",
+          "sourceRevision": "ae462990",
+          "captureKind": "retained",
+          "capturedAt": null,
+          "earliestOriginalPath": "../next/dark/desktop-server-settings.png"
+        }
+      },
+      "previousDescription": "Native Advanced Settings uses a fixed dark appearance. Captured at 1240 × 1456 pixels from its 620 × 728 CSS-pixel window; there is no light variant."
+    },
+    {
+      "id": "about",
+      "group": "settings",
+      "title": "About",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 364051,
+          "sha256": "c2a0b22726fbae82addd002d4904344ad581a40647e3c7e1ac12e5927a9d0377",
+          "path": "light/about.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:30:30.016Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 54,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 341969,
+          "sha256": "00b39a592e79fa56bf8c1ec9501262b7a5b62ea887b56d1df99a83d09015ac62",
+          "path": "dark/about.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:30:30.475Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 55,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "track-info",
+      "group": "details",
+      "title": "Track Info",
+      "status": "captured-review-pending",
+      "note": "",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 73493,
+          "sha256": "cab36141c35f4eabc51c06c2de073cf70e9d39cc9c6044d7c4bb914e04f1fe11",
+          "path": "light/track-info.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:28:23.164Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 35,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 71234,
+          "sha256": "6e49ffdf84bdc7af074f7845c7f739165b576683dc3bb710bddd17990fcff2d8",
+          "path": "dark/track-info.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:28:23.791Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 36,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "queue-selection",
+      "group": "playback",
+      "title": "Queue selection",
+      "status": "captured-review-pending",
+      "note": "The existing queue item is selected; no playback action was performed for this capture.",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 258359,
+          "sha256": "7758b06bac02eb83500c16c1bffd55163423131ae154113f538b24b934a376ab",
+          "path": "light/queue-selection.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:30:17.924Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 53,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 200152,
+          "sha256": "21dfea5cfad9e08b11ec602e3151237cf2ed1b57d00e3c7fdbf895021ab0f3b7",
+          "path": "dark/queue-selection.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:29:20.932Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 44,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    },
+    {
+      "id": "recently-played-selection",
+      "group": "selection",
+      "title": "Recently played selection",
+      "status": "captured-review-pending",
+      "note": "Selection from this Songr server’s recorded history.",
+      "paired": true,
+      "images": {
+        "light": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 337219,
+          "sha256": "bd6bd3b42dd8b5d111ce77d7e6ca01b04556d64aa15e9677bef1ffd41126612d",
+          "path": "light/recently-played-selection.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:29:05.859Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 41,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        },
+        "dark": {
+          "width": 1600,
+          "height": 1000,
+          "bytes": 326622,
+          "sha256": "47506b8cb448ebb6c9aa267e1c0a7300520af2278c20902084efd2fb94aa1202",
+          "path": "dark/recently-played-selection.png",
+          "applicationVersion": "1.4.3",
+          "sourceRevision": "2bc1267ec554c8320d7f4743f4fe0578e0de59f5",
+          "captureKind": "fresh",
+          "capturedAt": "2026-09-11T13:29:06.255Z",
+          "captureReceipt": {
+            "name": "captures.jsonl",
+            "line": 42,
+            "sha256": "94223113ece155df41557527911649a3920397e84e00985444e291f9dba93b7d"
+          }
+        }
+      }
+    }
+  ]
+}

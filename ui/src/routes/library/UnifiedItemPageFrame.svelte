@@ -19,6 +19,7 @@
 		summary?: string | null;
 		/** Extra header controls (e.g. a sort menu). */
 		headerExtra?: Snippet;
+		headingActions?: Snippet;
 		children: Snippet;
 	}
 
@@ -31,6 +32,7 @@
 		onBack,
 		summary = null,
 		headerExtra,
+		headingActions,
 		children
 	}: Props = $props();
 
@@ -54,9 +56,10 @@
 		<button type="button" class="back" data-testid={backTestId} onclick={onBack}>
 			← {backLabel}
 		</button>
-		<h2 tabindex="-1" bind:this={headingElement} data-testid={headingTestId}>
-			{heading}
-		</h2>
+		<div class="entity-identity">
+			<h2 tabindex="-1" bind:this={headingElement} data-testid={headingTestId}>{heading}</h2>
+			{#if headingActions}<div class="entity-heading-actions">{@render headingActions()}</div>{/if}
+		</div>
 		{#if summary}
 			<span class="n mono" data-testid="unified-item-summary">{summary}</span>
 		{/if}
@@ -68,6 +71,9 @@
 </section>
 
 <style>
+	.entity-identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+	.entity-identity h2 { min-width: 0; }
+	.entity-heading-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 	.item-page {
 		display: flex;
 		min-height: 0;

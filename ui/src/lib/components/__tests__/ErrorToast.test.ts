@@ -51,9 +51,9 @@ describe('ErrorToast', () => {
 			source: 'browse',
 			command: 'favorites',
 			kind: 'success',
-			message: 'Added "Lio-Marcus Mendel" to favorites.'
+			message: 'Added "Lio-Marcus Mendel" to bookmarks.'
 		});
-		expect(await screen.findByText('Added "Lio-Marcus Mendel" to favorites.')).toBeInTheDocument();
+		expect(await screen.findByText('Added "Lio-Marcus Mendel" to bookmarks.')).toBeInTheDocument();
 		// Heading is just the source label — no "Error", no ⚠️.
 		expect(screen.getByText('Browse')).toBeInTheDocument();
 		expect(screen.queryByText(/browse error/i)).toBeNull();
@@ -88,14 +88,14 @@ describe('ErrorToast', () => {
 			source: 'browse',
 			command: 'favorites',
 			kind: 'success',
-			message: 'Added "Abbey Road" to favorites.'
+			message: 'Added "Abbey Road" to bookmarks.'
 		});
 		pushCommandFeedback({
 			source: 'transport',
 			command: 'transport:play-pause',
 			message: 'Roon rejected the command'
 		});
-		expect(await screen.findByText('Added "Abbey Road" to favorites.')).toBeInTheDocument();
+		expect(await screen.findByText('Added "Abbey Road" to bookmarks.')).toBeInTheDocument();
 		expect(screen.getByText('Roon rejected the command')).toBeInTheDocument();
 	});
 

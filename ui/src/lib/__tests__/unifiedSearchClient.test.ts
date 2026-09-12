@@ -128,53 +128,6 @@ describe('UnifiedSearchClient', () => {
 		);
 	});
 
-	it('requests one correlated allowlisted relationship for the retained song', async () => {
-		const { client, emit } = makeClient({
-			success: true,
-			data: {
-				requestId: 'request-1',
-				session: { handleId: 'handle-1', generation: 7 },
-				resultId: 'song-result-1',
-				songTitle: 'Dear Theodosia',
-				albums: [
-					{
-						albumLocalId: 'album-1',
-						artistLocalId: 'artist-1',
-						title: 'Hamilton',
-						artist: 'Orlando Ballet Chorus',
-						editionText: ''
-					}
-				],
-				composerLabels: ['Lio-Marcus Mendel']
-			}
-		});
-
-		await expect(client.relationship(claim, 'song-result-1')).resolves.toEqual({
-			songTitle: 'Dear Theodosia',
-			albums: [
-				{
-					albumLocalId: 'album-1',
-					artistLocalId: 'artist-1',
-					title: 'Hamilton',
-					artist: 'Orlando Ballet Chorus',
-					editionText: ''
-				}
-			],
-			composerLabels: ['Lio-Marcus Mendel']
-		});
-		expect(emit).toHaveBeenCalledWith(
-			expect.anything(),
-			'unified-search:relationship',
-			{
-				requestId: 'request-1',
-				tabId: 'tab-1',
-				session: { handleId: 'handle-1', generation: 7 },
-				resultId: 'song-result-1'
-			},
-			expect.objectContaining({ timeoutMs: expect.any(Number) })
-		);
-	});
-
 	it('sends one correlated semantic action for an opaque result', async () => {
 		const { client, emit } = makeClient({
 			success: true,
@@ -203,6 +156,36 @@ describe('UnifiedSearchClient', () => {
 				semantic: 'queue'
 			},
 			expect.objectContaining({ timeoutMs: expect.any(Number) })
+		);
+	});
+
+	it('checks the batch guard immediately before sending the exact selected song action', async () => {
+		const { client, emit } = makeClient({
+			success: true,
+			data: {
+				requestId: 'request-1',
+				session: { handleId: 'handle-1', generation: 7 },
+				resultId: 'selected-second-duplicate',
+				semantic: 'add-next',
+				outcome: 'executed',
+				authorityRetired: false
+			}
+		});
+		const beforeDispatch = vi.fn(() => {
+			expect(emit).not.toHaveBeenCalled();
+		});
+
+		await client.action(claim, 'selected-second-duplicate', 'zone-2', 'add-next', beforeDispatch);
+
+		expect(beforeDispatch).toHaveBeenCalledTimes(1);
+		expect(emit).toHaveBeenCalledTimes(1);
+		expect(emit).toHaveBeenCalledWith(
+			expect.anything(),
+			'unified-search:action',
+			expect.objectContaining({
+				resultId: 'selected-second-duplicate', zoneId: 'zone-2', semantic: 'add-next'
+			}),
+			expect.anything()
 		);
 	});
 

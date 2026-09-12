@@ -316,7 +316,7 @@ describe('LibraryAlbumController', () => {
 		expect(Object.isFrozen(details.orderedTracks[0])).toBe(true);
 	});
 
-	it('adopts richer selected-version metadata without exposing server-side identity', () => {
+	it('retains public version facts and raw ordered track titles', () => {
 		const { socket, controller } = makeHarness();
 		controller.open(openInput());
 		socket.emission('library-album:open').ack(successAck(REQUEST_A, OPERATION_A));
@@ -329,42 +329,24 @@ describe('LibraryAlbumController', () => {
 				versionSummary: {
 					versionId: VERSION_A,
 					editionText: 'Deluxe',
-					sourceLabel: 'Local',
-					releaseDate: '1993-07-05',
-					trackCount: 2,
-					durationSeconds: 401,
-					available: true,
-					playCount: 4,
-					isFavorite: true
+					imageKeyHint: 'public-artwork',
+					trackCount: 2
 				},
 				orderedTracks: [
-					{
-						index: 0,
-						title: 'Human Behaviour',
-						trackNumber: 1,
-						mediaNumber: 1,
-						lengthSeconds: 210,
-						available: true
-					},
-					{ index: 1, title: 'Crying', lengthSeconds: 191, available: true }
+					{ index: 0, title: '1-1 Human Behaviour' },
+					{ index: 1, title: '2. Crying' }
 				]
 			})
 		);
 
 		expect(controller.snapshot().versions[0]).toMatchObject({
-			editionText: 'Deluxe',
-			sourceLabel: 'Local',
-			releaseDate: '1993-07-05',
-			trackCount: 2,
-			durationSeconds: 401,
-			playCount: 4,
-			isFavorite: true
+			versionId: VERSION_A, editionText: 'Deluxe',
+			imageKeyHint: 'public-artwork', trackCount: 2
 		});
-		expect(controller.snapshot().orderedTracks[0]).toMatchObject({
-			trackNumber: 1,
-			lengthSeconds: 210,
-			available: true
-		});
+		expect(controller.snapshot().orderedTracks).toEqual([
+			{ index: 0, title: '1-1 Human Behaviour' },
+			{ index: 1, title: '2. Crying' }
+		]);
 	});
 
 	it('reselects a cached version through the server to restore action authority', () => {

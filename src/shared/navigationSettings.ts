@@ -7,7 +7,7 @@ export const NAVIGATION_DESTINATIONS = [
   { id: "composers", label: "Composers" },
   { id: "playlists", label: "Playlists" },
   { id: "internet-radio", label: "Live radio" },
-  { id: "favorites", label: "Favorites" },
+  { id: "favorites", label: "Bookmarks" },
   { id: "recently-played", label: "Recently played" },
   { id: "surprise", label: "Surprise me" },
   { id: "tags", label: "Tags" },

@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { classifyBrowseActionOutcome } from "../../shared/browseActionOutcome";
 import { Logger } from "pino";
 
 import {
@@ -556,7 +557,7 @@ export class AlbumActionService {
       // channel, anchored to the publication the reference was minted in — a
       // refresh landing between the claim and here refuses the call rather
       // than sending a key whose meaning has expired.
-      await (operation.authority.kind === "reference"
+      const response = await (operation.authority.kind === "reference"
         ? this.coordinator.executeLibraryAction(
             operation.access,
             operation.authority.subject.anchor,
@@ -568,12 +569,17 @@ export class AlbumActionService {
             dispatchOptions,
             onIssued
           ));
-      if (
-        !operation.executeIssued ||
-        operation.coreInvalidated ||
-        this.stopped
-      ) {
+      if (!operation.executeIssued) {
         this.close(operation, operation.executeIssued);
+        return this.executeUnknown();
+      }
+      const outcome = classifyBrowseActionOutcome(response);
+      if (outcome.kind === "refused") {
+        this.close(operation, false);
+        return this.executeRejected("ROON_REJECTED", outcome.message);
+      }
+      if (outcome.kind === "unknown" || operation.coreInvalidated || this.stopped) {
+        this.close(operation, true);
         return this.executeUnknown();
       }
       this.close(operation, false);
@@ -1198,6 +1204,7 @@ export class AlbumActionService {
 
   private executeRejected(
     code:
+      | "ROON_REJECTED"
       | "ZONE_NOT_FOUND"
       | "ZONE_CHANGED"
       | "ALBUM_UNRESOLVED"

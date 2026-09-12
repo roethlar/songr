@@ -405,7 +405,7 @@ jobs:
         if: env.HAVE_WINGET_TOKEN == 'true'
         uses: vedantmgoyal9/winget-releaser@v2
         with:
-          identifier: roethlar.Songr
+          identifier: Roethlar.Songr
           version: ${{ env.SONGR_VERSION }}
           release-tag: ${{ env.SONGR_TAG }}
           installers-regex: '^Songr\.Setup\..*\.exe$'

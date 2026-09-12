@@ -2,29 +2,42 @@
 
 Web-based controller for a local Roon Core, built with Node.js + SvelteKit.
 
-Download the desktop app or headless server from
-[GitHub Releases](https://github.com/roethlar/songr/releases/latest).
-Desktop packages are available through Homebrew (`roethlar/tap/songr`),
-Scoop (`roethlar` bucket, `songr`), AUR (`songr-bin`), and WinGet
-(`roethlar.Songr`). The headless server is `songr-server` on npm;
-Docker images are `ghcr.io/roethlar/songr:latest` and versioned `:vX.Y.Z` tags.
+Published desktop and headless server downloads are on
+[GitHub Releases](https://github.com/roethlar/songr/releases).
+Current release: **1.4.3**. See the [release notes](docs/releases/1.4.3.md).
 
 ## Screenshots
 
-| | |
-|---|---|
-| ![Artists](product/screenshots/library-artists.png) | ![Albums](product/screenshots/library-albums.png) |
-| ![Instant search palette](product/screenshots/search-palette.png) | |
+Songr 1.4.3 with a real Roon library, in light and dark themes.
+| | Light | Dark |
+|---|---|---|
+| **Album artists** | [![Album artists — Light](product/screenshots/1.4.3/light/artists-album.png)](product/screenshots/1.4.3/light/artists-album.png) | [![Album artists — Dark](product/screenshots/1.4.3/dark/artists-album.png)](product/screenshots/1.4.3/dark/artists-album.png) |
+| **Albums** | [![Albums — Light](product/screenshots/1.4.3/light/albums.png)](product/screenshots/1.4.3/light/albums.png) | [![Albums — Dark](product/screenshots/1.4.3/dark/albums.png)](product/screenshots/1.4.3/dark/albums.png) |
+| **Track selection** | [![Track selection — Light](product/screenshots/1.4.3/light/tracks-selection.png)](product/screenshots/1.4.3/light/tracks-selection.png) | [![Track selection — Dark](product/screenshots/1.4.3/dark/tracks-selection.png)](product/screenshots/1.4.3/dark/tracks-selection.png) |
+
+[View the full screenshot gallery](product/screenshots/1.4.3/README.md) — Library pages, selection, About and settings in both themes.
 
 ## What Works
 
-- Browse and search library with alphabetic jump lists, quick-play, and artwork caching
+- Browse and search the library with alphabetic jump lists, filtering, sorting and artwork caching
+- Select tracks and recordings for shared Play, Queue and More controls; actions follow the current list order
 - Search result drill-down uses an isolated Roon browse session and remaps fresh result keys after re-seeding
 - Real-time zone and now-playing updates via Socket.IO (hydrated on page load)
 - Transport controls: play/pause, previous/next, seek, volume
 - Queue: per-zone subscription, track listing with artwork, play-from-here, shuffle/loop/auto-radio
 - Global zone switching, persistent play bar with track/artist deep-links
 - System media controls and hardware media keys via the Media Session API (see below)
+
+## Updates
+
+Use **About → Check for updates** to check the connected Songr
+server against the latest public GitHub release. If a newer version is
+available, Songr recommends updating and links to the release. Install it using
+your existing package manager or installation method.
+
+The desktop app also checks its own installed Songr version when it starts,
+independently of the server it connects to. A newer desktop release offers
+**View release** or **Later**. Checks do not install updates automatically.
 
 ## System media controls and media keys
 
@@ -60,10 +73,11 @@ macOS Now Playing panel have not been verified in this repository.
 ## Library
 
 The Library includes Artists, Albums, Genres, Tracks, Composers, Tags,
-My Live Radio, Recently played, Favorites and Surprise me, with instant
-search, sorting, filtering and density control. Artist, album, genre,
-composer and track pages carry durable `/library/...` addresses that survive
-a reload, a fresh tab, and Back/Forward.
+Live radio (experimental), Recently played, Bookmarks and Surprise me. Collection
+pages support search, sorting, filtering and density control. Long collections and albums use
+continuous lists without manual page buttons. Artist, album, genre, composer and
+track pages carry durable `/library/...` addresses that survive a reload, a fresh
+tab, and Back/Forward.
 
 Open **Settings → Library navigation** to choose the pages on the main row and
 their order; **More** contains the rest. Choices are saved by the current Songr
@@ -73,11 +87,50 @@ default). Docker uses the existing `/app/data` volume; an embedded desktop engin
 uses Electron's userData/data directory. A desktop connected to a remote server
 uses that server's saved choices.
 
+Track lists use selection and shared controls. Select individual tracks, use
+Shift for a range, or select all matching the current filter. Play, Queue and
+More act on selected tracks in the current list order. Sorting and filtering
+preserve valid selections, including selected tracks hidden by the filter. Selecting a row does not start playback.
+
+Artists open grouped by letter; albums and tracks open without letter headings.
+To change grouping where available, open Sort and choose Group by letter. The
+choice is remembered separately for each collection view.
+
+Tap or click a track to add it to the selection; tap it again to remove it.
+Selected titles turn Songr gold. Playback controls, Select all and Clear appear
+when something is selected, within the existing page header. Selection is temporary.
+Under **Settings → Appearance**, choose Icons, Text or Both for library actions.
+Under **Settings → Accessibility**, control smooth scrolling and interface
+animations. These preferences persist on the connected Songr server in
+`DATA_DIR/presentation-preferences.json` and update its connected clients.
+System reduced-motion preferences take precedence. Theme and density remain
+local to each client.
+
+Play an entire album from its artwork: hover or focus to reveal Play, or tap the
+artwork and then tap Play on a touchscreen. The album's More menu contains Queue
+and other available album actions.
+
 **Recently played** records tracks observed while the connected Songr server
 was running and connected to Roon; it does not import Roon's earlier history.
-Desktop and browser clients of that server share this list. Select a card to
-search its recorded title (or artist when the title is missing), then choose the
-current result. Opening a card does not start playback.
+Desktop and browser clients of that server share this list. Select one card,
+then use **Find in Library** to search its recorded title (or artist when the
+title is missing) and choose the current result. Selection does not start playback.
+
+**Bookmarks save tracks, albums and artists in Songr.** Select tracks and use the
+Bookmark action in the shared controls, or use Bookmark beside the album or
+artist name on its page. Existing Songr favorites appear in **Bookmarks** automatically.
+
+Select a saved entry and choose **Open**. Albums and artists open when there is
+one matching current library entry; otherwise Songr shows search results for you
+to choose from. **Remove selected** deletes bookmarks. There is no item limit.
+Bookmarks are stored on the connected Songr server and shared by its desktop and
+browser clients; reload another open client to see changes. They do not change
+Roon's hearted favorites or tags.
+
+**Live radio is experimental.** It exposes Roon's My Live Radio list, but playback
+has not been tested. Roon returned **No Results** for the library used in the
+screenshots. If you use My Live Radio, please
+[share feedback or report a problem](https://github.com/roethlar/songr/issues), including the station and whether browsing and starting playback work.
 
 The Artists tab has a compact **Album / All** switch. Album
 artists is the default and groups albums by the exact credit Roon supplies;
@@ -85,13 +138,14 @@ single-album artists stay included, collaboration credits stay together, and
 albums without a credit have their own Unknown album artist group. All artists
 shows Roon's full Artists list, including contributors. Songr remembers your
 choice, while an explicit page address always wins. Credit groups and their
-album/track pages can also be bookmarked or opened in a new tab.
+album/track page addresses can also be saved in browser bookmarks or opened in
+a new tab.
 
 The list heading, count, artist-view switch, and Sort controls stay visible
 below the scope tabs while the list scrolls.
 
 Songr reads the current library through Roon's public Browse API and does
-not retain a separate library catalog. Recently played and Favorites are
+not retain a separate library catalog. Recently played and Bookmarks are
 stored by Songr.
 
 ## Upgrading
@@ -142,7 +196,7 @@ Copy `.env.example` to `.env` and adjust as needed.
 | `IMAGE_CACHE_MAX_BYTES` | Disk cache cap (bytes); LRU eviction when exceeded | `10737418240` (10 GB) |
 | `RECENTLY_PLAYED_PATH` | JSON file for "Recently played on this controller" persistence | `./data/recently-played.json` |
 | `RECENTLY_PLAYED_CAP` | Max entries kept in the rolling list (1-1000) | `50` |
-| `FAVORITES_PATH` | JSON file for user-curated favorites (tracks/albums/artists) | `./data/favorites.json` |
+| `FAVORITES_PATH` | JSON file for Songr bookmarks (tracks/albums/artists; existing variable name retained) | `./data/favorites.json` |
 | `CLIENT_ORIGIN` | Comma-separated Socket.IO CORS allowlist, or `*` for any | `*` |
 | `TRUST_PROXY` | Set to `true` when fronted by a reverse proxy so rate limits identify the real client IP | unset |
 
@@ -193,9 +247,10 @@ docker compose up -d
 ```
 
 With the default paths, the `./config/` and `./data/` volumes persist the Roon
-pairing token, artwork cache, Recently Played history, and
-Favorites across container restarts. If you override any persistence path to a
-location outside those directories, mount that location separately.
+pairing token, artwork cache, Recently played history, Bookmarks, and the
+navigation preferences across container restarts. If you
+override any persistence path to a location outside those directories, mount
+that location separately.
 
 ## Local Development
 
@@ -237,9 +292,3 @@ Roon → Settings → Audio. The final Bridge note does not block the library.
 Roon's pairing state — `paired_core_id` plus a per-core token map — is persisted to `ROON_TOKEN_PATH` (mode `0o600`, atomic write). Reconnect is automatic on subsequent starts.
 
 Older builds accidentally let `node-roon-api` write `config.json` in the working directory. On first run, an existing `config.json` in the cwd is migrated to `ROON_TOKEN_PATH` and the cwd copy removed. No action required from you.
-
-## Handoff
-
-Read `AGENTS.md` (canonical guidance) and `.agents/state.md` (current state, active
-work, next steps) before continuing work. Durable decisions live in
-`.agents/decisions.md`. Update `.agents/state.md` at the end of a session.

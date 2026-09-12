@@ -265,11 +265,29 @@ button {
 	}
 }
 
+/* Until a confirmed server snapshot arrives, use still, instantaneous presentation. */
+:root { --songr-scroll-behavior: auto; }
+:root[data-smooth-scroll="on"] { --songr-scroll-behavior: smooth; }
+:root:not([data-smooth-scroll="on"]) *,
+:root:not([data-smooth-scroll="on"]) *::before,
+:root:not([data-smooth-scroll="on"]) *::after { scroll-behavior: auto !important; }
+:root:not([data-interface-motion="on"]) *,
+:root:not([data-interface-motion="on"]) *::before,
+:root:not([data-interface-motion="on"]) *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  animation-delay: 0ms !important;
+  transition-delay: 0ms !important;
+}
 @media (prefers-reduced-motion: reduce) {
-	* {
-		animation-duration: 0.01ms !important;
-		animation-iteration-count: 1 !important;
-		transition-duration: 0.01ms !important;
-		scroll-behavior: auto !important;
-	}
+  :root { --songr-scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
 }

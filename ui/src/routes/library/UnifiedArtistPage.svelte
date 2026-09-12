@@ -1,5 +1,9 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import type { AddFavoriteRequest } from '@shared/types';
+	import { bookmarkPayload } from '$lib/bookmarks';
+	import BookmarkButton from '$lib/components/BookmarkButton.svelte';
+	import EntityFeedback from '$lib/components/EntityFeedback.svelte';
 	import type { LibraryAlbumEntry, LibraryArtistEntry } from '$lib/libraryEntries';
 	import { imageUrl } from '$lib/imageUrl';
 	import { monogram } from '$lib/monogram';
@@ -42,8 +46,12 @@
 		missingMessage?: string | null;
 		backLabel: string;
 		onBack: () => void;
+		onBookmark?: (items: readonly AddFavoriteRequest[]) => void;
+		bookmarkBusy?: boolean;
+		bookmarkStatus?: string | null;
 		/** Sort control, rendered inside the page header. */
 		headerExtra?: Snippet;
+		entityActions?: Snippet;
 		discography: Snippet;
 	}
 
@@ -56,9 +64,18 @@
 		missingMessage = null,
 		backLabel,
 		onBack,
+		onBookmark,
+		bookmarkBusy = false,
+		bookmarkStatus = null,
 		headerExtra,
+		entityActions,
 		discography
 	}: Props = $props();
+
+	function bookmarkArtist(): void {
+		if (!onBookmark || bookmarkBusy || overlayPhase !== 'idle' || !artist?.name.trim()) return;
+		onBookmark([bookmarkPayload('artist', { title: artist.name, imageKey: artist.imageKey })]);
+	}
 
 	const summary = $derived.by(() => {
 		if (!artist) return null;
@@ -104,6 +121,11 @@
 	const wideImage = $derived(imgAspect !== null && imgAspect >= 1.6);
 </script>
 
+{#snippet artistHeadingActions()}
+	{#if onBookmark && artist}<BookmarkButton title="Bookmark artist" onclick={bookmarkArtist} disabled={bookmarkBusy || overlayPhase !== 'idle' || !artist.name.trim()} />{/if}
+	{#if entityActions}{@render entityActions()}{/if}
+{/snippet}
+
 <UnifiedItemPageFrame
 	label="Artist page"
 	heading={artist?.name ?? '…'}
@@ -112,8 +134,10 @@
 	backTestId="unified-artist-back"
 	{onBack}
 	{summary}
+	headingActions={artistHeadingActions}
 	{headerExtra}
 >
+	<EntityFeedback label="Artist status" message={bookmarkStatus} />
 	{#if !artist}
 		<p class="notice" data-testid="unified-drill-missing">
 			{missingMessage ?? 'That artist is no longer in this library.'}

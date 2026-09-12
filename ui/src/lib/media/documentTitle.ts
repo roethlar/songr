@@ -30,8 +30,7 @@ export interface DocumentTitleInput {
 
 /**
  * `Track – Artist · Songr` while playing, the default title otherwise. The
- * artist half is dropped rather than left empty when the track has neither an
- * artist nor an album artist.
+ * artist half is omitted when the public now-playing data supplies no artist.
  */
 export function formatDocumentTitle(input: DocumentTitleInput, defaultTitle: string): string {
 	if (!input.corePaired) return defaultTitle;
@@ -46,7 +45,7 @@ export function formatDocumentTitle(input: DocumentTitleInput, defaultTitle: str
 	const title = input.nowPlaying?.title?.trim() ?? '';
 	if (!title) return defaultTitle;
 
-	const artist = (input.nowPlaying?.artist ?? input.nowPlaying?.album_artist ?? '').trim();
+	const artist = (input.nowPlaying?.artist ?? '').trim();
 	return artist ? `${title} – ${artist} · ${APP_TITLE}` : `${title} · ${APP_TITLE}`;
 }
 

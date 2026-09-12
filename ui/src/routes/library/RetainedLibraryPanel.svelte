@@ -17,8 +17,10 @@
 </div>
 
 <style>
-	.retained-library-panel { contain: layout style paint; }
+	/* Active content may paint artwork frames outside its layout boundary. */
+	.retained-library-panel { contain: layout style; }
 	.retained-library-panel[aria-hidden="true"] {
+		contain: layout style paint;
 		height: 0;
 		overflow: clip;
 		content-visibility: hidden;

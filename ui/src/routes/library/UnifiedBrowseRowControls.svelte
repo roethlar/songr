@@ -1,4 +1,5 @@
 <script lang="ts">
+	import LibraryActionButton from '$lib/components/LibraryActionButton.svelte';
 	import type { BrowseItem } from '@shared/types';
 	import type { BrowseRowActions } from '$lib/library/browsePresentation';
 
@@ -32,12 +33,12 @@
 
 <div class="row-controls" class:prominent bind:this={surface}>
 	{#if playable}
-		<button type="button" class="tgo" {disabled} onclick={() => actions?.onAction(item, 'play-now')}>Play</button>
-		<button type="button" class="tq" {disabled} onclick={() => actions?.onAction(item, 'queue')}>Queue</button>
+		<LibraryActionButton icon="play" label="Play" {disabled} onclick={() => actions?.onAction(item, 'play-now')} />
+		<LibraryActionButton icon="queue" label="Queue" {disabled} onclick={() => actions?.onAction(item, 'queue')} />
 	{/if}
-	<button type="button" class="row-more" bind:this={moreButton} aria-label="More actions for {item.title}"
+	<LibraryActionButton icon="more" label="More" bind:element={moreButton} aria-label="More actions for {item.title}"
 		aria-haspopup="menu" aria-expanded={Boolean(menu)} disabled={!menu && disabled}
-		onclick={() => { moreButton?.focus(); if (menu) actions?.onCloseMore(); else actions?.onMore(item); }}>⋯</button>
+		onclick={() => { moreButton?.focus(); if (menu) actions?.onCloseMore(); else actions?.onMore(item); }} />
 	{#if menu}
 		<div class="row-menu" role="menu" aria-label="Actions for {item.title}">
 			{#if menuBusy}<span role="status">{menu.state.phase === 'executing' ? 'Working…' : 'Loading…'}</span>{/if}
@@ -49,7 +50,7 @@
 			{#if menu.state.phase === 'ready' && !(menu.state.actions?.length)}<span>No actions are available.</span>{/if}
 			{#if favorite && actions?.onFavorite}
 				<button type="button" role="menuitem" disabled={menuBusy || !ready}
-					onclick={() => { actions?.onCloseMore(); actions?.onFavorite?.(item); }}>Favorite</button>
+					onclick={() => { actions?.onCloseMore(); actions?.onFavorite?.(item); }}>Bookmark</button>
 			{/if}
 		</div>
 	{/if}
@@ -60,14 +61,12 @@
 	button { cursor: pointer; }
 	button:disabled { cursor: default; color: var(--dim); }
 	button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-	.row-controls:focus-within .tgo, .row-controls:focus-within .tq, .prominent .tgo, .prominent .tq { opacity: 1; }
-	.row-more { border: 0; background: transparent; color: var(--soft); padding: 3px 7px; font: inherit; border-radius: 4px; }
 	.row-menu { position: absolute; right: 0; top: 100%; z-index: 20; display: flex; flex-direction: column;
 		max-height: 260px; overflow-y: auto; min-width: 130px; max-width: min(320px, 85vw); padding: 4px; background: var(--control); border: 1px solid var(--line);
 		border-radius: 5px; box-shadow: 0 4px 12px var(--songr-scrim); }
-	.row-menu button { text-align: left; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; padding: 7px 10px; border-radius: 3px; }
+	.row-menu button { min-height: var(--library-action-target, 36px); text-align: left; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; padding: 7px 10px; border-radius: 3px; }
 	.row-menu button:hover { background: var(--hover-subtle); }
 	.row-menu span { padding: 7px 10px; font-size: 12px; color: var(--soft); }
 	.row-menu .error { color: var(--songr-error); }
-	@media (hover: none), (max-width: 600px) { .tgo, .tq, .row-more { min-height: 36px; } .tgo, .tq { opacity: 1; } .row-more { min-width: 32px; } }
+	@media (any-pointer: coarse) { .row-menu button { min-height: 44px; } }
 </style>

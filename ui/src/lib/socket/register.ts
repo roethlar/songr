@@ -16,7 +16,8 @@ import {
 	setSocketStatus,
 	applyRecentlyPlayedInserted,
 	applyRecentlyPlayedCleared,
-	applyNavigationSettings
+	applyNavigationSettings,
+	applyPresentationSettings
 } from '../stores';
 import type {
 	CoreStatusResponse,
@@ -27,6 +28,7 @@ import type {
 	ZoneQueue
 } from '@shared/types';
 import { NAVIGATION_SETTINGS_EVENT } from '@shared/navigationSettings';
+import { PRESENTATION_SETTINGS_EVENT } from '@shared/presentationSettings';
 import { normalizeClassicSessionRetiredEvent } from '@shared/classicBrowseContracts';
 import { normalizeLibrarySessionRetiredEvent } from '@shared/libraryRootsContracts';
 import { classicBrowseSessionClient } from '../stores/classicBrowseSessionStore';
@@ -218,6 +220,7 @@ export function registerSocketHandlers(): CleanupFn {
 
 	const listeners: Array<[string, (...args: any[]) => void]> = [
 		[NAVIGATION_SETTINGS_EVENT, applyNavigationSettings],
+		[PRESENTATION_SETTINGS_EVENT, applyPresentationSettings],
 		['core-status', handleCoreStatus],
 		['core-discovery', setCoreDiscovery],
 		['zones', handleZonesSnapshot],

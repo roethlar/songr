@@ -10,7 +10,6 @@ import { buildUnifiedLibraryPageState, buildUnifiedRootPageState } from '../libr
 import {
 	clearPendingLibraryPageStateWrite,
 	consumeSelfAuthoredLibraryPageState,
-	expectSelfAuthoredLibraryPageState,
 	preflightLibraryPageState,
 	pushLibraryPageState,
 	replaceLibraryPageState,
@@ -116,30 +115,6 @@ describe('libraryPageNavigation', () => {
 		expect(
 			consumeSelfAuthoredLibraryPageState(new URL('/library/browse?search=First', page.url))
 		).toBe(false);
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(false);
-	});
-
-	it('consumes an expected self-authored traversal exactly once (ri8-1)', () => {
-		const parent = artists();
-		pushLibraryPageState(parent);
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(true);
-		pushLibraryPageState(browse('Child'));
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(true);
-
-		expectSelfAuthoredLibraryPageState(parent);
-		expect(__back()).toBe(true);
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(true);
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(false);
-	});
-
-	it('falls through to the pop path when the traversal expectation mismatches (ri8-1)', () => {
-		pushLibraryPageState(artists());
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(true);
-		pushLibraryPageState(browse('Child'));
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(true);
-
-		expectSelfAuthoredLibraryPageState(browse('Somewhere else'));
-		expect(__back()).toBe(true);
 		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(false);
 	});
 

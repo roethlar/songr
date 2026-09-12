@@ -52,6 +52,7 @@ const rawSong = {
 };
 
 const emptyResult = {
+  action: "none",
   level: 2,
   offset: 0,
   count: 0,
@@ -327,6 +328,91 @@ describe("Unified search socket adapter", () => {
         authorityRetired: false,
       },
     });
+  });
+
+  it.each(["restored", "restore-failed", "coordinator-failed"])(
+    "reports a public Roon refusal without replay even when restoration is %s",
+    async (restoration) => {
+      actionSession.executeAction.mockImplementationOnce(
+        async (
+          _options: unknown,
+          assertBeforeIssue: () => void,
+          onIssued: () => void
+        ) => {
+          assertBeforeIssue();
+          onIssued();
+          return {
+            ...emptyResult,
+            action: "message",
+            isError: true,
+            message: "This track is unavailable",
+          };
+        }
+      );
+      if (restoration === "restore-failed") {
+        actionSession.pop.mockRejectedValueOnce(new Error("Restore failed"));
+      } else if (restoration === "coordinator-failed") {
+        coordinator.runModeAction.mockImplementationOnce(async (_access, _role, work) => {
+          await work(actionSession);
+          throw new Error("Mode authority changed after response");
+        });
+      }
+      const ack = jest.fn();
+
+      await socket.trigger("unified-search:action", actionRequest(), ack);
+
+      expect(ack).toHaveBeenCalledTimes(1);
+      expect(ack).toHaveBeenCalledWith({
+        success: false,
+        code: "ROON_REJECTED",
+        error: "This track is unavailable",
+      });
+      expect(actionSession.pop).toHaveBeenCalledTimes(1);
+      if (restoration !== "restored") {
+        expect(coordinator.retireClassicPublishedItems).toHaveBeenCalled();
+      }
+      const duplicateAck = jest.fn();
+      await socket.trigger("unified-search:action", actionRequest(), duplicateAck);
+      expect(duplicateAck).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        code: "REQUEST_ID_CONFLICT",
+      }));
+      expect(actionSession.executeAction).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("accepts a public informational message without the optional error flag", async () => {
+    actionSession.executeAction.mockImplementationOnce(
+      async (_options: unknown, assertBeforeIssue: () => void, onIssued: () => void) => {
+        assertBeforeIssue();
+        onIssued();
+        return { ...emptyResult, action: "message", message: "Added to queue" };
+      }
+    );
+    const ack = jest.fn();
+    await socket.trigger("unified-search:action", actionRequest(), ack);
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      data: expect.objectContaining({ outcome: "executed" }),
+    }));
+  });
+
+  it("leaves an issued song response without its mandatory action uncertain", async () => {
+    actionSession.executeAction.mockImplementationOnce(
+      async (_options: unknown, assertBeforeIssue: () => void, onIssued: () => void) => {
+        assertBeforeIssue();
+        onIssued();
+        return { ...emptyResult, action: undefined };
+      }
+    );
+    const ack = jest.fn();
+    await socket.trigger("unified-search:action", actionRequest(), ack);
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      code: "OUTCOME_UNKNOWN",
+    }));
+    expect(actionSession.executeAction).toHaveBeenCalledTimes(1);
+    expect(coordinator.retireClassicPublishedItems).toHaveBeenCalled();
   });
 
   it("allows only one in-flight action for a song", async () => {

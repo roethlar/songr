@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import { UNIFIED_FILTER_TEXT_MAX_LENGTH } from '$lib/libraryPageState';
-import { NO_RELEASE_DATES_REASON } from '$lib/unifiedLibrarySorts';
 import {
 	parseCountFilter,
 	parseSmartFilters,
@@ -130,7 +129,7 @@ describe('parseSmartFilters — count filter unit table', () => {
 	});
 });
 
-describe('parseSmartFilters — year expressions always parse, always disabled', () => {
+describe('parseSmartFilters — unsupported date expressions remain plain search', () => {
 	const rows: readonly string[] = [
 		'1984-1989',
 		'1984 - 1989',
@@ -150,16 +149,11 @@ describe('parseSmartFilters — year expressions always parse, always disabled',
 	];
 
 	for (const raw of rows) {
-		it(`parses ${JSON.stringify(raw)} as a disabled year filter`, () => {
-			const filters = parseSmartFilters(raw);
-			const year = filters.find((f) => f.kind === 'year');
-			expect(year).toBeDefined();
-			expect(year?.reason).toBe(NO_RELEASE_DATES_REASON);
-			expect(year?.label).toContain(raw.trim());
-			// Year expressions never produce a count filter.
-			expect(filters.some((f) => f.kind === 'count')).toBe(false);
+		it(`leaves ${JSON.stringify(raw)} as ordinary search text`, () => {
+			expect(parseSmartFilters(raw)).toEqual([]);
 		});
 	}
+
 });
 
 describe('parseSmartFilters — non-matches fall through to plain search', () => {

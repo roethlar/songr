@@ -5,11 +5,8 @@ export const UNIFIED_SEARCH_QUERY_MAX_LENGTH = 256;
 export const UNIFIED_SEARCH_TEXT_MAX_LENGTH = 512;
 export const UNIFIED_SEARCH_ERROR_MAX_LENGTH = 1_024;
 export const UNIFIED_SONG_SEARCH_RESULT_MAX = 50;
-export const UNIFIED_SONG_RELATIONSHIP_ALBUM_MAX = 200;
-export const UNIFIED_SONG_RELATIONSHIP_COMPOSER_MAX = 64;
 export const UNIFIED_SEARCH_ACK_TIMEOUT_MS = 75_000;
 export const UNIFIED_SONG_ACTION_ACK_TIMEOUT_MS = 75_000;
-export const UNIFIED_SONG_RELATIONSHIP_ACK_TIMEOUT_MS = 75_000;
 
 export const UNIFIED_SEARCH_ERROR_CODES = [
   "INVALID_REQUEST",
@@ -34,6 +31,7 @@ export type UnifiedSongActionSemantic =
   (typeof UNIFIED_SONG_ACTION_SEMANTICS)[number];
 
 export const UNIFIED_SONG_ACTION_ERROR_CODES = [
+  "ROON_REJECTED",
   "INVALID_REQUEST",
   "REQUEST_ID_CONFLICT",
   "CORE_UNAVAILABLE",
@@ -51,19 +49,6 @@ export const UNIFIED_SONG_ACTION_ERROR_CODES = [
 
 export type UnifiedSongActionErrorCode =
   (typeof UNIFIED_SONG_ACTION_ERROR_CODES)[number];
-
-export const UNIFIED_SONG_RELATIONSHIP_ERROR_CODES = [
-  "INVALID_REQUEST",
-  "CORE_UNAVAILABLE",
-  "OWNER_MISMATCH",
-  "STALE_RESULT",
-  "SESSION_LOST",
-  "RELATIONSHIP_UNAVAILABLE",
-  "INTERNAL_ERROR",
-] as const;
-
-export type UnifiedSongRelationshipErrorCode =
-  (typeof UNIFIED_SONG_RELATIONSHIP_ERROR_CODES)[number];
 
 export interface UnifiedSongSearchRequest {
   readonly requestId: string;
@@ -120,45 +105,6 @@ export type UnifiedSongActionAck =
       readonly success: false;
       readonly error: string;
       readonly code: UnifiedSongActionErrorCode;
-    };
-
-export interface UnifiedSongRelationshipRequest {
-  readonly requestId: string;
-  readonly tabId: string;
-  readonly session: ClassicBrowseSessionRef;
-  readonly resultId: string;
-}
-
-export interface UnifiedSongAlbumRelationship {
-  readonly albumLocalId: string;
-  readonly artistLocalId: string | null;
-  readonly title: string;
-  readonly artist: string;
-  readonly editionText: string;
-}
-
-export interface UnifiedSongRelationship {
-  readonly songTitle: string;
-  readonly albums: readonly UnifiedSongAlbumRelationship[];
-  readonly composerLabels: readonly string[];
-}
-
-export type UnifiedSongRelationshipAck =
-  | {
-      readonly success: true;
-      readonly data: {
-        readonly requestId: string;
-        readonly session: ClassicBrowseSessionRef;
-        readonly resultId: string;
-        readonly songTitle: string;
-        readonly albums: readonly UnifiedSongAlbumRelationship[];
-        readonly composerLabels: readonly string[];
-      };
-    }
-  | {
-      readonly success: false;
-      readonly error: string;
-      readonly code: UnifiedSongRelationshipErrorCode;
     };
 
 export interface UnifiedSearchClearRequest {
@@ -327,34 +273,6 @@ export function normalizeUnifiedSongActionRequest(
   }
 }
 
-export function normalizeUnifiedSongRelationshipRequest(
-  value: unknown
-): UnifiedSongRelationshipRequest | null {
-  try {
-    const record = plainRecord(value);
-    if (
-      !record ||
-      !hasExactKeys(record, ["requestId", "tabId", "session", "resultId"]) ||
-      !boundedOpaqueId(record.requestId) ||
-      !boundedOpaqueId(record.tabId) ||
-      !boundedOpaqueId(record.resultId)
-    ) {
-      return null;
-    }
-    const session = normalizeSession(record.session);
-    return session
-      ? {
-          requestId: record.requestId,
-          tabId: record.tabId,
-          session,
-          resultId: record.resultId,
-        }
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 export function normalizeUnifiedSearchClearRequest(
   value: unknown
 ): UnifiedSearchClearRequest | null {
@@ -411,49 +329,6 @@ export function normalizeUnifiedSongSearchResult(
       title: record.title,
       subtitle: record.subtitle,
       imageKey: record.imageKey,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function normalizeUnifiedSongAlbumRelationship(
-  value: unknown
-): UnifiedSongAlbumRelationship | null {
-  try {
-    const record = plainRecord(value);
-    if (
-      !record ||
-      !hasExactKeys(record, [
-        "albumLocalId",
-        "artistLocalId",
-        "title",
-        "artist",
-        "editionText",
-      ]) ||
-      !boundedOpaqueId(record.albumLocalId) ||
-      (record.artistLocalId !== null &&
-        !boundedOpaqueId(record.artistLocalId)) ||
-      !boundedText(record.title, UNIFIED_SEARCH_TEXT_MAX_LENGTH) ||
-      !boundedText(
-        record.artist,
-        UNIFIED_SEARCH_TEXT_MAX_LENGTH,
-        true
-      ) ||
-      !boundedText(
-        record.editionText,
-        UNIFIED_SEARCH_TEXT_MAX_LENGTH,
-        true
-      )
-    ) {
-      return null;
-    }
-    return {
-      albumLocalId: record.albumLocalId,
-      artistLocalId: record.artistLocalId,
-      title: record.title,
-      artist: record.artist,
-      editionText: record.editionText,
     };
   } catch {
     return null;
@@ -529,103 +404,6 @@ export function normalizeUnifiedSongSearchAck(
         session,
         query: expected.query,
         results,
-      },
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function normalizeUnifiedSongRelationshipAck(
-  value: unknown,
-  expected: UnifiedSongRelationshipRequest
-): UnifiedSongRelationshipAck | null {
-  try {
-    const record = plainRecord(value);
-    if (!record) return null;
-    if (record.success === false) {
-      if (
-        !hasExactKeys(record, ["success", "error", "code"]) ||
-        !boundedText(record.error, UNIFIED_SEARCH_ERROR_MAX_LENGTH) ||
-        !UNIFIED_SONG_RELATIONSHIP_ERROR_CODES.includes(
-          record.code as UnifiedSongRelationshipErrorCode
-        )
-      ) {
-        return null;
-      }
-      return {
-        success: false,
-        error: record.error,
-        code: record.code as UnifiedSongRelationshipErrorCode,
-      };
-    }
-    if (
-      record.success !== true ||
-      !hasExactKeys(record, ["success", "data"])
-    ) {
-      return null;
-    }
-    const data = plainRecord(record.data);
-    if (
-      !data ||
-      !hasExactKeys(data, [
-        "requestId",
-        "session",
-        "resultId",
-        "songTitle",
-        "albums",
-        "composerLabels",
-      ]) ||
-      data.requestId !== expected.requestId ||
-      data.resultId !== expected.resultId ||
-      !boundedText(data.songTitle, UNIFIED_SEARCH_TEXT_MAX_LENGTH) ||
-      !Array.isArray(data.albums) ||
-      data.albums.length > UNIFIED_SONG_RELATIONSHIP_ALBUM_MAX ||
-      !Array.isArray(data.composerLabels) ||
-      data.composerLabels.length > UNIFIED_SONG_RELATIONSHIP_COMPOSER_MAX
-    ) {
-      return null;
-    }
-    const session = normalizeSession(data.session);
-    if (
-      !session ||
-      session.handleId !== expected.session.handleId ||
-      session.generation !== expected.session.generation
-    ) {
-      return null;
-    }
-    const albums: UnifiedSongAlbumRelationship[] = [];
-    const albumIds = new Set<string>();
-    for (let index = 0; index < data.albums.length; index += 1) {
-      if (!(index in data.albums)) return null;
-      const album = normalizeUnifiedSongAlbumRelationship(data.albums[index]);
-      if (!album || albumIds.has(album.albumLocalId)) return null;
-      albumIds.add(album.albumLocalId);
-      albums.push(album);
-    }
-    const composerLabels: string[] = [];
-    const seenComposerLabels = new Set<string>();
-    for (let index = 0; index < data.composerLabels.length; index += 1) {
-      if (!(index in data.composerLabels)) return null;
-      const label = data.composerLabels[index];
-      if (
-        !boundedText(label, UNIFIED_SEARCH_TEXT_MAX_LENGTH) ||
-        seenComposerLabels.has(label)
-      ) {
-        return null;
-      }
-      seenComposerLabels.add(label);
-      composerLabels.push(label);
-    }
-    return {
-      success: true,
-      data: {
-        requestId: expected.requestId,
-        session,
-        resultId: expected.resultId,
-        songTitle: data.songTitle,
-        albums,
-        composerLabels,
       },
     };
   } catch {

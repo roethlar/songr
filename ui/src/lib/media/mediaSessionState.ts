@@ -169,7 +169,7 @@ export function deriveMediaSessionSnapshot(
 
 	const metadata: MediaSessionMetadataSnapshot = {
 		title: nowPlaying.title ?? '',
-		artist: nowPlaying.artist ?? nowPlaying.album_artist ?? '',
+		artist: nowPlaying.artist ?? '',
 		album: nowPlaying.album ?? '',
 		artwork
 	};

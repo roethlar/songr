@@ -22,7 +22,7 @@
 
 import path from 'path';
 
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import type { WebContents } from 'electron';
 
 import { EngineTrayClient } from './engineClient';
@@ -57,6 +57,7 @@ import {
 import type { ShellSettings } from './shellSettings';
 import { TrayController } from './tray';
 import { TrayZoneTracker, deriveTrayMenuState } from './trayModel';
+import { DesktopUpdateCheck } from './updateCheck';
 
 /** `__dirname` is `desktop/dist` once compiled, so the app root is one up. */
 const APP_ROOT = path.resolve(__dirname, '..');
@@ -111,6 +112,28 @@ let tray: TrayController | null = null;
 function log(message: string): void {
   console.log(`[shell] ${message}`);
 }
+
+const desktopUpdateCheck = new DesktopUpdateCheck({
+  getVersion: () => app.getVersion(),
+  canPrompt: () => !quitRequested && mainWindow !== null && !mainWindow.isDestroyed(),
+  prompt: async (release, installedVersion) => {
+    const window = mainWindow;
+    if (quitRequested || window === null || window.isDestroyed()) return 'later';
+    const { response } = await dialog.showMessageBox(window, {
+      type: 'info',
+      title: 'Songr update available',
+      message: `Songr ${release.version} is available. Update recommended.`,
+      detail: `You’re using Songr desktop ${installedVersion}. View the release to update using your usual installation method.`,
+      buttons: ['View release', 'Later'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    return response === 0 ? 'view-release' : 'later';
+  },
+  openRelease: (url) => shell.openExternal(url),
+  log,
+});
 
 const trayClient = new EngineTrayClient({
   tracker: trayZones,
@@ -254,7 +277,9 @@ function createWindow(): void {
   });
 
   mainWindow.once('ready-to-show', () => {
+    if (quitRequested || mainWindow === null || mainWindow.isDestroyed()) return;
     mainWindow?.show();
+    desktopUpdateCheck.start();
   });
 
   // Close hides; only Quit quits. The engine stays up, so playback and the

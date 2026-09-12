@@ -9,7 +9,6 @@ import * as creditModel from '$lib/albumArtistGroups';
 import { encodeLibraryRoute, type LibraryRoute } from '$lib/libraryRoute';
 import { LIBRARY_OPEN_CONTRACT, type LibraryOpenResponse } from '@shared/libraryOpenContracts';
 import { libraryPageStateFromRoute } from '$lib/libraryRouteState';
-import type { PaletteSearchState } from '$lib/stores/unifiedPaletteSearchStore';
 import { __getNavigationLog, __resetNavigation } from '../../../test/app-stubs/navigation';
 import { deferred, fakeConnectionSocket, fakeNamedCountsStore, harnessAlbum, liveOpenResponder, liveRootsState, mountMode, type HarnessLiveLibrary } from './unifiedLibraryModeHarness';
 
@@ -233,22 +232,7 @@ describe('palette artist-list return context', () => {
 		expect(screen.queryByTestId('unified-credit-back')).toBeNull();
 	});
 
-	it('the song-panel composer entry uses the same group return owner', async () => {
-		const harness = mountPalette({ paletteSearchStore: writable<PaletteSearchState>({
-			phase: 'ready', query: 'opening', error: null,
-			groups: [{ title: 'Tracks', rows: [{ resultId: 'opening', title: 'Opening', subtitle: 'Philip Glass', imageKey: null }] }]
-		}), songRelationshipClient: { relationship: vi.fn(async () => ({ songTitle: 'Opening', albums: [], composerLabels: ['Philip Glass'] })) } });
-		restore(harness, leadRoute);
-		await fireEvent.click(screen.getByTestId('unified-find'));
-		await fireEvent.input(screen.getByTestId('unified-palette-input'), { target: { value: 'opening' } });
-		await fireEvent.click((await activeLibraryScreen.findByText('Opening')).closest('button')!);
-		await fireEvent.click(await screen.findByRole('button', { name: 'Philip Glass' }));
-		await waitFor(() => expect(screen.getByRole('button', { name: '← Search results' })).toBeInTheDocument());
-		await fireEvent.click(screen.getByRole('button', { name: '← Search results' }));
-		await dismissFind();
-		expect(screen.getByTestId('unified-list-heading')).toHaveTextContent('Lead');
-		expect(__getNavigationLog()).toEqual([]);
-	});
+
 });
 
 describe('cold credit restoration', () => {
@@ -272,8 +256,8 @@ describe('cold credit restoration', () => {
 		harness.rootsStore.set(liveRootsState(library));
 		await waitFor(() => expect(screen.getByTestId('unified-album-title')).toHaveTextContent(uncredited ? 'No credit' : 'Actual album'));
 		await waitFor(() => expect(screen.getByTestId('unified-album-tracks')).toBeInTheDocument());
-		if (track) await waitFor(() => expect(screen.getByTestId('unified-album-track-info')).toHaveTextContent('Track two'));
-		else expect(screen.queryByTestId('unified-album-track-info')).toBeNull();
+		expect(screen.getByTestId('unified-album-tracks')).toHaveTextContent('Track two');
+		expect(screen.queryByTestId('unified-album-track-info')).toBeNull();
 		connect();
 		harness.rootsStore.update(state => ({ ...state, readAt: 'confirmed' }));
 		await tick();
@@ -284,11 +268,11 @@ describe('cold credit restoration', () => {
 		expect(get(harness.prefsStore).artistView).toBe('all-artists');
 	});
 
-	it('uses ready HTTP-backed roots before socket connect without reopening the track child', async () => {
+	it('restores the album from a retired track address before socket connect without reopening it', async () => {
 		const harness = mountCredit({ withContext: true });
 		harness.socket.connected = false;
 		restore(harness, creditRoute(false, true));
-		await waitFor(() => expect(screen.getByTestId('unified-album-track-info')).toHaveTextContent('Track two'));
+		await waitFor(() => expect(screen.getByTestId('unified-album-tracks')).toHaveTextContent('Track two'));
 		expect(harness.socket.connected).toBe(false);
 		harness.socket.connected = true;
 		harness.socket.emit('connect');
@@ -296,7 +280,8 @@ describe('cold credit restoration', () => {
 		await tick();
 		await tick();
 		expect(harness.openLiveRef).toHaveBeenCalledTimes(1);
-		expect(screen.getByTestId('unified-album-track-info')).toHaveTextContent('Track two');
+		expect(screen.getByTestId('unified-album-tracks')).toHaveTextContent('Track two');
+		expect(screen.queryByTestId('unified-album-track-info')).toBeNull();
 		expect(__getNavigationLog()).toEqual([]);
 	});
 

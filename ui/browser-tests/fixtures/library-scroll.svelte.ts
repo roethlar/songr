@@ -844,7 +844,6 @@ mount(UnifiedLibraryMode, {
 		}) as never,
 		...(publicVariant ? {
 			addFavoriteData: async (_fetchFn: unknown, payload: unknown) => { publicFavoriteWrites.push(structuredClone(payload)); },
-			songRelationshipClient: { relationship: async () => ({ songTitle: 'I Swear', albums: [], composerLabels: [] }) }
 		} : {}),
 		clearPaletteSearchData: (async () => {}) as never,
 		resetPaletteSearchData: (() => {}) as never,

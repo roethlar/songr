@@ -1,5 +1,9 @@
 import type { Logger } from "pino";
 import type { Socket } from "socket.io";
+import {
+  classifyBrowseActionOutcome,
+  type BrowseActionOutcome,
+} from "../../shared/browseActionOutcome";
 
 import type { BrowseService } from "../../core/roon/BrowseService";
 import {
@@ -415,6 +419,9 @@ export function registerUnifiedSearchSocket(
 
       actionResultsInFlight.add(request.resultId);
       let issued = false;
+      const execution: { outcome: BrowseActionOutcome } = {
+        outcome: { kind: "unknown" },
+      };
       try {
         const authorityRetired = await coordinator.runModeAction(
           access,
@@ -442,7 +449,7 @@ export function registerUnifiedSearchSocket(
                 request.semantic
               );
               navigationDepth = resolved.navigationDepth;
-              await session.executeAction(
+              const response = await session.executeAction(
                 {
                   hierarchy: "search",
                   zoneId: request.zoneId,
@@ -488,6 +495,7 @@ export function registerUnifiedSearchSocket(
                   "The song action was not sent"
                 );
               }
+              execution.outcome = classifyBrowseActionOutcome(response);
             } catch (error) {
               if (error instanceof SongActionResolutionError) {
                 navigationDepth = error.navigationDepth;
@@ -514,6 +522,16 @@ export function registerUnifiedSearchSocket(
           }
         );
 
+        if (execution.outcome.kind === "refused") {
+          ack(actionFailure("ROON_REJECTED", execution.outcome.message));
+          return;
+        }
+        if (execution.outcome.kind === "unknown") {
+          throw new SongActionPhaseError(
+            "OUTCOME_UNKNOWN",
+            "Roon did not confirm the song action"
+          );
+        }
         ack({
           success: true,
           data: {
@@ -535,6 +553,10 @@ export function registerUnifiedSearchSocket(
             );
           } catch {
             // A lost mode generation has already retired its authority.
+          }
+          if (execution.outcome.kind === "refused") {
+            ack(actionFailure("ROON_REJECTED", execution.outcome.message));
+            return;
           }
           ack(
             actionFailure(

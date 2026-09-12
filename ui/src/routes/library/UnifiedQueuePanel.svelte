@@ -1,5 +1,9 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
+	import { createTrackSelection } from '$lib/trackSelection';
+	import { unifiedLibraryPrefsStore } from '$lib/stores/unifiedLibraryPrefsStore';
+	import { bookmarkPayload } from '$lib/bookmarks';
+	import TrackSelectionControls from './TrackSelectionControls.svelte';
 	import { focusTrap, isTopModalOwner } from '$lib/actions/focusTrap';
 	import { splitArtists } from '$lib/artistList';
 	import { hideOnError } from '$lib/actions/imageFallback';
@@ -16,6 +20,7 @@
 	} from '$lib/stores';
 	import { zoneMapStore } from '$lib/stores/zonesStore';
 	import type {
+		AddFavoriteRequest,
 		LoopModeRequest,
 		QueueItem,
 		ZonePlaybackSettingsRequest,
@@ -24,10 +29,16 @@
 
 	let {
 		onclose,
-		onlibraryintent
+		onlibraryintent,
+		onBookmark,
+		bookmarkBusy = false,
+		bookmarkStatus = null
 	}: {
 		onclose: () => void;
 		onlibraryintent: (intent: LibraryIntent) => void | Promise<void>;
+		onBookmark?: (items: readonly AddFavoriteRequest[]) => void;
+		bookmarkBusy?: boolean;
+		bookmarkStatus?: string | null;
 	} = $props();
 
 	let socket = $state(getSocket());
@@ -35,6 +46,8 @@
 	let queueLoading = $state(false);
 	let queueActionInFlight = $state(false);
 	let settingsInFlight = $state(false);
+	const queueSelection = createTrackSelection<QueueItem>();
+	onDestroy(() => queueSelection.clear());
 
 	onMount(() => {
 		socket = getSocket();
@@ -55,6 +68,31 @@
 	const activeQueue = $derived(
 		$selectedZoneStore ? $queueStore[$selectedZoneStore] : undefined
 	);
+	const queueItems = $derived(activeQueue?.items ?? []);
+	const selectedQueueItem = $derived.by(() => {
+		$queueSelection;
+		const selected = queueSelection.ordered(queueItems);
+		return selected.length === 1 ? selected[0] : null;
+	});
+	const bookmarkDisabled = $derived.by(() => {
+		for (const item of $queueSelection.selected) if (!semanticItemTitle(item)) return true;
+		return false;
+	});
+
+	function bookmarkQueue(items: QueueItem[]): void {
+		if (!onBookmark || bookmarkBusy || queueActionInFlight || !items.length ||
+			items.some(item => !queueItems.includes(item) || !semanticItemTitle(item))) return;
+		onBookmark(items.map(item => bookmarkPayload('track', {
+			title: semanticItemTitle(item)!,
+			artist: itemSubtitle(item),
+			album: itemTertiary(item),
+			imageKey: item.image_key
+		})));
+	}
+	$effect(() => {
+		queueSelection.retain(queueItems, activeQueue);
+		if (!$selectedZoneStore || $socketStatusStore !== 'connected') queueSelection.clear();
+	});
 	const totalQueueSeconds = $derived(
 		(activeQueue?.items ?? []).reduce((sum, item) => sum + (item.length ?? 0), 0)
 	);
@@ -110,8 +148,10 @@
 		}
 	}
 
-	async function playFromHere(queueItemId: number, title: string): Promise<void> {
-		if (!$selectedZoneStore) return;
+	async function playFromHere(item: QueueItem): Promise<void> {
+		const zoneId = $selectedZoneStore;
+		if (!zoneId || $socketStatusStore !== 'connected' || queueActionInFlight ||
+			!queueItems.includes(item)) return;
 		const liveSocket = getLiveSocket();
 		if (!liveSocket) return;
 
@@ -120,7 +160,7 @@
 			const response = await emitWithAck(
 				liveSocket,
 				'queue:play-from-here',
-				{ zone_id: $selectedZoneStore, queue_item_id: queueItemId },
+				{ zone_id: zoneId, queue_item_id: item.queue_item_id },
 				{ feedback: { source: 'queue', command: 'queue:play-from-here' } }
 			);
 			if (response.success) {
@@ -128,7 +168,7 @@
 					source: 'queue',
 					command: 'queue:play-from-here',
 					kind: 'success',
-					message: `Playing from "${title}".`
+					message: `Playing from "${itemTitle(item)}".`
 				});
 			}
 		} finally {
@@ -230,6 +270,7 @@
 	<div
 		id="unified-queue-dialog"
 		class="queue-panel"
+		data-density={$unifiedLibraryPrefsStore.density}
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby="unified-queue-title"
@@ -238,14 +279,28 @@
 		use:focusTrap={{ initialFocus: '.queue-close' }}
 	>
 		<header class="queue-header">
-			<div>
+			<div class="queue-heading">
 				<p class="eyebrow">UP NEXT</p>
 				<h2 id="unified-queue-title">Queue</h2>
+				<div class="queue-meta-row">
 				<p class="meta">
 					{activeZone?.display_name || 'No active zone'}
 					<span aria-hidden="true">·</span>
 					{totalDurationLabel()} total
 				</p>
+					<div class="queue-selection"><TrackSelectionControls selection={queueSelection} orderedItems={queueItems}
+				visibleItems={queueItems} busy={bookmarkBusy || queueActionInFlight || $socketStatusStore !== 'connected'}
+				status={bookmarkStatus} onBookmark={onBookmark ? bookmarkQueue : undefined} {bookmarkDisabled}
+				label={itemTitle} actions={[
+					{ id: 'play-from-here', label: 'Play from here', disabled: !selectedQueueItem,
+						run: (items) => { if (items.length === 1) void playFromHere(items[0]); } },
+					{ id: 'find', label: 'Find in Library', disabled: !selectedQueueItem || !trackLibraryIntent(selectedQueueItem),
+						run: (items) => {
+							const intent = items.length === 1 ? trackLibraryIntent(items[0]) : null;
+							if (intent) void onlibraryintent(intent);
+						} }
+				]} /></div>
+				</div>
 			</div>
 			<button type="button" class="queue-close mono" aria-label="Close Queue" onclick={close}>
 				Close
@@ -289,10 +344,12 @@
 		{:else if !activeQueue || activeQueue.items.length === 0}
 			<p class="empty">Queue is empty for this zone.</p>
 		{:else}
+
 			<ol class="queue-list">
 				{#each activeQueue.items as item, index (item.queue_item_id)}
-					{@const libraryIntent = trackLibraryIntent(item)}
-					<li class="queue-row" class:current={index === 0}>
+					<li class="queue-row" class:current={index === 0} data-track-select-row
+						use:queueSelection.row={{ item, ordered: () => queueItems, generation: activeQueue,
+							disabled: bookmarkBusy || queueActionInFlight || $socketStatusStore !== 'connected' }}>
 						<div class="queue-index mono">
 							{#if index === 0}<span class="now">NOW</span>{:else}{String(index + 1).padStart(2, '0')}{/if}
 						</div>
@@ -311,16 +368,7 @@
 						</div>
 						<div class="queue-copy">
 							<p class="title">
-								{#if libraryIntent}
-									<button
-										type="button"
-										class="queue-link"
-										aria-label="Search Library for {itemTitle(item)}"
-										onclick={() => void onlibraryintent(libraryIntent)}
-									>{itemTitle(item)}</button>
-								{:else}
-									<span>{itemTitle(item)}</span>
-								{/if}
+								<button type="button" data-track-select-target aria-label="Select {itemTitle(item)}" aria-pressed="false">{itemTitle(item)}</button>
 							</p>
 							{#if itemSubtitle(item)}
 								<p class="artist">
@@ -339,14 +387,7 @@
 						</div>
 						<div class="queue-action">
 							<span class="duration mono">{itemDuration(item.length)}</span>
-							<button
-								type="button"
-								disabled={queueActionInFlight}
-								aria-label="Play from {itemTitle(item)}"
-								onclick={() => void playFromHere(item.queue_item_id, itemTitle(item))}
-							>
-								Play here
-							</button>
+
 						</div>
 					</li>
 				{/each}
@@ -367,6 +408,13 @@
 	}
 
 	.queue-panel {
+		--text: var(--songr-queue-text);
+		--soft: var(--songr-subtle);
+		--dim: var(--songr-dim);
+		--accent: var(--songr-accent);
+		--bg: var(--songr-queue-bg);
+		--control: var(--songr-panel);
+		--hover-subtle: var(--songr-raise);
 		display: flex;
 		flex-direction: column;
 		width: min(660px, 52vw);
@@ -390,6 +438,7 @@
 	}
 
 	.queue-header {
+		position: relative;
 		display: flex;
 		align-items: flex-start;
 		justify-content: space-between;
@@ -406,21 +455,31 @@
 	}
 
 	h2 {
+		padding-right: 80px;
 		margin: 0;
 		font-size: clamp(27px, 3vw, 38px);
 		font-weight: 560;
 		letter-spacing: -0.035em;
 	}
 
+	.queue-heading { flex: 1; min-width: 0; }
+	.queue-meta-row { display: flex; align-items: center; flex-wrap: nowrap; gap: 12px; margin-top: 8px; min-width: 0; }
+	.queue-selection { flex: 1; min-width: min-content; }
 	.meta {
-		display: flex;
-		gap: 8px;
-		margin: 8px 0 0;
+		display: block;
+		flex: 0 1 auto;
+		min-width: 0;
+		max-width: 40%;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		margin: 0;
 		color: var(--songr-subtle);
 		font-size: 12px;
 	}
 
 	.queue-close {
+		position: absolute; top: 0; right: 0;
 		padding: 7px 10px;
 		background: transparent;
 		color: var(--songr-subtle);
@@ -446,8 +505,7 @@
 		margin-top: 22px;
 	}
 
-	.queue-controls button,
-	.queue-action button {
+	.queue-controls button {
 		padding: 7px 10px;
 		background: var(--songr-surface-11);
 		color: var(--songr-soft);
@@ -459,9 +517,7 @@
 	}
 
 	.queue-controls button:hover:not(:disabled),
-	.queue-controls button:focus-visible,
-	.queue-action button:hover:not(:disabled),
-	.queue-action button:focus-visible {
+	.queue-controls button:focus-visible {
 		color: var(--songr-accent-bright);
 		border-color: var(--songr-accent);
 		outline: 1px solid var(--songr-accent);
@@ -478,8 +534,7 @@
 		outline-color: var(--songr-queue-text);
 	}
 
-	.queue-controls button:disabled,
-	.queue-action button:disabled {
+	.queue-controls button:disabled {
 		opacity: 0.45;
 		cursor: not-allowed;
 	}
@@ -622,9 +677,6 @@
 		font-size: 10px;
 	}
 
-	.queue-action button {
-		white-space: nowrap;
-	}
 
 	@media (max-width: 760px) {
 		.queue-panel {

@@ -2,18 +2,9 @@
  * The pacing controller: how many calls of one background workload may be in
  * flight against one Core at a time, and when that workload must stop.
  *
- * `.agents/plans/library-walk-binding.md` (r3) Slice 3. This is the control
- * logic that grew inside the extended layer's pre-binding sweep governor,
- * lifted out whole and parameterized by the two things that were hard-coded:
- * the set of call shapes it measures, and the name it reports pressure under.
- * The sweep keeps its behavior through an adapter over this class; the
- * library walk gets one of its own with a single call shape.
- *
- * WHY THIS FILE CARRIES NO PROTOCOL KNOWLEDGE, and must not grow any. It ships
- * in both builds. Everything it knows about a call is a latency, an outcome
- * and an opaque kind label its owner chose. It cannot name a hierarchy, a
- * request or a field, and a change that gives it one is a change that has to
- * move it back behind the wall.
+ * LibraryReadPacing supplies the call shapes and pressure source. The
+ * controller knows only latency, outcome and an opaque kind label; it has no
+ * knowledge of Roon hierarchies, requests or response fields.
  *
  * What it is. One controller that decides HOW MANY reads may be in flight, and
  * nothing else. It is concurrency-only and completion-clocked: there is no gap
@@ -47,9 +38,8 @@
  * sample count, (b) the median over its most recent completion epoch is within
  * tolerance of the epoch before it — completion-clocked, no wall-clock wait —
  * and (c) the health authority is explicitly HEALTHY. "Unknown" defers the
- * freeze rather than passing it. Samples taken during a bulk pull, or within
- * one settle epoch after one, never enter the durable baseline; neither do
- * samples taken while the controller is holding a post-decrease strain. The
+ * freeze rather than passing it. Samples taken while the controller is
+ * holding a post-decrease strain never enter the durable baseline. The
  * whole point is that a baseline may only be learned from a Core that some
  * authority OTHER than the workload's own samples says is healthy.
  *
@@ -179,9 +169,8 @@ export interface GovernedCallTicket<Kind extends string> {
    * Whether this sample may ever enter a durable baseline, decided at
    * ADMISSION rather than at completion.
    *
-   * The bulk pull that makes a sample untrustworthy is the one running when
-   * the call went out, not the one running when it came back — a call issued
-   * into a quiet Core that lands during a pull measured a quiet Core.
+   * A call issued while strain is held stays ineligible even if the strain
+   * clears before its response arrives.
    */
   readonly baselineEligible: boolean;
 }
@@ -262,12 +251,6 @@ interface KindState {
   provisional: number[];
   /** Median of the previous bootstrap epoch, or null before there was one. */
   previousEpochMedianMs: number | null;
-  /**
-   * Samples of this kind still owed to the settle epoch after a bulk pull.
-   * Counted down per sample rather than by a clock: the controller has no
-   * clock.
-   */
-  settleCredits: number;
 }
 
 interface ControllerCoreState<Kind extends string> {
@@ -295,7 +278,6 @@ function freshKindState(): KindState {
     epoch: [],
     provisional: [],
     previousEpochMedianMs: null,
-    settleCredits: 0,
   };
 }
 
@@ -363,9 +345,6 @@ export class CallAdmissionController<
 
   /** The Core `health` is about; null whenever the verdict is `unknown`. */
   private healthCoreId: string | null = null;
-
-  /** True while a bulk pull the workload shares a Core with is on the wire. */
-  private refreshing = false;
 
   /**
    * The Core paired right now, so a health verdict — which may carry no Core
@@ -464,12 +443,8 @@ export class CallAdmissionController<
       kind,
       decisions: state.decisions,
       authorization: state.authorization,
-      // Decided here rather than at settlement: residual pull pressure and a
-      // held strain are properties of the moment the call went out.
-      baselineEligible:
-        !this.refreshing &&
-        !state.strained &&
-        state.kinds[kind].settleCredits === 0,
+      // A call admitted under held strain cannot define a healthy baseline.
+      baselineEligible: !state.strained,
     };
   }
 
@@ -570,33 +545,6 @@ export class CallAdmissionController<
   private forgetHealth(): void {
     this.health = "unknown";
     this.healthCoreId = null;
-  }
-
-  /** A bulk pull started; its samples cannot define a baseline. */
-  public onRefreshStarted(): void {
-    this.refreshing = true;
-  }
-
-  /**
-   * The bulk pull settled. One further epoch per kind stays baseline-
-   * ineligible: a Core that has just streamed a whole library is still
-   * unwinding it, and residual pressure learned as "normal" is exactly the
-   * degraded baseline the freeze gate exists to refuse.
-   */
-  public onRefreshSettled(): void {
-    this.refreshing = false;
-    // The paired Core is materialized rather than merely looked up. A pull
-    // that settles before this Core's first governed call is the ordinary case
-    // — the workload is often triggered BY the pull settling — and a
-    // controller that only credited Cores it had already heard from would hand
-    // the whole settle epoch to the very first run, which is exactly the one
-    // it is for.
-    if (this.pairedCoreId !== null) this.stateOf(this.pairedCoreId);
-    for (const state of this.cores.values()) {
-      for (const kind of this.kinds) {
-        state.kinds[kind].settleCredits = this.minEpochSamples;
-      }
-    }
   }
 
   /**
@@ -710,7 +658,6 @@ export class CallAdmissionController<
     latencyMs: number
   ): void {
     const kind = state.kinds[ticket.kind];
-    if (kind.settleCredits > 0) kind.settleCredits -= 1;
     // Counted per completion rather than per epoch, so a failed read in the
     // middle of an epoch genuinely breaks the run. An epoch's median is taken
     // over the calls that answered, so without this the epoch would close
@@ -918,9 +865,8 @@ export class CallAdmissionController<
   private pauseOnExceed(): void {
     const coreId = this.pairedCoreId;
     if (coreId === null) return;
-    // The paired Core is materialized rather than merely looked up, for the
-    // same reason `onRefreshSettled` materializes it: the verdict that matters
-    // most is the one that lands BEFORE this Core's first governed call. That
+    // The paired Core is materialized rather than merely looked up: the verdict
+    // that matters most lands BEFORE this Core's first governed call. That
     // is the cold start against a Core a previous run left wedged — an
     // authority already exceeding at the moment the workload is triggered —
     // and a controller that only paused Cores it had already heard from would

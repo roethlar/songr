@@ -3,17 +3,13 @@ import type { Socket } from 'socket.io-client';
 import {
 	UNIFIED_SEARCH_ACK_TIMEOUT_MS,
 	UNIFIED_SONG_ACTION_ACK_TIMEOUT_MS,
-	UNIFIED_SONG_RELATIONSHIP_ACK_TIMEOUT_MS,
 	normalizeUnifiedSearchClearAck,
 	normalizeUnifiedSearchClearRequest,
 	normalizeUnifiedSongActionAck,
 	normalizeUnifiedSongActionRequest,
-	normalizeUnifiedSongRelationshipAck,
-	normalizeUnifiedSongRelationshipRequest,
 	normalizeUnifiedSongSearchAck,
 	normalizeUnifiedSongSearchRequest,
 	type UnifiedSongActionSemantic,
-	type UnifiedSongRelationship,
 	type UnifiedSongSearchResult
 } from '@shared/unifiedSearchContracts';
 import { getSocket } from '$lib/socket/client';
@@ -37,12 +33,9 @@ export interface UnifiedSearchClient {
 		claim: ClassicBrowseSessionClaim,
 		resultId: string,
 		zoneId: string,
-		semantic: UnifiedSongActionSemantic
+		semantic: UnifiedSongActionSemantic,
+		beforeDispatch?: () => void
 	): Promise<{ readonly authorityRetired: boolean }>;
-	relationship(
-		claim: ClassicBrowseSessionClaim,
-		resultId: string
-	): Promise<UnifiedSongRelationship>;
 	clear(claim: ClassicBrowseSessionClaim): Promise<void>;
 }
 
@@ -121,49 +114,12 @@ export function createUnifiedSearchClient(
 			return ack.data.results;
 		},
 
-		async relationship(
-			claim: ClassicBrowseSessionClaim,
-			resultId: string
-		): Promise<UnifiedSongRelationship> {
-			const { session, socket } = await readyContext(claim);
-			const request = normalizeUnifiedSongRelationshipRequest({
-				requestId: dependencies.createRequestId(),
-				tabId: dependencies.getTabId(),
-				session,
-				resultId
-			});
-			if (!request) {
-				throw new ClassicBrowseSessionError(
-					'Song relationship request is invalid',
-					'INVALID_REQUEST'
-				);
-			}
-			const raw = await dependencies.emit<unknown>(
-				socket,
-				'unified-search:relationship',
-				request,
-				{ timeoutMs: UNIFIED_SONG_RELATIONSHIP_ACK_TIMEOUT_MS }
-			);
-			assertCurrent(claim, session);
-			const ack = normalizeUnifiedSongRelationshipAck(raw, request);
-			if (!ack) {
-				throw new ClassicBrowseSessionError('Song relationship response was invalid');
-			}
-			if (!ack.success) {
-				throw new ClassicBrowseSessionError(ack.error, ack.code);
-			}
-			return {
-				songTitle: ack.data.songTitle,
-				albums: ack.data.albums,
-				composerLabels: ack.data.composerLabels
-			};
-		},
-
 		async action(
 			claim: ClassicBrowseSessionClaim,
 			resultId: string,
 			zoneId: string,
-			semantic: UnifiedSongActionSemantic
+			semantic: UnifiedSongActionSemantic,
+			beforeDispatch?: () => void
 		): Promise<{ readonly authorityRetired: boolean }> {
 			const { session, socket } = await readyContext(claim);
 			const request = normalizeUnifiedSongActionRequest({
@@ -177,6 +133,7 @@ export function createUnifiedSearchClient(
 			if (!request) {
 				throw new ClassicBrowseSessionError('Song action request is invalid', 'INVALID_REQUEST');
 			}
+			beforeDispatch?.();
 			const raw = await dependencies.emit<unknown>(
 				socket,
 				'unified-search:action',

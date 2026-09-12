@@ -172,9 +172,6 @@ export interface NowPlaying {
   /** Album name */
   album?: string;
 
-  /** Album artist */
-  album_artist?: string;
-
   /** Track duration in seconds */
   duration?: number;
 
@@ -184,23 +181,8 @@ export interface NowPlaying {
   /** Image key for artwork */
   image_key?: string;
 
-  /** Track number on album */
-  track_number?: number;
-
-  /** Disc number */
-  disc_number?: number;
-
-  /** Release year */
-  year?: number;
-
   /** Current playback state */
   state: PlaybackState;
-
-  /** Loop mode */
-  loop?: LoopMode;
-
-  /** Shuffle enabled */
-  shuffle?: boolean;
 }
 
 /**

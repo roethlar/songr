@@ -9,8 +9,6 @@ export const ALLOWED_BROWSE_HIERARCHY_VALUES = [
   "artists",
   "genres",
   "composers",
-  // Undocumented, but intentionally probed by welcome stats.
-  "tracks",
 ] as const;
 
 export type AllowedBrowseHierarchy =

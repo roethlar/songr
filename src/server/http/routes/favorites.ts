@@ -6,7 +6,7 @@ import {
 import type { AddFavoriteRequest, ErrorResponse } from "../../../shared/types";
 
 /**
- * User-curated favorites (tracks / albums / artists).
+ * User-curated Songr bookmarks (tracks / albums / artists).
  *
  * - GET    /api/favorites      — current list, newest first
  * - POST   /api/favorites      — add one; idempotent on identity
@@ -14,7 +14,7 @@ import type { AddFavoriteRequest, ErrorResponse } from "../../../shared/types";
  *
  * All responses carry the full `{ entries }` list so clients can
  * resync state from any mutation response (no socket broadcast for
- * favorites — multiple clients converge on their next fetch).
+ * bookmarks — multiple clients converge on their next fetch).
  */
 export const createFavoritesRouter = (service: FavoritesService): Router => {
   const router = Router();
@@ -23,7 +23,7 @@ export const createFavoritesRouter = (service: FavoritesService): Router => {
     if (!service.isDegraded()) return false;
     res
       .status(503)
-      .json({ error: "Favorites unavailable (persistence degraded)" } satisfies ErrorResponse);
+      .json({ error: "Bookmarks unavailable (persistence degraded)" } satisfies ErrorResponse);
     return true;
   };
 

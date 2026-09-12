@@ -82,14 +82,14 @@ describe('deriveMediaSessionSnapshot', () => {
 		expect(snapshot.metadata?.artwork[0].src).toContain('/api/image/a%2Fb');
 	});
 
-	it('falls back to the album artist and omits artwork with no image key', () => {
+	it('omits artist and artwork when public now-playing data supplies neither', () => {
 		const snapshot = deriveMediaSessionSnapshot({
 			zoneId: 'zone-1',
 			zone: zone(),
-			nowPlaying: nowPlaying({ artist: undefined, album_artist: 'Various', image_key: undefined })
+			nowPlaying: nowPlaying({ artist: undefined, image_key: undefined })
 		});
 
-		expect(snapshot.metadata?.artist).toBe('Various');
+		expect(snapshot.metadata?.artist).toBe('');
 		expect(snapshot.metadata?.artwork).toEqual([]);
 	});
 

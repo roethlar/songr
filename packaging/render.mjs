@@ -84,14 +84,14 @@ function substitute(text, values, sourceLabel) {
 
 /** Template path relative to this directory → path relative to the output root. */
 function outputPlan(version) {
-  const wingetDir = `winget/manifests/r/roethlar/Songr/${version}`;
+  const wingetDir = `winget/manifests/r/Roethlar/Songr/${version}`;
   return [
     ['homebrew/songr.rb', 'homebrew/Casks/songr.rb'],
     ['scoop/songr.json', 'scoop/bucket/songr.json'],
     ['aur/PKGBUILD', 'aur/PKGBUILD'],
-    ['winget/roethlar.Songr.yaml', `${wingetDir}/roethlar.Songr.yaml`],
-    ['winget/roethlar.Songr.installer.yaml', `${wingetDir}/roethlar.Songr.installer.yaml`],
-    ['winget/roethlar.Songr.locale.en-US.yaml', `${wingetDir}/roethlar.Songr.locale.en-US.yaml`],
+    ['winget/Roethlar.Songr.yaml', `${wingetDir}/Roethlar.Songr.yaml`],
+    ['winget/Roethlar.Songr.installer.yaml', `${wingetDir}/Roethlar.Songr.installer.yaml`],
+    ['winget/Roethlar.Songr.locale.en-US.yaml', `${wingetDir}/Roethlar.Songr.locale.en-US.yaml`],
   ];
 }
 

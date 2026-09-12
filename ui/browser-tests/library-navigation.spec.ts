@@ -52,26 +52,15 @@ test('library addresses survive a fresh tab, reload, Back, and Forward', async (
 	await expect.poll(() => new URL(page.url()).pathname).toBe(new URL(albumHref!, page.url()).pathname);
 	await expect(page.getByTestId('unified-album-title')).toHaveText(albumTitle);
 
-	const trackLink = page.getByTestId('unified-track-info-1');
-	const trackHref = await trackLink.getAttribute('href');
-	expect(trackHref).not.toBeNull();
-	await trackLink.click();
-	await expect.poll(() => new URL(page.url()).pathname).toBe(new URL(trackHref!, page.url()).pathname);
-	await expect(page.getByTestId('unified-album-track-info')).toContainText('Track 02');
-
-	await page.goBack();
-	await expect(page.getByTestId('unified-album-title')).toHaveText(albumTitle);
-	await expect(page.getByTestId('unified-album-track-info')).toHaveCount(0);
+	await expect(page.getByTestId('unified-album-tracks')).toContainText('Track 02');
 	await page.goBack();
 	await expect(page.getByTestId('unified-artist-name')).toHaveText(artistName);
 
 	await page.goForward();
 	await expect(page.getByTestId('unified-album-title')).toHaveText(albumTitle);
-	await page.goForward();
-	await expect(page.getByTestId('unified-album-track-info')).toContainText('Track 02');
-
 	await page.reload();
-	await expect(page.getByTestId('unified-album-track-info')).toContainText('Track 02');
+	await expect(page.getByTestId('unified-album-tracks')).toContainText('Track 02');
+
 });
 
 test('Albums-root links survive a modified-click fresh tab and reload', async ({ page, context }) => {

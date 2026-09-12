@@ -1056,8 +1056,6 @@ export class TransportService extends EventEmitter {
       seek_position: np.seek_position,
       image_key: np.image_key,
       state: this.normalizeState(roonZone.state),
-      loop: np.settings?.loop,
-      shuffle: np.settings?.shuffle,
     };
   }
 

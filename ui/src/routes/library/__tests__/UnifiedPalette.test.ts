@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/svelte';
 import { writable } from 'svelte/store';
 
@@ -10,7 +10,6 @@ import type {
 	PaletteSearchState,
 	unifiedPaletteSearchStore
 } from '$lib/stores/unifiedPaletteSearchStore';
-import { NO_RELEASE_DATES_REASON } from '$lib/unifiedLibrarySorts';
 
 /** A live Artists row, as the roots store publishes it. */
 function artist(
@@ -109,7 +108,6 @@ function mountPalette(options: {
 	const onDrill = vi.fn();
 	const onOpenLiveArtist = vi.fn();
 	const onOpenLiveAlbum = vi.fn();
-	const onSong = vi.fn();
 	const onBrowseResult = vi.fn();
 	const onBrowseCategory = vi.fn();
 	const onApplyFilter = vi.fn();
@@ -126,7 +124,6 @@ function mountPalette(options: {
 			onDrill,
 			onOpenLiveArtist,
 			onOpenLiveAlbum,
-			onSong,
 			onBrowseResult,
 			onBrowseCategory,
 			onApplyFilter,
@@ -140,7 +137,6 @@ function mountPalette(options: {
 		onDrill,
 		onOpenLiveArtist,
 		onOpenLiveAlbum,
-		onSong,
 		onBrowseResult,
 		onBrowseCategory,
 		onApplyFilter,
@@ -343,19 +339,16 @@ describe('UnifiedPalette — smart filters', () => {
 		expect(harness.onApplyFilter).toHaveBeenCalledWith('one album');
 	});
 
-	it('always renders year expressions disabled with the no-release-dates reason', () => {
+	it('treats year expressions as ordinary search without a release-date filter', () => {
 		mountPalette({ seed: '1984-1989' });
 
-		const rows = screen.getAllByTestId('unified-palette-row');
-		const yearRow = rows.find((el) => el.textContent?.includes('Release years'));
-		expect(yearRow).toBeDefined();
-		expect(yearRow).toBeDisabled();
-		expect(yearRow?.textContent).toContain(NO_RELEASE_DATES_REASON);
+		const rows = screen.queryAllByTestId('unified-palette-row');
+		expect(rows.some((el) => el.textContent?.includes('Release years'))).toBe(false);
 	});
 });
 
 describe('UnifiedPalette — async coordinated section', () => {
-	it('renders every song as an actionable opaque row without artwork matching', async () => {
+	it('renders every song as a selectable row without artwork matching', async () => {
 		const harness = mountPalette({
 			seed: 'bowie',
 			roots: readyRoots({
@@ -398,19 +391,17 @@ describe('UnifiedPalette — async coordinated section', () => {
 		const rows = screen.getAllByTestId('unified-palette-row');
 		const trackRow = rows.find((el) => el.textContent?.includes('Ashes to Ashes'));
 		expect(trackRow).toBeEnabled();
-		expect(trackRow?.querySelector('.ic')).toHaveTextContent('♬');
+		expect(trackRow?.querySelector('[data-track-select-target]')).not.toBeNull();
 		expect(trackRow?.querySelector('.p2')).toHaveTextContent('David Bowie');
 		await fireEvent.click(trackRow!);
-		expect(harness.onSong).toHaveBeenCalledWith(
-			expect.objectContaining({ resultId: 'song-ashes', title: 'Ashes to Ashes' })
-		);
+		expect(screen.getByRole('button', { name: 'Select Ashes to Ashes' })).toHaveAttribute('aria-pressed', 'true');
+		expect(harness.onBrowseResult).not.toHaveBeenCalled();
 
 		const unmatchedTrack = rows.find((el) => el.textContent?.includes('Fame'));
 		expect(unmatchedTrack).toBeEnabled();
 		await fireEvent.click(unmatchedTrack!);
-		expect(harness.onSong).toHaveBeenCalledWith(
-			expect.objectContaining({ resultId: 'song-fame', title: 'Fame' })
-		);
+		expect(screen.getByRole('button', { name: 'Select Fame' })).toHaveAttribute('aria-pressed', 'true');
+		expect(harness.onClose).not.toHaveBeenCalled();
 	});
 
 	it('adds keyless Roon categories without duplicating authoritative songs', async () => {

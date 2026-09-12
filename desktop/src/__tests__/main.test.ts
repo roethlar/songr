@@ -1,7 +1,7 @@
 /** Exercise the real main-process wiring with controlled Electron events. */
 import { EventEmitter } from 'node:events';
 
-function launch(options: { serverUrl?: string; ownsLock?: boolean } = {}) {
+function launch(options: { serverUrl?: string; ownsLock?: boolean; appVersion?: string } = {}) {
   jest.resetModules();
   let ready = false;
   let resolveReady!: () => void;
@@ -11,6 +11,7 @@ function launch(options: { serverUrl?: string; ownsLock?: boolean } = {}) {
     isReady: () => ready,
     whenReady: () => readiness,
     getPath: jest.fn(() => '/isolated/songr-test'),
+    getVersion: jest.fn(() => options.appVersion ?? '1.4.3'),
     requestSingleInstanceLock: () => options.ownsLock !== false,
     quit: jest.fn(),
   });
@@ -28,6 +29,7 @@ function launch(options: { serverUrl?: string; ownsLock?: boolean } = {}) {
     loadURL = jest.fn().mockResolvedValue(undefined);
     isVisible = () => this.visible;
     isMinimized = () => this.minimized;
+    isDestroyed = () => this.destroyed;
     show = jest.fn(() => { this.visible = true; });
     hide = jest.fn(() => { this.visible = false; });
     restore = jest.fn(() => { this.minimized = false; });
@@ -47,7 +49,15 @@ function launch(options: { serverUrl?: string; ownsLock?: boolean } = {}) {
   const connect = jest.fn();
   const trayCreate = jest.fn();
   const ipcMain = Object.assign(new EventEmitter(), { handle: jest.fn() });
-  jest.doMock('electron', () => ({ app, BrowserWindow: FakeWindow, ipcMain, shell: {} }),
+  const showMessageBox = jest.fn().mockResolvedValue({ response: 1 });
+  const openExternal = jest.fn().mockResolvedValue(undefined);
+  const fetchRelease = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+    tag_name: 'v1.4.4', draft: false, prerelease: false,
+  })));
+  jest.doMock('electron', () => ({
+    app, BrowserWindow: FakeWindow, ipcMain,
+    dialog: { showMessageBox }, shell: { openExternal },
+  }),
     { virtual: true });
   jest.doMock('../engineClient', () => ({
     EngineTrayClient: jest.fn(() => ({ connect, disconnect: jest.fn() })),
@@ -72,7 +82,7 @@ function launch(options: { serverUrl?: string; ownsLock?: boolean } = {}) {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   require('../main');
   return {
-    app, windows, start, connect, trayCreate, ipcMain,
+    app, windows, start, connect, trayCreate, ipcMain, showMessageBox, openExternal, fetchRelease,
     async becomeReady(beforeCallbacks?: () => void) {
       ready = true;
       beforeCallbacks?.();
@@ -154,5 +164,68 @@ describe('main-process startup and window activation', () => {
     expect(h.app.quit).toHaveBeenCalledTimes(1);
     expect(h.windows).toHaveLength(0);
     expect(h.start).not.toHaveBeenCalled();
+  });
+});
+
+describe('desktop update startup wiring', () => {
+  const settle = () => new Promise<void>((resolve) => { setImmediate(resolve); });
+
+  it.each([undefined, 'http://127.0.0.1:43210'])(
+    'checks the installed desktop version after showing the window in mode %s', async (serverUrl) => {
+      const h = launch({ serverUrl, appVersion: '1.4.3' });
+      await h.becomeReady();
+      expect(h.fetchRelease).not.toHaveBeenCalled();
+      if (serverUrl === undefined) expect(h.start).toHaveBeenCalledTimes(1);
+      else expect(h.connect).toHaveBeenCalledTimes(1);
+      const window = h.windows[0]!;
+      window.emit('ready-to-show');
+      expect(window.show).toHaveBeenCalledTimes(1);
+      expect(h.app.getVersion).toHaveBeenCalledTimes(1);
+      await settle();
+      expect(h.showMessageBox).toHaveBeenCalledWith(window, expect.objectContaining({
+        message: 'Songr 1.4.4 is available. Update recommended.',
+        detail: expect.stringContaining('Songr desktop 1.4.3'),
+        buttons: ['View release', 'Later'], defaultId: 1, cancelId: 1,
+      }));
+      expect(h.openExternal).not.toHaveBeenCalled();
+      h.app.emit('activate');
+      h.app.emit('second-instance');
+      window.destroy();
+      h.app.emit('activate');
+      h.windows[1]!.emit('ready-to-show');
+      await settle();
+      expect(h.fetchRelease).toHaveBeenCalledTimes(1);
+      expect(h.showMessageBox).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('opens the system browser only when the native View release button is selected', async () => {
+    const h = launch();
+    h.showMessageBox.mockResolvedValue({ response: 0 });
+    await h.becomeReady();
+    h.windows[0]!.emit('ready-to-show');
+    await settle();
+    expect(h.openExternal).toHaveBeenCalledWith('https://github.com/roethlar/songr/releases/tag/v1.4.4');
+  });
+
+  it.each(['quit', 'destroy'])('does not show the update dialog after %s while checking', async (action) => {
+    const h = launch();
+    await h.becomeReady();
+    h.windows[0]!.emit('ready-to-show');
+    if (action === 'quit') h.app.emit('before-quit', { preventDefault: jest.fn() });
+    else h.windows[0]!.destroy();
+    await settle();
+    expect(h.showMessageBox).not.toHaveBeenCalled();
+    expect(h.openExternal).not.toHaveBeenCalled();
+  });
+
+  it('does not show a window or request an update after quitting before ready-to-show', async () => {
+    const h = launch();
+    await h.becomeReady();
+    h.app.emit('before-quit', { preventDefault: jest.fn() });
+    h.windows[0]!.emit('ready-to-show');
+    await settle();
+    expect(h.windows[0]!.show).not.toHaveBeenCalled();
+    expect(h.fetchRelease).not.toHaveBeenCalled();
   });
 });

@@ -178,6 +178,25 @@ describe('Unified Browse history page state', () => {
 });
 
 describe('Unified Library page state', () => {
+	it.each(['recently-added', 'most-played', 'playlists'])(
+		'migrates retired %s state without losing an existing album or density', scope => {
+			const snapshot = { ...albumPageSnapshot(), scope, density: 'pi', itemOriginName: 'The Paper Fleet' };
+			const restored = normalizeLibraryPageState({
+				libraryView: 'unified', schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION, snapshot
+			});
+			expect(restored?.snapshot).toEqual({ ...snapshot, scope: 'albums' });
+		}
+	);
+
+	it('migrates a retired scope in legacy v3 state while retaining density', () => {
+		const snapshot: Record<string, unknown> = { ...legacySnapshot(), scope: 'most-played', drill: null };
+		const { browseHistory, ...withoutBrowse } = snapshot;
+		void browseHistory;
+		const restored = normalizeLibraryPageState({ libraryView: 'unified', schemaVersion: 3, snapshot: withoutBrowse });
+		expect(restored?.snapshot.scope).toBe('albums');
+		expect(restored?.snapshot.density).toBe(snapshot.density);
+	});
+
 	it('normalizes the exact semantic shape into a defensive copy', () => {
 		// An open album page, so the item-target copy assertion below has a
 		// non-null object to bite on.
@@ -420,7 +439,7 @@ describe('Unified Library page state', () => {
 		expect(restored?.snapshot.itemOriginName).toBe(longName);
 	});
 
-	it('binds the exact-track child to its album parent context (Slice 8)', () => {
+	it('validates retired Track Info state and restores its album parent', () => {
 		const withTrack = {
 			...albumPageSnapshot(),
 			itemDetail: { kind: 'track', title: 'Third movement' }
@@ -431,7 +450,7 @@ describe('Unified Library page state', () => {
 				schemaVersion: UNIFIED_LIBRARY_PAGE_STATE_VERSION,
 				snapshot: withTrack
 			})?.snapshot.itemDetail
-		).toEqual({ kind: 'track', title: 'Third movement' });
+		).toBeNull();
 		// A live album page is the other album parent a track child may hang from.
 		expect(
 			normalizeLibraryPageState({
@@ -444,7 +463,7 @@ describe('Unified Library page state', () => {
 					itemDetail: { kind: 'track', title: 'Third movement' }
 				}
 			})?.snapshot.itemDetail
-		).toEqual({ kind: 'track', title: 'Third movement' });
+		).toBeNull();
 		// No album parent → the child is not reconstructible: reject. A live
 		// path ending on an ARTIST page is not an album parent either, however
 		// live it is.

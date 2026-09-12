@@ -21,7 +21,11 @@ import { RecentlyPlayedService } from "../../core/recently-played/RecentlyPlayed
 import { FavoritesService } from "../../core/favorites/FavoritesService";
 import { NavigationSettingsService } from "../../core/navigation/NavigationSettingsService";
 import { createNavigationSettingsRouter } from "../routes/navigationSettings";
+import { PresentationSettingsService } from "../../core/presentation/PresentationSettingsService";
+import { createPresentationSettingsRouter } from "../routes/presentationSettings";
 import { ErrorResponse } from "../../shared/types";
+import { ReleaseUpdateService } from "../../core/updates/ReleaseUpdateService";
+import { createUpdatesRouter } from "../routes/updates";
 
 export const createHttpApp = (
   roonClient: RoonClient,
@@ -32,7 +36,9 @@ export const createHttpApp = (
   logger: Logger,
   /** The live library's read surface (`.agents/plans/library-live-view.md`). */
   libraryRoots?: LibraryRootsPort,
-  navigationSettings?: NavigationSettingsService
+  navigationSettings?: NavigationSettingsService,
+  presentationSettings?: PresentationSettingsService,
+  releaseUpdates: ReleaseUpdateService = new ReleaseUpdateService()
 ): Application => {
   const app = express();
 
@@ -106,6 +112,7 @@ export const createHttpApp = (
 
   app.use(createHealthRouter(recentlyPlayedService, favoritesService));
   app.use("/api/library", createLibraryRouter(libraryRoots));
+  app.use("/api/updates", createUpdatesRouter(releaseUpdates));
   app.use("/api/core", createCoreRouter(roonClient));
   app.use("/api/onboarding", createOnboardingRouter(roonClient));
   app.use("/api/zones", createZonesRouter(transportService));
@@ -115,6 +122,9 @@ export const createHttpApp = (
   app.use("/api/favorites", createFavoritesRouter(favoritesService));
   if (navigationSettings) {
     app.use("/api/settings/navigation", createNavigationSettingsRouter(navigationSettings));
+  }
+  if (presentationSettings) {
+    app.use("/api/settings/presentation", createPresentationSettingsRouter(presentationSettings));
   }
   // Any unmatched /api/* request is an API miss — return JSON 404 instead of
   // falling through to the SPA HTML, which would confuse the API client's

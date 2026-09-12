@@ -138,7 +138,7 @@ test('public pages keep their identity, filter and sort through empty/error resp
 
 
 for (const display of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'phone', width: 390, height: 844 }]) {
-	test(`${display.name}: Tracks use explicit inline actions for the exact row and refuse expired tokens`, async ({ page }, testInfo) => {
+	test(`${display.name}: selected Tracks share actions for the exact row and refuse expired tokens`, async ({ page }, testInfo) => {
 		await page.setViewportSize(display);
 		await enter(page);
 		await openPage(page, 'tracks', 'Tracks');
@@ -146,36 +146,18 @@ for (const display of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'p
 		await page.getByRole('combobox', { name: 'Sort Tracks' }).selectOption('artist-desc');
 		await page.getByRole('searchbox', { name: 'Filter Tracks' }).fill('All-4-One');
 		const rows = page.getByTestId('unified-browse-row');
+		const controls = page.getByRole('group', { name: 'Selected tracks', exact: true });
 		await expect(rows).toHaveCount(2);
 		await expect(page.getByTestId('unified-browse-summary')).toHaveText('2 OF 225');
 		await rows.nth(1).locator('.tnm').click();
+		await expect(rows.nth(1).getByRole('button', { name: 'Select I Swear' })).toHaveAttribute('aria-pressed', 'true');
+		await expect(controls).toBeVisible();
 		await expect(page.getByTestId('unified-browse-action-sheet')).toHaveCount(0);
 		expect(await page.evaluate(() => window.libraryScrollFixture.publicActionProbes)).toEqual([]);
 		expect(await page.evaluate(() => window.libraryScrollFixture.publicActions)).toEqual([]);
-		const firstMore = rows.nth(0).getByLabel('More actions for I Swear');
-		await firstMore.click();
-		await expect(rows.nth(0).getByRole('button', { name: 'Add Next', exact: true })).toBeVisible();
-		await page.keyboard.press('Escape');
-		await expect(rows.nth(0).getByRole('button', { name: 'Add Next', exact: true })).toBeHidden();
-		await expect(firstMore).toBeFocused();
-		await firstMore.click();
-		await page.getByTestId('unified-browse-title').click();
-		await expect(rows.nth(0).getByRole('button', { name: 'Add Next', exact: true })).toBeHidden();
-		await rows.nth(1).getByLabel('More actions for I Swear').click();
-		await expect(rows.nth(1).getByRole('button', { name: 'Add Next', exact: true })).toBeVisible();
-		await page.keyboard.press('Escape');
-		await expect(rows.nth(1).getByLabel('More actions for I Swear')).toBeFocused();
-		await firstMore.focus();
-		await page.keyboard.press('Enter');
-		await rows.nth(1).getByLabel('More actions for I Swear').focus();
-		await page.keyboard.press('Space');
-		await expect(page.locator('.track-more[open]')).toHaveCount(1);
-		await expect(rows.nth(0).getByRole('button', { name: 'Add Next', exact: true })).toBeHidden();
-		await expect(rows.nth(1).getByRole('button', { name: 'Add Next', exact: true })).toBeVisible();
-		await page.keyboard.press('Escape');
 		const readsBefore = await page.evaluate(() => window.libraryScrollFixture.publicReads.length);
-		await rows.nth(1).getByRole('button', { name: 'Queue', exact: true }).click();
-		await expect(page.getByTestId('unified-track-status')).toHaveText('Queued: I Swear');
+		await controls.getByRole('button', { name: 'Queue', exact: true }).click();
+		await expect(page.getByTestId('unified-track-status')).toHaveText('Queued: 1 tracks.');
 		const probes = await page.evaluate(() => window.libraryScrollFixture.publicActionProbes);
 		expect(probes).toHaveLength(1);
 		expect(probes[0].rowIndex).toBe(222);
@@ -183,22 +165,19 @@ for (const display of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'p
 			{ rowIndex: 222, action: 'Queue', generation: probes[0].generation }
 		]);
 		expect(await page.evaluate(() => window.libraryScrollFixture.publicReads.length)).toBe(readsBefore);
-		await rows.nth(1).getByLabel('More actions for I Swear').click();
-		await rows.nth(1).getByRole('button', { name: 'Add Next', exact: true }).click();
-		await expect(page.getByTestId('unified-track-status')).toHaveText('Added next: I Swear');
-		await rows.nth(1).getByLabel('More actions for I Swear').click();
-		await rows.nth(1).getByRole('button', { name: 'Favorite', exact: true }).click();
-		await expect(page.getByTestId('unified-track-status')).toHaveText('Added to favorites: I Swear');
+		await controls.getByRole('button', { name: 'More actions', exact: true }).click();
+		await page.getByRole('menu', { name: 'Selected track actions' }).getByRole('menuitem', { name: 'Add Next', exact: true }).click();
+		await expect(page.getByTestId('unified-track-status')).toHaveText('Add Next: I Swear');
+		await controls.getByRole('button', { name: 'Bookmark selected items', exact: true }).click();
+		await expect(page.getByTestId('unified-track-status')).toHaveText('Bookmarked.');
 		expect(await page.evaluate(() => window.libraryScrollFixture.publicFavoriteWrites)).toEqual([
 			{ type: 'track', title: 'I Swear', artist: 'All-4-One' }
 		]);
-		const screenshot = testInfo.outputPath(`tracks-inline-${display.name}.png`);
-		await rows.nth(1).hover();
-		await expect(rows.nth(1).getByRole('button', { name: 'Play', exact: true })).toHaveCSS('opacity', '1');
+		const screenshot = testInfo.outputPath(`tracks-selection-${display.name}.png`);
 		await page.screenshot({ path: screenshot });
-		await testInfo.attach(`tracks-inline-${display.name}`, { path: screenshot, contentType: 'image/png' });
+		await testInfo.attach(`tracks-selection-${display.name}`, { path: screenshot, contentType: 'image/png' });
 		await page.evaluate(() => window.libraryScrollFixture.expirePublicActionAuthority());
-		await rows.nth(1).getByRole('button', { name: 'Play', exact: true }).click();
+		await controls.getByRole('button', { name: 'Play', exact: true }).click();
 		await expect(page.getByTestId('unified-track-status')).toContainText('expired');
 		await expect(page.getByTestId('unified-browse-action-sheet')).toHaveCount(0);
 		expect(await page.evaluate(() => window.libraryScrollFixture.publicActions)).toEqual([

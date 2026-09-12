@@ -43,7 +43,6 @@ import type {
 } from '$lib/library/UnifiedBrowseController';
 import type { AddFavoriteRequest, CoreStatusResponse } from '@shared/types';
 import type { FavoritesState } from '$lib/stores/favoritesStore';
-import type { UnifiedSearchClient } from '$lib/unifiedSearchClient';
 import type {
 	AlbumActionBeginInput,
 	AlbumActionController,
@@ -57,7 +56,6 @@ import {
 	__getNavigationLog,
 	__resetNavigation
 } from '../../../test/app-stubs/navigation';
-import { NO_IMPORT_DATES_REASON, NO_RELEASE_DATES_REASON } from '$lib/unifiedLibrarySorts';
 import type {
 	unifiedComposersStore,
 	unifiedGenresStore,
@@ -456,7 +454,6 @@ export interface Harness {
 	favoritesStore?: Writable<FavoritesState>;
 	loadFavoritesData?: (fetchFn: typeof fetch) => Promise<void>;
 	removeFavoriteData?: (fetchFn: typeof fetch, id: string) => Promise<void>;
-	songRelationshipClient?: Pick<UnifiedSearchClient, 'relationship'>;
 	albumActionController?: AlbumActionController;
 	getSocketClient?: () => ReturnType<typeof fakeConnectionSocket>;
 	/**
@@ -557,15 +554,6 @@ export function mountMode(options: Harness = {}) {
 		vi.fn(async () => {
 			paletteSearchStore.set({ phase: 'idle', query: '', groups: [], error: null });
 		});
-	const songRelationshipClient =
-		options.songRelationshipClient ??
-		({
-			relationship: vi.fn().mockResolvedValue({
-				songTitle: 'Song',
-				albums: [],
-				composerLabels: []
-			})
-		} satisfies Pick<UnifiedSearchClient, 'relationship'>);
 	const favoritesStore =
 		options.favoritesStore ??
 		writable<FavoritesState>({ entries: [], loading: false, loaded: true });
@@ -609,7 +597,6 @@ export function mountMode(options: Harness = {}) {
 			? { browseActionController: options.browseActionController }
 			: {}),
 		...(options.addFavoriteData ? { addFavoriteData: options.addFavoriteData } : {}),
-		songRelationshipClient,
 		...(options.albumActionController
 			? { albumActionController: options.albumActionController }
 			: {}),
@@ -663,7 +650,6 @@ export function mountMode(options: Harness = {}) {
 		clearPaletteSearchData,
 		resetPaletteSearchData,
 		favoritesStore,
-		songRelationshipClient,
 		registered,
 		setCommitted: (value: CommittedLibraryModeActivation | null) => {
 			committed = value;

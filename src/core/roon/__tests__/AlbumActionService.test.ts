@@ -60,7 +60,7 @@ async function flush(): Promise<void> {
 }
 
 function browseResult(): BrowseResult {
-  return { level: 0, offset: 0, count: 0, items: [] };
+  return { action: "none", level: 0, offset: 0, count: 0, items: [] };
 }
 
 function zone(outputIds = ["output-a"]): Zone {
@@ -231,6 +231,7 @@ class FakeCoordinator implements AlbumActionCoordinatorPort {
   public executeMode: "success" | "pre-error" | "post-error" | "deferred" =
     "success";
   public execution = deferred<BrowseResult>();
+  public executeResult = browseResult();
   public browseImpl: () => Promise<BrowseResult> = () =>
     Promise.resolve(browseResult());
 
@@ -301,7 +302,7 @@ class FakeCoordinator implements AlbumActionCoordinatorPort {
       return Promise.reject(new Error("after dispatch"));
     }
     if (this.executeMode === "deferred") return this.execution.promise;
-    return Promise.resolve(browseResult());
+    return Promise.resolve(this.executeResult);
   }
 
   public executeLibraryAction(
@@ -317,7 +318,7 @@ class FakeCoordinator implements AlbumActionCoordinatorPort {
       return Promise.reject(this.libraryExecuteError);
     }
     onIssued();
-    return Promise.resolve(browseResult());
+    return Promise.resolve(this.executeResult);
   }
 
   public releaseAction(): Promise<void> {
@@ -929,6 +930,50 @@ describe("AlbumActionService", () => {
     expect(coordinator.releaseCalls).toBe(1);
   });
 
+  it("reports a public Roon refusal without replaying the claimed album action", async () => {
+    const event = await resolveRequest();
+    coordinator.executeResult = {
+      ...browseResult(),
+      action: "message",
+      isError: true,
+      message: "This album is unavailable",
+    };
+
+    await expect(
+      service.execute(origin, { actionId: event.actions[0].actionId })
+    ).resolves.toEqual({
+      success: true,
+      data: {
+        claimed: true,
+        outcome: "rejected",
+        code: "ROON_REJECTED",
+        error: "This album is unavailable",
+      },
+    });
+    await expect(
+      service.execute(origin, { actionId: event.actions[0].actionId })
+    ).resolves.toEqual({ success: true, data: { claimed: false } });
+    expect(coordinator.executeCalls).toHaveLength(1);
+    expect(coordinator.releaseCalls).toBe(1);
+  });
+
+  it("leaves an unrecognized issued album response uncertain without replaying it", async () => {
+    const event = await resolveRequest();
+    coordinator.executeResult = { ...browseResult(), action: undefined };
+
+    await expect(
+      service.execute(origin, { actionId: event.actions[0].actionId })
+    ).resolves.toMatchObject({
+      success: true,
+      data: { claimed: true, outcome: "outcome-unknown" },
+    });
+    await expect(
+      service.execute(origin, { actionId: event.actions[0].actionId })
+    ).resolves.toEqual({ success: true, data: { claimed: false } });
+    expect(coordinator.executeCalls).toHaveLength(1);
+    expect(coordinator.quarantineCalls).toBe(1);
+  });
+
   it("executes an artists-resolved binding (library album page) against the artists hierarchy", async () => {
     resolverImpl = () => Promise.resolve(resolvedActions("artists"));
     const event = await resolveRequest();
@@ -1210,6 +1255,34 @@ describe("AlbumActionService", () => {
       ]);
       // Nothing keyed reaches the reader, exactly as on the page path.
       expect(JSON.stringify(event)).not.toContain("roon-key-for");
+    });
+
+    it("reports a public Roon refusal on the anchored library channel", async () => {
+      const event = await resolveRequest(referenceRequest());
+      coordinator.executeResult = {
+        ...browseResult(),
+        action: "message",
+        isError: true,
+        message: "This track is unavailable",
+      };
+
+      await expect(
+        service.execute(origin, { actionId: event.actions[0].actionId })
+      ).resolves.toEqual({
+        success: true,
+        data: {
+          claimed: true,
+          outcome: "rejected",
+          code: "ROON_REJECTED",
+          error: "This track is unavailable",
+        },
+      });
+      await expect(
+        service.execute(origin, { actionId: event.actions[0].actionId })
+      ).resolves.toEqual({ success: true, data: { claimed: false } });
+      expect(coordinator.libraryExecuteCalls).toHaveLength(1);
+      expect(coordinator.executeCalls).toHaveLength(0);
+      expect(coordinator.releaseCalls).toBe(1);
     });
 
     it("dispatches execution back onto the same anchored library channel", async () => {

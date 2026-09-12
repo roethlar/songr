@@ -1,5 +1,7 @@
 <script lang="ts">
 	import '../app.css';
+	import { addFavorite } from '$lib/stores/favoritesStore';
+	import { createBookmarkActions } from '$lib/stores/bookmarkActions';
 	import { page } from '$app/stores';
 	import { onMount, tick } from 'svelte';
 	import { resolveAppShellContract } from '$lib/appShellContract';
@@ -22,6 +24,7 @@
 	import { goto } from '$app/navigation';
 	import { zonesStore, zoneMapStore } from '$lib/stores/zonesStore';
 	import { interpolatedSeekStore } from '$lib/stores/interpolatedSeekStore';
+	import { bindDocumentPresentation } from '$lib/stores/presentationSettingsStore';
 	import { registerSocketHandlers } from '$lib/socket/register';
 	import { startDocumentTitleBinding } from '$lib/media/documentTitle';
 	import { startMediaSessionBinding } from '$lib/media/mediaSessionBinding';
@@ -52,6 +55,7 @@
 	} from '@shared/types';
 
 	let { children } = $props();
+	const queueBookmarkActions = createBookmarkActions(entry => addFavorite(fetch, entry));
 
 	let socket = $state(getSocket());
 	let commandInFlight = $state(false);
@@ -91,6 +95,7 @@
 	});
 
 	onMount(() => {
+		const stopPresentation = bindDocumentPresentation(document.documentElement);
 		initializeTheme();
 		socket = getSocket();
 		const cleanupSocket = registerSocketHandlers();
@@ -108,6 +113,7 @@
 		void initializeStores(fetch);
 
 		return () => {
+			stopPresentation();
 			stopDocumentTitle();
 			stopSpacebar();
 			stopMediaSession();
@@ -148,7 +154,7 @@
 		const subs = $healthStore.subsystems;
 		const names: string[] = [];
 		if (subs.recently_played?.degraded) names.push('Recently Played');
-		if (subs.favorites?.degraded) names.push('Favorites');
+		if (subs.favorites?.degraded) names.push('Bookmarks');
 		return names.length ? names : ['a server subsystem'];
 	});
 	const activeZone = $derived($selectedZoneStore ? $zoneMapStore.get($selectedZoneStore) : undefined);
@@ -557,6 +563,9 @@
 
 {#if unifiedTransport && unifiedQueueOpen}
 	<UnifiedQueuePanel
+		onBookmark={items => void queueBookmarkActions.save(items)}
+		bookmarkBusy={$queueBookmarkActions.busy}
+		bookmarkStatus={$queueBookmarkActions.status}
 		onclose={() => (unifiedQueueOpen = false)}
 		onlibraryintent={routeUnifiedQueueLibraryIntent}
 	/>

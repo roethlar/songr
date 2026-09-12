@@ -2,10 +2,8 @@
  * CorePressureBreaker — the required B5 slice of
  * `.agents/plans/core-wedge-postconnect.md` (Phase B).
  *
- * One admission gate, per Core, over every BACKGROUND workload that puts
- * bulk read traffic on the Core: the catalog refresh pull, the artist-album
- * binding pass, and the server-driven catalog walk. Foreground work — a
- * reader opening an artist, a search, an explicit operator refresh — never
+ * One admission gate, per Core, over the background library reads. Foreground
+ * work — a reader opening an artist, a search, an explicit operator refresh — never
  * passes through here. The point of the gate is to shed load the user did
  * not ask for while the Core is struggling, not to make the app slower.
  *
@@ -88,15 +86,7 @@ export const CORE_PRESSURE_BACKOFF_FACTOR = 2;
 export const CORE_PRESSURE_BACKOFF_MAX_MS = 300_000;
 
 /** The background workloads the gate admits. */
-export type CorePressureWorkload =
-  /** The native snapshot pull. */
-  | "catalog-refresh"
-  /** The whole-library artist→album binding pass. */
-  | "artist-album-binding"
-  /** A server-driven walk of the public browse hierarchies. */
-  | "catalog-walk"
-  /** The live view's read of Roon's own library roots. */
-  | "library-roots";
+export type CorePressureWorkload = "library-roots";
 
 export type CorePressureState = "closed" | "open" | "half-open";
 
@@ -359,13 +349,12 @@ export class CorePressureBreaker {
     this.lastPairedCoreId = coreId;
     if (previous !== null && previous !== coreId) {
       this.cancelProbe();
-      // Whether anything is actually being HELD, not merely recorded. The
-      // suspension a trip performs is process-wide — `pauseRefresh` and the
-      // binding pass's pause take no Core, and there is one canary — so
-      // forgetting the old Core's record without lifting it would leave the
-      // new Core's workloads revoked with no record left that could ever
-      // close them again. Checked rather than resumed unconditionally: a
-      // resume nobody asked for would lift an operator's own pause and would
+      // Whether anything is actually being HELD, not merely recorded. A trip
+      // suspends the shared canary and registered readers. Forgetting the old
+      // Core's record without resuming them can leave the new Core's readers
+      // revoked with no record left that could ever close them again.
+      // Checked rather than resumed unconditionally: a resume nobody asked
+      // for would lift an operator's own pause and would
       // put a recovery in the log where none happened.
       const held =
         this.isHeld(this.cores.get(previous)) ||
@@ -430,7 +419,7 @@ export class CorePressureBreaker {
   /**
    * Whether a report about `coreId` is one this breaker may act on.
    *
-   * Background work unwinds slowly, so a refresh or a binding pass aimed at
+   * Background work unwinds slowly, so a library read aimed at
    * the Core that just went away can still be failing after the controller
    * has moved on. Acting on that is wrong three times over: it opens a
    * breaker for a Core nothing can close, it suspends the CURRENT Core's

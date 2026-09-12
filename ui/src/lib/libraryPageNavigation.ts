@@ -77,22 +77,6 @@ export function replaceLibraryPageState(
 }
 
 /**
- * Arms the same one-shot suppression for a self-initiated history
- * TRAVERSAL: an in-page Back over an entry the mode pushed calls
- * `history.back()` while it already shows the destination state, so the
- * arriving pop must not trigger a teardown restore (ri8-1). A
- * fingerprint mismatch — entry noise drifted since the push — falls
- * through to the normal pop path, which restores the same destination
- * the slow way.
- */
-export function expectSelfAuthoredLibraryPageState(
-	state: UnifiedLibraryPageState,
-	routeOverride?: LibraryRoute
-): void {
-	pendingSelfAuthoredFingerprint = preflightLibraryPageState(state, routeOverride);
-}
-
-/**
  * SvelteKit shallow writes and shallow browser traversal both surface through
  * reactive page.url. The host calls this once for each observed change so a
  * write it just authored is not mistaken for Back/Forward. Only the newest

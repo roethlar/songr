@@ -422,7 +422,7 @@ describe('main Settings — shared Library navigation', () => {
 		const fetchFn = vi.fn().mockReturnValueOnce(pending).mockResolvedValueOnce(json(snapshot(3, ['artists', 'albums', 'genres', 'favorites']))) as unknown as typeof fetch;
 		render(AppSettingsMenu, { props: { navigationStore, fetchFn } }); openSettingsMenu();
 		await userEvent.click(await screen.findByRole('button', { name: 'Library navigation' }));
-		const favorite = await screen.findByRole('checkbox', { name: 'Favorites' });
+		const favorite = await screen.findByRole('checkbox', { name: 'Bookmarks' });
 		await userEvent.click(favorite);
 		expect(favorite).not.toBeChecked(); expect(favorite).toBeDisabled();
 		expect(screen.getByText('Saving navigation settings…')).toBeInTheDocument();
@@ -442,7 +442,7 @@ describe('main Settings — shared Library navigation', () => {
 		openSettingsMenu();
 		const toggle = await screen.findByRole('button', { name: 'Library navigation' });
 		await userEvent.click(toggle);
-		await userEvent.click(screen.getByRole('checkbox', { name: 'Favorites' }));
+		await userEvent.click(screen.getByRole('checkbox', { name: 'Bookmarks' }));
 		await userEvent.click(toggle);
 		expect(screen.queryByRole('checkbox')).toBeNull();
 		expect(screen.getByRole('status')).toHaveTextContent('Saving navigation settings…');
@@ -479,10 +479,10 @@ describe('main Settings — shared Library navigation', () => {
 		const fetchFn = vi.fn(async () => json({ error: 'Conflict', current: snapshot(4, ['surprise']) }, 409)) as unknown as typeof fetch;
 		render(AppSettingsMenu, { props: { navigationStore, fetchFn } }); openSettingsMenu();
 		await userEvent.click(await screen.findByRole('button', { name: 'Library navigation' }));
-		await userEvent.click(await screen.findByRole('checkbox', { name: 'Favorites' }));
+		await userEvent.click(await screen.findByRole('checkbox', { name: 'Bookmarks' }));
 		await screen.findByText(/another client.*not saved/);
 		expect(screen.getByRole('checkbox', { name: 'Surprise me' })).toBeChecked();
-		expect(screen.getByRole('checkbox', { name: 'Favorites' })).not.toBeChecked();
+		expect(screen.getByRole('checkbox', { name: 'Bookmarks' })).not.toBeChecked();
 	});
 
 	it('loads Settings on opening, exposes read failure, and offers a real retry', async () => {

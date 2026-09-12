@@ -1,5 +1,6 @@
 import { derived, readable } from 'svelte/store';
 import { zoneMapStore } from './zonesStore';
+import { effectivePresentationStore } from './presentationSettingsStore';
 
 /**
  * Seek positions interpolated between server ticks.
@@ -17,12 +18,16 @@ import { zoneMapStore } from './zonesStore';
  */
 const TICK_MS = 250;
 
-const clock = readable(0, (set) => {
-	// The initial 0 emits immediately; each interval tick re-emits the
-	// current time, prompting the derived below to resample.
-	set(Date.now());
-	const id = setInterval(() => set(Date.now()), TICK_MS);
-	return () => clearInterval(id);
+const clock = readable({ now: 0, motion: false }, (set) => {
+	let timer: ReturnType<typeof setInterval> | undefined;
+	const stop = effectivePresentationStore.subscribe(settings => {
+		if (timer !== undefined) clearInterval(timer);
+		timer = undefined;
+		set({ now: Date.now(), motion: settings.interfaceMotion });
+		if (settings.interfaceMotion)
+			timer = setInterval(() => set({ now: Date.now(), motion: true }), TICK_MS);
+	});
+	return () => { stop(); if (timer !== undefined) clearInterval(timer); };
 });
 
 // zone_id → the server-fed position this interpolation run is based
@@ -30,9 +35,13 @@ const clock = readable(0, (set) => {
 // must survive derived recomputation.
 const bases = new Map<string, { position: number; at: number }>();
 
+let previousMotion = false;
+
 export const interpolatedSeekStore = derived(
 	[zoneMapStore, clock],
-	([$zones, $now]) => {
+	([$zones, { now: $now, motion }]) => {
+		if (motion !== previousMotion) bases.clear();
+		previousMotion = motion;
 		const out = new Map<string, number>();
 		for (const [zoneId, zone] of $zones) {
 			const serverPosition = zone.seek_position ?? 0;
@@ -40,7 +49,7 @@ export const interpolatedSeekStore = derived(
 			if (!prev || prev.position !== serverPosition) {
 				bases.set(zoneId, { position: serverPosition, at: $now });
 			}
-			if (zone.state !== 'playing') {
+			if (!motion || zone.state !== 'playing') {
 				out.set(zoneId, serverPosition);
 				continue;
 			}

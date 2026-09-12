@@ -216,7 +216,14 @@ The parent-death watchdog is tested on the backend side, in
 
 ## Updates
 
-Install a newer verified package normally. Automatic in-app updates are not
-implemented. Signing, notarization, platform icons, media controls and first-run
+The desktop app checks its installed Songr app version against the latest public
+GitHub release once at startup, without delaying the window or server startup.
+When a newer release is available, choose **View release** to open it in your
+browser, or **Later** to keep using the current version. This check is independent
+of any remote Songr server and does not compare Electron framework versions.
+
+**About → Check for updates** checks the connected Songr server.
+Install updates using your existing package manager or installation method;
+Songr does not download or install them automatically. Signing, notarization, platform icons, media controls and first-run
 setup already have current implementations; their build and verification steps
 are documented above and in the root README.

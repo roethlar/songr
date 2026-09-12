@@ -13,6 +13,8 @@
 	import { navigationSettingsStore, type NavigationSettingsStore } from '$lib/stores/navigationSettingsStore';
 	import { getNavigationDestinationLabel, type NavigationDestinationId } from '@shared/navigationSettings';
 	import { setTheme, themeStore, type ThemeMode } from '$lib/stores/themeStore';
+	import { presentationSettingsStore, osReducedMotionStore, type PresentationSettingsStore } from '$lib/stores/presentationSettingsStore';
+	import type { ActionDisplay } from '@shared/presentationSettings';
 	import {
 		requestUnifiedLibraryDensity,
 		UNIFIED_LIBRARY_DENSITY_OPTIONS,
@@ -25,7 +27,8 @@
 		switchCoreClient = switchCoreRequest,
 		fetchFn = fetch,
 		resolveAdvancedSettings = openAdvancedSettings,
-		navigationStore = navigationSettingsStore
+		navigationStore = navigationSettingsStore,
+		presentationStore = presentationSettingsStore
 	}: {
 		requestDensity?: typeof requestUnifiedLibraryDensity;
 		switchCoreClient?: typeof switchCoreRequest;
@@ -33,6 +36,7 @@
 		/** Injected so tests can mount both the shell and the browser case. */
 		resolveAdvancedSettings?: typeof openAdvancedSettings;
 		navigationStore?: NavigationSettingsStore;
+		presentationStore?: PresentationSettingsStore;
 	} = $props();
 
 	// Null in a browser tab. The desktop shell is the only place these settings
@@ -40,6 +44,12 @@
 	// desktop without a tray, network serving could not be turned on at all.
 	const advancedSettings = $derived(resolveAdvancedSettings());
 	const navigation = $derived($navigationStore);
+	const presentation = $derived($presentationStore);
+	const presentationBusy = $derived(presentation.loading || presentation.saving || presentation.snapshot === null);
+	$effect(() => {
+		if ($settingsMenuOpen && presentation.snapshot === null && !presentation.loading && !presentation.error)
+			void presentationStore.load(fetchFn);
+	});
 	const navigationPages = $derived([
 		...(navigation.snapshot?.order ?? []),
 		...navigation.availableDestinations.filter(id => !navigation.snapshot?.order.includes(id))
@@ -208,7 +218,7 @@
 					<section class="settings-section" aria-labelledby="settings-appearance-title">
 						<div>
 							<h3 id="settings-appearance-title">Appearance</h3>
-							<p class="settings-scope">This device</p>
+							<p class="settings-scope">Theme and row size apply to this device.</p>
 						</div>
 						<div class="settings-field">
 							<h4>Theme</h4>
@@ -241,6 +251,45 @@
 								{/each}
 							</div>
 						</div>
+						<div class="settings-field">
+							<h4>Action display</h4>
+							<p class="settings-scope">Shared by clients connected to this server.</p>
+							<div class="appearance-buttons" role="group" aria-label="Action display" aria-busy={presentation.saving}>
+								{#each ['icons', 'text', 'both'] as option}
+									<button type="button" class="appearance-button" disabled={presentationBusy}
+										class:selected={presentation.snapshot?.actionDisplay === option}
+										aria-pressed={presentation.snapshot?.actionDisplay === option}
+										onclick={() => void presentationStore.update({ actionDisplay: option as ActionDisplay }, fetchFn)}
+									>{option === 'icons' ? 'Icons' : option === 'text' ? 'Text' : 'Both'}</button>
+								{/each}
+							</div>
+						</div>
+					</section>
+
+					<section class="settings-section" aria-labelledby="settings-accessibility-title" aria-busy={presentation.loading || presentation.saving}>
+						<div><h3 id="settings-accessibility-title">Accessibility</h3><p class="settings-scope">Shared by clients connected to this server.</p></div>
+						{#each [{ key: 'smoothScroll' as const, label: 'Smooth scrolling' }, { key: 'interfaceMotion' as const, label: 'Interface animations' }] as setting}
+							<div class="settings-field">
+								<h4>{setting.label}</h4>
+								<div class="appearance-buttons" role="group" aria-label={setting.label}>
+									{#each [true, false] as enabled}
+										<button type="button" class="appearance-button" disabled={presentationBusy}
+											class:selected={presentation.snapshot?.[setting.key] === enabled}
+											aria-pressed={presentation.snapshot?.[setting.key] === enabled}
+											onclick={() => void presentationStore.update({ [setting.key]: enabled }, fetchFn)}>{enabled ? 'On' : 'Off'}</button>
+									{/each}
+								</div>
+							</div>
+						{/each}
+						{#if $osReducedMotionStore && (presentation.snapshot?.smoothScroll || presentation.snapshot?.interfaceMotion)}
+							<p class="navigation-status">Your device's Reduce Motion setting turns off scrolling and animations here.</p>
+						{/if}
+						{#if presentation.loading}<p class="navigation-status" role="status">Loading appearance settings…</p>
+						{:else if presentation.saving}<p class="navigation-status" role="status">Saving appearance settings…</p>{/if}
+						{#if presentation.error}<p class="navigation-error" role="alert">{presentation.error}</p>
+							{#if presentation.snapshot === null}<button type="button" class="core-secondary" disabled={presentation.loading} onclick={() => void presentationStore.load(fetchFn)}>Retry appearance settings</button>{/if}
+						{/if}
+						{#if presentation.notice}<p class="navigation-status" role="status">{presentation.notice}</p>{/if}
 					</section>
 
 					<section class="settings-section" aria-labelledby="settings-navigation-title" aria-busy={navigation.loading || navigation.saving}>
@@ -384,6 +433,7 @@
 							</button>
 						</section>
 					{/if}
+
 				</div>
 
 				<footer class="settings-footer">

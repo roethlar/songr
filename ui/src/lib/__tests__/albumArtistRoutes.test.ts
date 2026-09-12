@@ -13,8 +13,7 @@ function routes(selector: AlbumCreditSelector, credit: string): LibraryRoute[] {
 	return [
 		{ kind: 'album-artists-root' },
 		{ kind: 'credit-group', selector },
-		{ kind: 'credit-album', selector, album },
-		{ kind: 'credit-album-track', selector, album, track: '..' }
+		{ kind: 'credit-album', selector, album }
 	];
 }
 
@@ -33,7 +32,9 @@ describe('album-credit addresses and semantic parents', () => {
 		const route = decodeLibraryRoute(url);
 		expect(route).not.toBeNull();
 		for (const view of ['album-artists', 'all-artists'] as const) {
-			expect(libraryRouteFromPageState(libraryEntryPageState(url, view))).toEqual(route);
+			const expected = route?.kind === 'credit-album-track'
+				? { kind: 'credit-album', selector: route.selector, album: route.album } : route;
+			expect(libraryRouteFromPageState(libraryEntryPageState(url, view))).toEqual(expected);
 		}
 	});
 

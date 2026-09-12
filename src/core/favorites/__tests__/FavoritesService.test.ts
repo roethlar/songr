@@ -2,6 +2,7 @@ import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
 import { FavoritesService, favoriteDedupeKey } from "../FavoritesService";
+import type { FavoriteEntry } from "../../../shared/types";
 
 const stubLogger: any = {
   info: jest.fn(),
@@ -81,13 +82,37 @@ describe("FavoritesService", () => {
     expect(second.getEntries().map((e) => e.title)).toEqual(["Beyoncé"]);
   });
 
-  it("enforces the cap (drops oldest)", async () => {
-    const svc = new FavoritesService(stubLogger, { filePath: await tmpFile(), cap: 2 });
+  it.each([500, 751])("preserves %i existing bookmarks through load, add, and restart", async (count) => {
+    const filePath = await tmpFile();
+    const types = ["track", "album", "artist"] as const;
+    const saved: FavoriteEntry[] = Array.from({ length: count }, (_, index) => ({
+      id: `saved-${index}`,
+      type: types[index % types.length],
+      title: `Saved item ${index}`,
+      artist: `Credit ${index}`,
+      image_key: `image-${index}`,
+      added_at: "2026-06-10T00:00:00.000Z",
+    }));
+    const persisted = JSON.stringify({ entries: saved });
+    await fs.writeFile(filePath, persisted, "utf-8");
+
+    const svc = new FavoritesService(stubLogger, { filePath });
     await svc.start();
-    await svc.add({ type: "track", title: "One" });
-    await svc.add({ type: "track", title: "Two" });
-    await svc.add({ type: "track", title: "Three" });
-    expect(svc.getEntries().map((e) => e.title)).toEqual(["Three", "Two"]);
+    expect(svc.getEntries()).toEqual(saved);
+    expect(await fs.readFile(filePath, "utf-8")).toBe(persisted);
+
+    const added = await svc.add({ type: "track", title: "New bookmark", artist: "New artist" });
+    const expected = [added, ...saved];
+    expect(svc.getEntries()).toEqual(expected);
+    expect(JSON.parse(await fs.readFile(filePath, "utf-8"))).toEqual({ entries: expected });
+
+    const restarted = new FavoritesService(stubLogger, { filePath });
+    await restarted.start();
+    expect(restarted.getEntries()).toEqual(expected);
+    // A saved item beyond the former boundary retains its identity on a duplicate add.
+    const oldest = saved[saved.length - 1];
+    expect(await restarted.add(oldest)).toEqual(oldest);
+    expect(restarted.getEntries()).toEqual(expected);
   });
 
   it("enters degraded mode on a corrupt file and refuses mutations without clobbering it", async () => {

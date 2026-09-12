@@ -1,7 +1,12 @@
 <script lang="ts">
+	import LibraryActionButton from '$lib/components/LibraryActionButton.svelte';
+	import EntityFeedback from '$lib/components/EntityFeedback.svelte';
 	import { onDestroy, untrack } from 'svelte';
 	import { get } from 'svelte/store';
 	import { prepareLibraryGrid } from '$lib/preparedLibraryGrid';
+	import { createTrackSelection } from '$lib/trackSelection';
+	import { bookmarkPayload } from '$lib/bookmarks';
+	import type { AddFavoriteRequest } from '@shared/types';
 	import { measureLibraryChrome } from '$lib/libraryListChrome';
 	import type { AlbumActionController } from '$lib/library/AlbumActionController';
 	import type {
@@ -26,6 +31,7 @@
 	import type { LibraryRenderingPath } from '$lib/library/liveLibraryPath';
 	import type { LibraryPreviewItemKind } from '@shared/libraryPreviewContracts';
 	import type { UnifiedLibraryDensity } from '$lib/stores/unifiedLibraryPrefsStore';
+	import TrackSelectionControls from './TrackSelectionControls.svelte';
 
 	interface Props {
 		page: LiveLibraryPageState;
@@ -35,6 +41,13 @@
 		onRetry: () => void;
 		onOpenRow: (row: LibraryLevelRow) => void;
 		onRowAction?: (row: LibraryLevelRow, semantic: 'play-now' | 'add-next' | 'queue') => void;
+		onRowsAction?: (rows: readonly LibraryLevelRow[], semantic: 'play-now' | 'add-next' | 'queue') => void;
+		onBookmark?: (items: readonly AddFavoriteRequest[]) => void;
+		bookmarkBusy?: boolean;
+		bookmarkStatus?: string | null;
+		batchBusy?: boolean;
+		batchStatus?: string | null;
+		onCancelBatch?: () => void;
 		onRowMore?: (row: LibraryLevelRow) => void;
 		onCloseRowMore?: () => void;
 		hrefForRow: (row: LibraryLevelRow) => string | null;
@@ -49,6 +62,8 @@
 		};
 		randomSeed: number;
 		onSetAlbumSort: (value: string) => void;
+		groupByLetter?: boolean;
+		onSetGroupByLetter?: (value: boolean) => void;
 		genrePreviews: GenrePreviewState;
 		density: UnifiedLibraryDensity;
 		onPreviewCapacity: (capacity: number) => void;
@@ -65,6 +80,13 @@
 		onRetry,
 		onOpenRow,
 		onRowAction,
+		onRowsAction,
+		onBookmark,
+		bookmarkBusy = false,
+		bookmarkStatus = null,
+		batchBusy = false,
+		batchStatus = null,
+		onCancelBatch,
 		onRowMore,
 		onCloseRowMore,
 		hrefForRow,
@@ -75,6 +97,8 @@
 		sorts,
 		randomSeed,
 		onSetAlbumSort,
+		groupByLetter = false,
+		onSetGroupByLetter,
 		genrePreviews,
 		density,
 		onPreviewCapacity,
@@ -93,6 +117,7 @@
 	let rowFilter = $state('');
 	let rowSort = $state('original');
 	let railTarget = $state<LetterBucket | null>(null);
+	const trackSelection = createTrackSelection<LibraryLevelRow>();
 	const action = $derived($actionController);
 	const rows = $derived(page.level?.rows ?? []);
 	const albumRows = $derived(rows.filter((row) => row.kind === 'album'));
@@ -100,22 +125,47 @@
 	const ordinaryRows = $derived(
 		rows.filter((row) => row.kind !== 'album' && row.kind !== 'action')
 	);
+	const orderedOrdinaryRows = $derived.by(() => {
+		const ordered = [...ordinaryRows];
+		if (rowSort !== 'original') ordered.sort((a, b) => (rowSort === 'name-desc' ? -1 : 1) * a.title.localeCompare(b.title, undefined, { sensitivity: 'base', numeric: true }));
+		return ordered;
+	});
 	const ordinaryMatches = $derived.by(() => {
 		const query = rowFilter.trim().toLocaleLowerCase();
-		const matching = ordinaryRows.filter(row => !query || `${row.title}\n${row.subtitle ?? ''}`.toLocaleLowerCase().includes(query));
-		if (rowSort !== 'original') matching.sort((a, b) => (rowSort === 'name-desc' ? -1 : 1) * a.title.localeCompare(b.title, undefined, { sensitivity: 'base', numeric: true }));
-		return matching;
+		return orderedOrdinaryRows.filter(row => !query || `${row.title}\n${row.subtitle ?? ''}`.toLocaleLowerCase().includes(query));
 	});
+	const trackRows = $derived(orderedOrdinaryRows.filter(row => row.kind === 'track'));
+	const visibleTracks = $derived(ordinaryMatches.filter(row => row.kind === 'track'));
+	$effect(() => { trackSelection.retain(page.phase === 'ready' ? trackRows : [], page.level ?? undefined); });
 	const rowLabel = $derived(levelKind === 'composer' ? 'Compositions' : 'Recordings');
 	$effect(() => { page.level; rowFilter = ''; rowSort = 'original'; });
 	const actionRows = $derived(rows.filter((row) => row.kind === 'action'));
 	const bulkRows = $derived(rows.filter(row => row.kind === 'action' &&
 		['play artist', 'play album', 'play genre', 'play composer', 'play composition', 'play work'].includes(row.title.trim().toLowerCase())));
 	const actionBusy = $derived(
-		action.phase === 'resolving' ||
+		bookmarkBusy || batchBusy || action.phase === 'resolving' ||
 			action.phase === 'choosing' ||
 			action.phase === 'executing'
 	);
+	const selectionActions = $derived([
+		{ id: 'play', label: 'Play', disabled: !onRowsAction || !actionsEnabled || actionBusy, run: (selected: LibraryLevelRow[]) => beginRows(selected, 'play-now') },
+		{ id: 'queue', label: 'Queue', disabled: !onRowsAction || !actionsEnabled || actionBusy, run: (selected: LibraryLevelRow[]) => beginRows(selected, 'queue') },
+		{ id: 'next', label: 'Add next', disabled: !onRowsAction || !actionsEnabled || actionBusy, run: (selected: LibraryLevelRow[]) => beginRows(selected, 'add-next') }
+	]);
+	const bookmarkDisabled = $derived.by(() => {
+		if (actionBusy || page.phase !== 'ready') return true;
+		for (const row of $trackSelection.selected) if (!row.title.trim()) return true;
+		return false;
+	});
+
+	function bookmarkTracks(selected: LibraryLevelRow[]): void {
+		if (!onBookmark || actionBusy || page.phase !== 'ready' || !selected.length ||
+			selected.some(row => !trackRows.includes(row) || !row.title.trim())) return;
+		closeRowMenu();
+		onBookmark(selected.map(row => bookmarkPayload('track', {
+			title: row.title, artist: row.subtitle, imageKey: row.imageKey
+		})));
+	}
 	const sortMenu = genreDrillSortMenu();
 	const railBuckets = $derived.by((): readonly LetterBucket[] => {
 		if (
@@ -171,6 +221,12 @@
 		return kind === 'track' ? 'recording' : kind === 'entry' ? 'list' : kind;
 	}
 
+	function beginRows(selected: readonly LibraryLevelRow[], semantic: 'play-now' | 'add-next' | 'queue'): void {
+		if (!actionsEnabled || actionBusy || page.phase !== 'ready' || !selected.length || selected.some(row => !trackRows.includes(row))) return;
+		closeRowMenu();
+		onRowsAction?.(selected, semantic);
+	}
+
 	function closeRowMenu(cancel = true, focus = false): void {
 		if (!menuRow) return;
 		const current = get(actionController);
@@ -178,7 +234,7 @@
 		menuRow = null;
 		menuRequestId = null;
 		menuMayReissue = false;
-		if (cancel && owns) {
+		if (cancel && owns && current.phase !== 'executing') {
 			if (onCloseRowMore) onCloseRowMore();
 			else actionController.cancel();
 		}
@@ -186,13 +242,13 @@
 		menuTrigger = null;
 	}
 
-	function openRowMenu(row: LibraryLevelRow, event: MouseEvent): void {
+	function openRowMenu(row: LibraryLevelRow, event?: MouseEvent): void {
 		if (menuRow === row) { closeRowMenu(true, true); return; }
 		if (!onRowMore || !actionsEnabled || actionBusy || page.phase !== 'ready' || !rows.includes(row)) return;
 		closeRowMenu();
 		menuRow = row;
-		menuTrigger = event.currentTarget as HTMLButtonElement;
-		menuTrigger.focus();
+		menuTrigger = event?.currentTarget as HTMLButtonElement ?? null;
+		menuTrigger?.focus();
 		menuStartingRequestId = get(actionController).requestId;
 		menuRequestId = null;
 		onRowMore(row);
@@ -219,10 +275,14 @@
 		const selected = menuRow;
 		if (selected && (!actionsEnabled || page.phase !== 'ready' || !rows.includes(selected))) untrack(() => closeRowMenu());
 	});
+	$effect(() => {
+		const selection = $trackSelection;
+		if (menuRow?.kind === 'track' && (selection.count !== 1 || !selection.selected.has(menuRow))) untrack(() => closeRowMenu());
+	});
 	onDestroy(() => closeRowMenu());
 
 	function dismissRecordingMenus(event: PointerEvent | KeyboardEvent): void {
-		if (!menuRow) return;
+		if (!menuRow || menuRow.kind === 'track') return;
 		if (event instanceof KeyboardEvent) {
 			if (event.key !== 'Escape') return;
 			event.preventDefault();
@@ -239,30 +299,38 @@
 	}
 </script>
 
+{#snippet rowMenuContents(row: LibraryLevelRow)}
+	{#if menuRow === row}
+		{#if menuRequestId === null || action.phase === 'resolving'}<span role="status">Loading…</span>
+		{:else if action.phase === 'executing'}<span role="status">Working…</span>
+		{:else if action.phase === 'failed' || action.phase === 'outcome-unknown'}<span class="error" role="alert">{action.error ?? 'The action failed.'}</span>
+		{:else if action.phase === 'choosing' && action.requestId === menuRequestId}
+			{#each action.actions as choice (choice.actionId)}
+				<button type="button" role="menuitem" disabled={!actionsEnabled} onclick={() => {
+					if (menuRow === row && rows.includes(row) && get(actionController).requestId === menuRequestId) actionController.execute(choice.actionId);
+				}}>{choice.label}</button>
+			{/each}
+			{#if action.actions.length === 0}<span>No actions are available.</span>{/if}
+		{/if}
+	{/if}
+{/snippet}
+
 {#snippet rowControls(row: LibraryLevelRow, prominent: boolean, playable = true)}
 	<div class="recording-controls" class:prominent data-live-row-menu={menuRow === row ? 'open' : undefined}>
 		{#if playable}
-		<button type="button" class="tgo" disabled={!onRowAction || !actionsEnabled || actionBusy} onclick={() => onRowAction?.(row, 'play-now')}>Play</button>
-		<button type="button" class="tq" disabled={!onRowAction || !actionsEnabled || actionBusy} onclick={() => onRowAction?.(row, 'queue')}>Queue</button>
+			<LibraryActionButton icon="play" label="Play" disabled={!onRowAction || !actionsEnabled || actionBusy} onclick={() => onRowAction?.(row, 'play-now')} />
+			<LibraryActionButton icon="queue" label="Queue" disabled={!onRowAction || !actionsEnabled || actionBusy} onclick={() => onRowAction?.(row, 'queue')} />
 		{/if}
-		<button type="button" class="recording-more" aria-label="More actions for {row.title}" aria-haspopup="menu" aria-expanded={menuRow === row}
-			disabled={menuRow !== row && (!onRowMore || !actionsEnabled || actionBusy)} onclick={event => openRowMenu(row, event)}>⋯</button>
+		<LibraryActionButton icon="more" label="More" aria-label="More actions for {row.title}" aria-haspopup="menu" aria-expanded={menuRow === row}
+			disabled={menuRow !== row && (!onRowMore || !actionsEnabled || actionBusy)} onclick={event => openRowMenu(row, event)} />
 		{#if menuRow === row}
-			<div class="recording-menu" role="menu" aria-label="Actions for {row.title}">
-				{#if menuRequestId === null || action.phase === 'resolving'}<span role="status">Loading…</span>
-				{:else if action.phase === 'executing'}<span role="status">Working…</span>
-				{:else if action.phase === 'failed' || action.phase === 'outcome-unknown'}<span class="error" role="alert">{action.error ?? 'The action failed.'}</span>
-				{:else if action.phase === 'choosing' && action.requestId === menuRequestId}
-					{#each action.actions as choice (choice.actionId)}
-						<button type="button" role="menuitem" disabled={!actionsEnabled} onclick={() => {
-							if (menuRow === row && rows.includes(row) && get(actionController).requestId === menuRequestId) actionController.execute(choice.actionId);
-						}}>{choice.label}</button>
-					{/each}
-					{#if action.actions.length === 0}<span>No actions are available.</span>{/if}
-				{/if}
-			</div>
+			<div class="recording-menu" role="menu" aria-label="Actions for {row.title}">{@render rowMenuContents(row)}</div>
 		{/if}
 	</div>
+{/snippet}
+
+{#snippet selectedTrackMore(selected: LibraryLevelRow[])}
+	{#if selected.length === 1}{@render rowMenuContents(selected[0])}{/if}
 {/snippet}
 
 <svelte:window onpointerdown={dismissRecordingMenus} onkeydown={dismissRecordingMenus} />
@@ -273,7 +341,8 @@
 	data-testid="unified-live-collection-page"
 	data-level-kind={levelKind}
 >
-	<div class="ctx library-list-toolbar" use:measureLibraryChrome={'toolbar'}>
+	<div class="ctx library-list-toolbar" class:has-tracks={trackRows.length > 0} use:measureLibraryChrome={'toolbar'}>
+		<div class="live-heading-core">
 		<button type="button" class="back" onclick={onBack}>← {backLabel}</button>
 		<h2 tabindex="-1" data-testid="unified-live-collection-title">
 			{page.target?.title ?? page.path?.steps.at(-1)?.title ?? 'Library'}
@@ -286,6 +355,19 @@
 		{#if page.phase === 'ready' && (levelKind === 'composer' || levelKind === 'composition') && ordinaryRows.length > 0}
 			<span class="n mono" data-testid="unified-live-collection-summary">{ordinaryMatches.length.toLocaleString()}{rowFilter ? ` OF ${ordinaryRows.length.toLocaleString()}` : ''} {levelKind === 'composer' ? 'COMPOSITIONS' : 'RECORDINGS'}</span>
 		{/if}
+		{#if page.phase === 'ready' && trackRows.length > 0}
+			<div class="selection-header">
+			<TrackSelectionControls selection={trackSelection} orderedItems={trackRows} visibleItems={visibleTracks}
+				actions={selectionActions} busy={bookmarkBusy || batchBusy || action.phase === 'resolving' || action.phase === 'executing'} status={bookmarkStatus ?? batchStatus} onCancel={onCancelBatch}
+				onBookmark={onBookmark ? bookmarkTracks : undefined} {bookmarkDisabled}
+				label={row => row.title} more={selectedTrackMore}
+				hasMore={$trackSelection.count === 1 && Boolean(onRowMore)} moreDisabled={!actionsEnabled}
+				remoteMenuActive={menuRow?.kind === 'track'}
+				onOpenMore={selected => { if (selected.length === 1) openRowMenu(selected[0]); }}
+				onCloseMore={() => closeRowMenu()} />
+			</div>
+		{/if}
+		</div>
 		{#if levelKind !== 'genre' && page.phase === 'ready' && albumRows.length > 0}
 			<div class="sortc-wrap">
 				<button
@@ -314,6 +396,13 @@
 							{option.label}
 						</button>
 					{/each}
+					{#if onSetGroupByLetter}
+						<button type="button" class="so grouping-option" class:on={groupByLetter}
+							aria-pressed={groupByLetter} disabled={!['az', 'za', 'by-artist'].includes(sorts.albums)}
+							onclick={() => { railTarget = null; onSetGroupByLetter?.(!groupByLetter); sortOpen = false; }}>
+							Group by letter
+						</button>
+					{/if}
 				</div>
 			</div>
 		{/if}
@@ -331,15 +420,9 @@
 				</div>
 			{/each}
 		{/if}
-	</div>
 
-	{#if !menuRow && (action.phase === 'resolving' || action.phase === 'executing')}
-		<p class="status" data-testid="unified-live-action-busy">Working…</p>
-	{:else if !menuRow && (action.phase === 'failed' || action.phase === 'outcome-unknown')}
-		<p class="status error" data-testid="unified-live-action-error">
-			{action.error ?? 'The action failed.'}
-		</p>
-	{/if}
+		<EntityFeedback message={!menuRow && (action.phase === 'resolving' || action.phase === 'executing') ? 'Working…' : !menuRow && (action.phase === 'failed' || action.phase === 'outcome-unknown') ? action.error ?? 'The action failed.' : null} />
+	</div>
 
 	{#if page.phase === 'opening'}
 		<p class="status">Loading…</p>
@@ -374,7 +457,7 @@
 					{albums}
 					{sorts}
 					{randomSeed}
-					groupAlbums={true}
+					{groupByLetter}
 					layoutRevision={density}
 					{railTarget}
 					genres={{ loading: false, loaded: true, error: null, entries: [], totalCount: 0 }}
@@ -388,13 +471,13 @@
 		{#if ordinaryRows.length > 0}
 			{#if levelKind === 'composer' || levelKind === 'composition'}<h3 class="section-label">{levelKind === 'composer' ? 'Compositions' : 'Recordings'}</h3>{/if}
 			{#if ordinaryMatches.length === 0}<p class="status">No matches.</p>{/if}
-			<div class="alist prepared-rows" data-testid="unified-live-collection-rows" use:prepareLibraryGrid={[ordinaryMatches, density, menuRow]}>
+			<div class="alist prepared-rows" data-testid="unified-live-collection-rows" use:prepareLibraryGrid={[ordinaryMatches, density]}>
 				{#each ordinaryMatches as row, index (`${row.ref.generation}:${row.ref.token}`)}
 					{@const href = hrefForRow(row)}
 					{#if row.kind === 'track'}
-						<div class="tr recording-row" data-testid="unified-live-recording-{index}" data-row-kind={row.kind}>
-							<span class="recording-name"><span class="tnm">{row.title}</span>{#if row.subtitle}<span class="recording-credit">{row.subtitle}</span>{/if}</span>
-							{@render rowControls(row, false)}
+						<div class="tr recording-row" data-testid="unified-live-recording-{index}" data-row-kind={row.kind} data-track-select-row
+							use:trackSelection.row={{ item: row, ordered: () => visibleTracks, disabled: batchBusy, generation: page.level ?? undefined }}>
+							<span class="recording-name"><button type="button" class="tnm" data-track-select-target aria-label="Select {row.title}" aria-pressed="false">{row.title}</button>{#if row.subtitle}<span class="recording-credit">{row.subtitle}</span>{/if}</span>
 						</div>
 					{:else if href === null}
 						<div
@@ -427,6 +510,13 @@
 </section>
 
 <style>
+	.live-heading-core { display:flex; align-items:center; gap:11px; min-width:0; flex:1; }
+	.has-tracks .live-heading-core { flex-basis:260px; min-width:min(100%,260px); }
+	.has-tracks .live-heading-core .back { min-width:0; max-width:25%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+	.selection-header { flex:1 1 160px; min-width:min-content; }
+	.has-tracks h2 { max-width:40%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+	.has-tracks .row-filter, .has-tracks .row-sort, .has-tracks .bulk-controls { order:2; }
+	.has-tracks .row-filter { margin-left:0; }
 	.prepared-rows { display: grid; grid-template-columns: minmax(0, 1fr); --library-chunk-overflow: 280px; }
 	.row-filter, .row-sort { font: inherit; font-size: 12px; color: var(--text); background: var(--control); border: 1px solid var(--line); border-radius: 6px; min-height: 32px; padding: 5px 9px; max-width: 100%; }
 	.row-filter { margin-left: auto; width: 180px; min-width: 100px; }
@@ -440,13 +530,10 @@
 	.recording-name { display: flex; flex: 1; align-items: baseline; gap: 14px; min-width: 0; }
 	.recording-credit { flex: 0 1 40%; min-width: 0; font-size: 12px; color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.recording-controls { position: relative; display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-	.recording-more { border: 0; background: transparent; font: inherit; cursor: pointer; color: var(--soft); padding: 2px 6px; border-radius: 4px; }
 	.recording-menu { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; position: absolute; right: 0; top: 100%; z-index: 20; min-width: 110px; padding: 4px; background: var(--control); border: 1px solid var(--line); border-radius: 5px; }
-	.recording-menu button { text-align: left; border: 0; background: transparent; color: var(--text); padding: 7px 10px; font: inherit; font-size: 12px; cursor: pointer; }
-	.recording-row:focus-within .tgo, .recording-row:focus-within .tq, .recording-controls:focus-within .tgo, .recording-controls:focus-within .tq, .prominent .tgo, .prominent .tq { opacity: 1; }
+	.recording-menu button { min-height: var(--library-action-target, 36px); text-align: left; border: 0; background: transparent; color: var(--text); padding: 7px 10px; font: inherit; font-size: 12px; cursor: pointer; }
 	.recording-controls button:disabled { cursor: default; color: var(--dim); }
 	.recording-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-	@media (hover: none), (max-width: 600px) { .recording-row .tgo, .recording-row .tq { opacity: 1; min-height: 36px; } .recording-more { min-width: 28px; min-height: 32px; } }
 	@media (max-width: 600px) { .recording-name { flex-direction: column; align-items: stretch; gap: 3px; } .recording-credit { flex-basis: auto; } }
 
 	.live-album-layout {
@@ -466,4 +553,5 @@
 		padding: 7px 10px;
 		color: var(--songr-soft);
 	}
+	@media (any-pointer: coarse) { .recording-menu button { min-height: 44px; } }
 </style>

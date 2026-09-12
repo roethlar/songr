@@ -1,8 +1,8 @@
 import {
 	buildUnifiedLibraryPageState,
 	buildUnifiedRootPageState,
+	normalizeLibraryScope,
 	type BrowseBreadcrumb,
-	type UnifiedItemDetailTarget,
 	type UnifiedLibraryPageState
 } from '$lib/libraryPageState';
 import {
@@ -33,14 +33,12 @@ export function libraryEntryPageState(url: URL, artistView: ArtistView): Unified
 
 function livePageState(
 	scope: UnifiedLibraryPageState['snapshot']['scope'],
-	path: LibraryRenderingPath,
-	itemDetail: UnifiedItemDetailTarget | null = null
+	path: LibraryRenderingPath
 ): UnifiedLibraryPageState {
 	return buildUnifiedLibraryPageState({
 		scope,
 		collectionDrill: null,
 		itemTarget: { kind: 'live', path },
-		itemDetail,
 		filterText: '',
 		surpriseSeed: null
 	});
@@ -56,10 +54,6 @@ function albumOf(step: LibraryPathStep | undefined): LibraryRouteAlbum | null {
 		: null;
 }
 
-function trackDetail(track: string | undefined): UnifiedItemDetailTarget | null {
-	return track === undefined ? null : { kind: 'track', title: track };
-}
-
 function browseBreadcrumb(step: LibraryRouteBrowseStep): BrowseBreadcrumb {
 	return {
 		title: step.title,
@@ -69,11 +63,11 @@ function browseBreadcrumb(step: LibraryRouteBrowseStep): BrowseBreadcrumb {
 	};
 }
 
-/** Build the mode's transient activation state from the URL's durable route. */
+/** Build activation state; retired Track Info URLs restore their exact album parent. */
 export function libraryPageStateFromRoute(route: LibraryRoute): UnifiedLibraryPageState {
 	switch (route.kind) {
 		case 'root':
-			return buildUnifiedRootPageState(route.scope);
+			return buildUnifiedRootPageState(normalizeLibraryScope(route.scope) ?? 'artists');
 		case 'album-artists-root':
 		case 'credit-group':
 		case 'credit-album':
@@ -83,8 +77,7 @@ export function libraryPageStateFromRoute(route: LibraryRoute): UnifiedLibraryPa
 				albumCredit: route.kind === 'album-artists-root' ? null : route.selector,
 				collectionDrill: null, filterText: '', surpriseSeed: null,
 				itemTarget: route.kind === 'credit-album' || route.kind === 'credit-album-track'
-					? { kind: 'live', path: { origin: 'albums', steps: [routeAlbumStep(route.album)] } } : null,
-				itemDetail: trackDetail(route.kind === 'credit-album-track' ? route.track : undefined)
+					? { kind: 'live', path: { origin: 'albums', steps: [routeAlbumStep(route.album)] } } : null
 			});
 		case 'artist-filter':
 			return buildUnifiedLibraryPageState({
@@ -109,15 +102,13 @@ export function libraryPageStateFromRoute(route: LibraryRoute): UnifiedLibraryPa
 						{ kind: 'artist', title: route.artist },
 						routeAlbumStep(route.album)
 					]
-				},
-				trackDetail(route.kind === 'artist-album-track' ? route.track : undefined)
+				}
 			);
 		case 'album':
 		case 'album-track':
 			return livePageState(
 				'albums',
-				{ origin: 'albums', steps: [routeAlbumStep(route.album)] },
-				trackDetail(route.kind === 'album-track' ? route.track : undefined)
+				{ origin: 'albums', steps: [routeAlbumStep(route.album)] }
 			);
 		case 'genre':
 			return livePageState('genres', {
@@ -135,8 +126,7 @@ export function libraryPageStateFromRoute(route: LibraryRoute): UnifiedLibraryPa
 						{ kind: 'section', title: 'Albums' },
 						routeAlbumStep(route.album)
 					]
-				},
-				trackDetail(route.kind === 'genre-album-track' ? route.track : undefined)
+				}
 			);
 		case 'composer':
 			return livePageState('browse', {
@@ -160,8 +150,7 @@ export function libraryPageStateFromRoute(route: LibraryRoute): UnifiedLibraryPa
 				{
 					origin: route.path.origin,
 					steps: albumTrack ? route.path.steps.slice(0, -1) : route.path.steps
-				},
-				albumTrack ? { kind: 'track', title: last.title } : null
+				}
 			);
 		}
 		case 'browse': {
@@ -197,36 +186,11 @@ function browseStep(breadcrumb: BrowseBreadcrumb): LibraryRouteBrowseStep {
 	};
 }
 
-function withTrack(
-	route:
-		| Extract<LibraryRoute, { kind: 'artist-album' }>
-		| Extract<LibraryRoute, { kind: 'album' }>
-		| Extract<LibraryRoute, { kind: 'credit-album' }>
-		| Extract<LibraryRoute, { kind: 'genre-album' }>,
-	detail: UnifiedItemDetailTarget | null
-): LibraryRoute {
-	if (detail === null) return route;
-	switch (route.kind) {
-		case 'credit-album':
-			return { ...route, kind: 'credit-album-track', track: detail.title };
-		case 'artist-album':
-			return { ...route, kind: 'artist-album-track', track: detail.title };
-		case 'album':
-			return { ...route, kind: 'album-track', track: detail.title };
-		case 'genre-album':
-			return { ...route, kind: 'genre-album-track', track: detail.title };
-	}
-}
-
 function fallbackLivePath(
-	path: LibraryRenderingPath,
-	detail: UnifiedItemDetailTarget | null
+	path: LibraryRenderingPath
 ): Extract<LibraryRoute, { kind: 'live-path' }> | null {
 	if (path.origin !== 'genres' && path.origin !== 'composers') return null;
-	const steps: LibraryPathStep[] = [
-		...path.steps,
-		...(detail === null ? [] : [{ kind: 'track' as const, title: detail.title }])
-	];
+	const steps = path.steps;
 	if (
 		steps.length < 2 ||
 		steps.length > LIBRARY_ROUTE_STEPS_MAX ||
@@ -241,47 +205,46 @@ function fallbackLivePath(
 }
 
 function routeFromLivePath(
-	path: LibraryRenderingPath,
-	detail: UnifiedItemDetailTarget | null
+	path: LibraryRenderingPath
 ): LibraryRoute | null {
 	if (path.origin === 'artists') {
 		const artist = path.steps[0];
 		if (artist?.kind !== 'artist' || path.steps.length > 2) return null;
 		if (path.steps.length === 1) {
-			return detail === null ? { kind: 'artist', artist: artist.title } : null;
+			return { kind: 'artist', artist: artist.title };
 		}
 		const album = albumOf(path.steps[1]);
 		return album === null
 			? null
-			: withTrack({ kind: 'artist-album', artist: artist.title, album }, detail);
+			: { kind: 'artist-album', artist: artist.title, album };
 	}
 	if (path.origin === 'albums') {
 		if (path.steps.length !== 1) return null;
 		const album = albumOf(path.steps[0]);
-		return album === null ? null : withTrack({ kind: 'album', album }, detail);
+		return album === null ? null : { kind: 'album', album };
 	}
 	if (path.origin === 'genres') {
 		const genre = path.steps[0];
 		if (genre?.kind !== 'genre') return null;
 		if (path.steps.length === 1) {
-			return detail === null ? { kind: 'genre', genre: genre.title } : null;
+			return { kind: 'genre', genre: genre.title };
 		}
 		const section = path.steps[1];
 		const album = path.steps.length === 3 ? albumOf(path.steps[2]) : null;
 		return section?.kind === 'section' && section.title === 'Albums' && album !== null
-			? withTrack({ kind: 'genre-album', genre: genre.title, album }, detail)
-			: fallbackLivePath(path, detail);
+			? { kind: 'genre-album', genre: genre.title, album }
+			: fallbackLivePath(path);
 	}
 	const composer = path.steps[0];
 	if (composer?.kind !== 'composer') return null;
 	if (path.steps.length === 1) {
-		return detail === null ? { kind: 'composer', composer: composer.title } : null;
+		return { kind: 'composer', composer: composer.title };
 	}
 	const composition = path.steps[1];
-	if (path.steps.length === 2 && composition?.kind === 'composition' && detail === null) {
+	if (path.steps.length === 2 && composition?.kind === 'composition') {
 		return { kind: 'composition', composer: composer.title, composition: composition.title };
 	}
-	return fallbackLivePath(path, detail);
+	return fallbackLivePath(path);
 }
 
 /** Derive a durable URL route from the mode's current semantic state. */
@@ -294,18 +257,17 @@ export function libraryRouteFromPageState(state: UnifiedLibraryPageState): Libra
 			snapshot.filterText !== '' || snapshot.composition !== null) return null;
 		const selector = snapshot.albumCredit;
 		if (snapshot.itemTarget === null) {
-			if (snapshot.itemDetail !== null) return null;
 			return selector === null ? { kind: 'album-artists-root' } : { kind: 'credit-group', selector };
 		}
 		if (selector === null || snapshot.itemTarget.kind !== 'live' ||
 			snapshot.itemTarget.path.origin !== 'albums' || snapshot.itemTarget.path.steps.length !== 1) return null;
 		const album = albumOf(snapshot.itemTarget.path.steps[0]);
 		return album !== null && albumCreditMatches(selector, album.credit)
-			? withTrack({ kind: 'credit-album', selector, album }, snapshot.itemDetail) : null;
+			? { kind: 'credit-album', selector, album } : null;
 	}
 	if (snapshot.albumCredit !== null) return null;
 	if (snapshot.itemTarget?.kind === 'live') {
-		return routeFromLivePath(snapshot.itemTarget.path, snapshot.itemDetail);
+		return routeFromLivePath(snapshot.itemTarget.path);
 	}
 	if (snapshot.itemTarget?.kind === 'collection') {
 		const locator = snapshot.itemTarget.locator;
@@ -315,16 +277,10 @@ export function libraryRouteFromPageState(state: UnifiedLibraryPageState): Libra
 			edition: ''
 		};
 		if (locator.hierarchy === 'artists') {
-			return withTrack(
-				{ kind: 'artist-album', artist: locator.collectionExactName, album },
-				snapshot.itemDetail
-			);
+			return { kind: 'artist-album', artist: locator.collectionExactName, album };
 		}
 		if (locator.hierarchy === 'genres') {
-			return withTrack(
-				{ kind: 'genre-album', genre: locator.collectionExactName, album },
-				snapshot.itemDetail
-			);
+			return { kind: 'genre-album', genre: locator.collectionExactName, album };
 		}
 		return null;
 	}
@@ -332,19 +288,15 @@ export function libraryRouteFromPageState(state: UnifiedLibraryPageState): Libra
 	if (snapshot.filterText !== '') {
 		return snapshot.scope === 'artists' &&
 			snapshot.collectionDrill === null &&
-			snapshot.itemDetail === null &&
 			snapshot.composition === null
 			? { kind: 'artist-filter', filter: snapshot.filterText }
 			: null;
 	}
 
 	if (snapshot.collectionDrill?.kind === 'genre') {
-		return snapshot.itemDetail === null
-			? { kind: 'genre', genre: snapshot.collectionDrill.label }
-			: null;
+		return { kind: 'genre', genre: snapshot.collectionDrill.label };
 	}
 	if (snapshot.collectionDrill?.kind === 'composer') {
-		if (snapshot.itemDetail !== null) return null;
 		return snapshot.composition?.title
 			? {
 					kind: 'composition',
@@ -365,8 +317,7 @@ export function libraryRouteFromPageState(state: UnifiedLibraryPageState): Libra
 		};
 	}
 
-	return snapshot.itemDetail === null &&
-		snapshot.composition === null &&
+	return snapshot.composition === null &&
 		(LIBRARY_ROOT_ROUTE_SCOPES as readonly string[]).includes(snapshot.scope)
 		? { kind: 'root', scope: snapshot.scope as LibraryRootRouteScope }
 		: null;
@@ -383,9 +334,6 @@ export function libraryParentPageState(
 	state: UnifiedLibraryPageState
 ): UnifiedLibraryPageState | null {
 	const snapshot = state.snapshot;
-	if (snapshot.itemDetail !== null) {
-		return buildUnifiedLibraryPageState({ ...snapshot, itemDetail: null });
-	}
 	if (snapshot.itemTarget?.kind === 'live') {
 		const steps = snapshot.itemTarget.path.steps;
 		return steps.length > 1

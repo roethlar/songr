@@ -28,6 +28,8 @@ export interface UnifiedSongActionInput {
 	readonly resultId: string;
 	readonly semantic: UnifiedSongActionSemantic;
 	readonly zoneId: string;
+	/** Final owner/cancellation check after session readiness, before socket dispatch. */
+	readonly beforeDispatch?: () => void;
 }
 
 const IDLE_STATE: UnifiedSongActionState = Object.freeze({
@@ -80,7 +82,8 @@ export class UnifiedSongActionController {
 				input.claim,
 				input.resultId,
 				input.zoneId,
-				input.semantic
+				input.semantic,
+				input.beforeDispatch
 			);
 			if (this.#disposed) return true;
 			this.#publish({

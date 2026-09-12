@@ -52,36 +52,13 @@ export interface LibraryAlbumVersionSummary {
   editionText: string;
   /** Display-only artwork hint; never version identity. */
   imageKeyHint?: string;
-  /** Product-facing source label when the page has exact version evidence. */
-  sourceLabel?: string;
-  /** Bounded display date (`YYYY`, `YYYY-MM`, or `YYYY-MM-DD`). */
-  releaseDate?: string;
-  /** Detail-derived fields are absent until an exact listing has been read. */
+  /** Count from the exact current track listing, once read. */
   trackCount?: number;
-  durationSeconds?: number;
-  available?: boolean;
-  /** Optional selected-profile metadata from an installed feature layer. */
-  playCount?: number;
-  lastPlayedAt?: string;
-  isFavorite?: boolean;
-  isListenLater?: boolean;
-  isBanned?: boolean;
 }
 
 /**
- * What an album page is being asked to open.
- *
- * One kind, and it names no stored record: `collection` carries a genre or
- * composer drill's own keyless locator, and the page is built by re-walking
- * that drill.
- *
- * There used to be a second, `album`, naming a saved catalog record by a
- * controller-minted local id. It died with the catalog
- * (`.agents/plans/library-live-view.md` Slice 4). It stays a tagged union
- * rather than collapsing to the locator, because every reader asks the tag
- * before it assumes a shape, and because a request that named two things at
- * once would have to be arbitrated — and there is no honest arbitration
- * between two ways of naming an album.
+ * A public collection row to reopen by walking its keyless locator. The
+ * locator identifies the current collection path, not a stored album record.
  */
 export type LibraryAlbumOpenTarget = {
   kind: "collection";
@@ -128,11 +105,6 @@ export interface LibraryAlbumTrack {
   /** Zero-based, contiguous position in the album's play order. */
   index: number;
   title: string;
-  /** Exact version metadata when the installed feature layer supplied it. */
-  trackNumber?: number;
-  mediaNumber?: number;
-  lengthSeconds?: number | null;
-  available?: boolean;
 }
 
 export interface LibraryAlbumCorrelation {
@@ -143,24 +115,10 @@ export interface LibraryAlbumCorrelation {
 }
 
 /**
- * WHY THE ARTIST IS OPTIONAL ON BOTH PAGE EVENTS.
- *
- * A catalog-opened album always has one: it is minted under an artist, and the
- * page names that artist. A collection-opened album may have none. Its page is
- * built from a genre or composer drill row, and such a row renders a title and
- * — sometimes — a credit line. When the row rendered no credit there is
- * nothing to show, and a genre or a composer is NOT an artist, so neither may
- * be substituted into the position. Nor may the credit be looked up in the
- * catalog to find "the real" artist: that is the title+artist join this plan
- * deleted.
- *
- * So the field is absent when the page has no artist, and it is never the
- * empty string — an empty artist would render as a blank line where a name
- * belongs, which claims the page looked and found nothing rather than that it
- * never had one to look for. Absent is recorded as absent, the same rule the
- * drill resolver already follows. Every artist-dependent affordance reads the
- * absence and declares itself unavailable rather than offering what it cannot
- * do.
+ * Public collection rows do not always include an artist credit. Both page
+ * events omit artist when the current row supplies none; an empty string or
+ * the containing genre/composer is not a substitute. Artist-dependent actions
+ * must respect that absence rather than infer identity from a title match.
  */
 export interface LibraryAlbumVersionsEvent {
   requestId: string;
@@ -310,39 +268,12 @@ function isBoundedOptionalText(value: unknown, maxLength: number): value is stri
   );
 }
 
-function isNonNegativeInteger(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
-}
-
 function isBoundedCount(value: unknown): value is number {
   return (
     Number.isSafeInteger(value) &&
     (value as number) > 0 &&
     (value as number) <= LIBRARY_ALBUM_MAX_TRACKS
   );
-}
-
-function isBoundedDuration(value: unknown): value is number {
-  return Number.isFinite(value) && (value as number) >= 0 && (value as number) <= 31_536_000;
-}
-
-function isReleaseDate(value: unknown): value is string {
-  if (typeof value !== "string" || !/^\d{4}(?:-\d{2}(?:-\d{2})?)?$/u.test(value)) {
-    return false;
-  }
-  const [year, month, day] = value.split("-").map(Number);
-  return (
-    year >= 1 &&
-    year <= 9999 &&
-    (month === undefined || (month >= 1 && month <= 12)) &&
-    (day === undefined || (day >= 1 && day <= 31))
-  );
-}
-
-function isCanonicalTimestamp(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
 }
 
 function includes<T extends string>(
@@ -366,40 +297,14 @@ export function normalizeLibraryAlbumVersionSummary(
 ): LibraryAlbumVersionSummary | null {
   try {
     const record = plainDataRecord(value);
-    const optionalKeys = [
-      "imageKeyHint",
-      "sourceLabel",
-      "releaseDate",
-      "trackCount",
-      "durationSeconds",
-      "available",
-      "playCount",
-      "lastPlayedAt",
-      "isFavorite",
-      "isListenLater",
-      "isBanned",
-    ] as const;
     if (
       !record ||
-      !hasOnlyKeys(record, ["versionId", "editionText"], optionalKeys) ||
+      !hasOnlyKeys(record, ["versionId", "editionText"], ["imageKeyHint", "trackCount"]) ||
       !isOpaqueId(record.versionId) ||
       !isBoundedOptionalText(record.editionText, LIBRARY_ALBUM_TEXT_MAX_LENGTH) ||
       ("imageKeyHint" in record &&
         !isBoundedText(record.imageKeyHint, LIBRARY_ALBUM_ID_MAX_LENGTH)) ||
-      ("sourceLabel" in record &&
-        !isBoundedText(record.sourceLabel, LIBRARY_ALBUM_TEXT_MAX_LENGTH)) ||
-      ("releaseDate" in record && !isReleaseDate(record.releaseDate)) ||
-      ("trackCount" in record && !isBoundedCount(record.trackCount)) ||
-      ("durationSeconds" in record &&
-        !isBoundedDuration(record.durationSeconds)) ||
-      ("available" in record && typeof record.available !== "boolean") ||
-      ("playCount" in record && !isNonNegativeInteger(record.playCount)) ||
-      ("lastPlayedAt" in record &&
-        !isCanonicalTimestamp(record.lastPlayedAt)) ||
-      ("isFavorite" in record && typeof record.isFavorite !== "boolean") ||
-      ("isListenLater" in record &&
-        typeof record.isListenLater !== "boolean") ||
-      ("isBanned" in record && typeof record.isBanned !== "boolean")
+      ("trackCount" in record && !isBoundedCount(record.trackCount))
     ) {
       return null;
     }
@@ -409,35 +314,8 @@ export function normalizeLibraryAlbumVersionSummary(
       ...("imageKeyHint" in record
         ? { imageKeyHint: record.imageKeyHint as string }
         : {}),
-      ...("sourceLabel" in record
-        ? { sourceLabel: record.sourceLabel as string }
-        : {}),
-      ...("releaseDate" in record
-        ? { releaseDate: record.releaseDate as string }
-        : {}),
       ...("trackCount" in record
         ? { trackCount: record.trackCount as number }
-        : {}),
-      ...("durationSeconds" in record
-        ? { durationSeconds: record.durationSeconds as number }
-        : {}),
-      ...("available" in record
-        ? { available: record.available as boolean }
-        : {}),
-      ...("playCount" in record
-        ? { playCount: record.playCount as number }
-        : {}),
-      ...("lastPlayedAt" in record
-        ? { lastPlayedAt: record.lastPlayedAt as string }
-        : {}),
-      ...("isFavorite" in record
-        ? { isFavorite: record.isFavorite as boolean }
-        : {}),
-      ...("isListenLater" in record
-        ? { isListenLater: record.isListenLater as boolean }
-        : {}),
-      ...("isBanned" in record
-        ? { isBanned: record.isBanned as boolean }
         : {}),
     };
   } catch {
@@ -452,13 +330,7 @@ const LIBRARY_ALBUM_OPEN_KEYS = [
   "generation",
 ] as const;
 
-/**
- * One open target, exactly one kind, and nothing beside the kind's own field.
- *
- * The exact-key check is what keeps a stale client's request out: a record
- * carrying anything besides `kind` and `locator` — an `albumLocalId` from a
- * build that still had a catalog, say — is refused rather than read past.
- */
+/** Accept only the collection target and its locator, without extra identity. */
 export function normalizeLibraryAlbumOpenTarget(
   value: unknown
 ): LibraryAlbumOpenTarget | null {
@@ -618,38 +490,15 @@ function normalizeOrderedTracks(value: unknown): LibraryAlbumTrack[] | null {
     const record = plainDataRecord(value[index]);
     if (
       !record ||
-      !hasOnlyKeys(record, ["index", "title"], [
-        "trackNumber",
-        "mediaNumber",
-        "lengthSeconds",
-        "available",
-      ]) ||
+      !hasOnlyKeys(record, ["index", "title"], []) ||
       record.index !== index ||
-      !isBoundedText(record.title, LIBRARY_ALBUM_TEXT_MAX_LENGTH) ||
-      ("trackNumber" in record && !isNonNegativeInteger(record.trackNumber)) ||
-      ("mediaNumber" in record && !isNonNegativeInteger(record.mediaNumber)) ||
-      ("lengthSeconds" in record &&
-        record.lengthSeconds !== null &&
-        !isBoundedDuration(record.lengthSeconds)) ||
-      ("available" in record && typeof record.available !== "boolean")
+      !isBoundedText(record.title, LIBRARY_ALBUM_TEXT_MAX_LENGTH)
     ) {
       return null;
     }
     tracks.push({
       index,
       title: record.title,
-      ...("trackNumber" in record
-        ? { trackNumber: record.trackNumber as number }
-        : {}),
-      ...("mediaNumber" in record
-        ? { mediaNumber: record.mediaNumber as number }
-        : {}),
-      ...("lengthSeconds" in record
-        ? { lengthSeconds: record.lengthSeconds as number | null }
-        : {}),
-      ...("available" in record
-        ? { available: record.available as boolean }
-        : {}),
     });
   }
   return tracks;

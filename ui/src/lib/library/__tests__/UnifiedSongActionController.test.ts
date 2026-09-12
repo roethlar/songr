@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { UnifiedSongActionController } from '../UnifiedSongActionController';
+import { createUnifiedSearchClient } from '$lib/unifiedSearchClient';
 import {
 	ClassicBrowseSessionError,
-	type ClassicBrowseSessionClaim
+	type ClassicBrowseSessionClaim,
+	type ClassicBrowseSessionClient
 } from '$lib/stores/classicBrowseSessionStore';
 
 const claim = {
@@ -34,7 +36,7 @@ describe('UnifiedSongActionController', () => {
 			})
 		).resolves.toBe(true);
 
-		expect(action).toHaveBeenCalledWith(claim, 'song-result-1', 'zone-1', 'add-next');
+		expect(action).toHaveBeenCalledWith(claim, 'song-result-1', 'zone-1', 'add-next', undefined);
 		expect(controller.snapshot()).toMatchObject({
 			phase: 'executed',
 			semantic: 'add-next',
@@ -65,6 +67,58 @@ describe('UnifiedSongActionController', () => {
 		expect(action).toHaveBeenCalledTimes(1);
 		gate.resolve({ authorityRetired: false });
 		await first;
+	});
+
+	it('does not send a selected song cancelled while its session is becoming ready', async () => {
+		const ready = deferred<Awaited<ClassicBrowseSessionClaim['ready']>>();
+		const pendingClaim = { ...claim, ready: ready.promise };
+		const emit = vi.fn().mockResolvedValue({
+			success: true,
+			data: {
+				requestId: 'request-1',
+				session: { handleId: 'handle-1', generation: 7 },
+				resultId: 'song-result-2',
+				semantic: 'queue',
+				outcome: 'executed',
+				authorityRetired: false
+			}
+		});
+		const client = createUnifiedSearchClient({
+			getSocket: () => ({ connected: true }) as never,
+			getTabId: () => 'tab-1',
+			createRequestId: () => 'request-1',
+			sessionClient: {
+				isClaimCurrent: () => true,
+				isSessionCurrent: () => true
+			} as unknown as ClassicBrowseSessionClient,
+			emit
+		});
+		const controller = new UnifiedSongActionController(client);
+		let cancelled = false;
+		const beforeDispatch = vi.fn(() => {
+			if (cancelled) throw new Error('Selection cancelled before dispatch');
+		});
+		const input = {
+			claim: pendingClaim,
+			resultId: 'song-result-2',
+			semantic: 'queue' as const,
+			zoneId: 'zone-1',
+			beforeDispatch
+		};
+		const execution = controller.execute(input);
+		expect(beforeDispatch).not.toHaveBeenCalled();
+		expect(emit).not.toHaveBeenCalled();
+
+		cancelled = true;
+		ready.resolve({ handleId: 'handle-1', generation: 7 });
+		await execution;
+
+		expect(emit).not.toHaveBeenCalled();
+		expect(beforeDispatch).toHaveBeenCalledTimes(1);
+		expect(controller.snapshot()).toMatchObject({
+			phase: 'failed',
+			error: 'Selection cancelled before dispatch'
+		});
 	});
 
 	it('distinguishes an unknown issued outcome and retires the local result', async () => {

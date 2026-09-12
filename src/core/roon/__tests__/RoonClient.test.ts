@@ -56,6 +56,33 @@ beforeEach(() => {
 });
 
 describe("RoonClient — persisted-state callbacks", () => {
+  it("registers current Songr display metadata while reusing existing authorization", async () => {
+    const tokenPath = await makeTokenPath();
+    const persisted = {
+      paired_core_id: "core-abc",
+      tokens: { "core-abc": "existing-token", "core-def": "other-core-token" },
+    };
+    const saved = JSON.stringify(persisted, null, 2);
+    await fsp.writeFile(tokenPath, saved, { mode: 0o600 });
+    const version = JSON.parse(
+      fs.readFileSync(path.resolve(__dirname, "../../../../package.json"), "utf8")
+    ).version;
+
+    // Both the first start after upgrade and subsequent starts use the same
+    // extension identity and token path; display metadata cannot reset pairing.
+    for (let start = 0; start < 2; start += 1) {
+      new RoonClient({ tokenPath, logger: stubLogger }).start();
+      expect(capturedOptions).toMatchObject({
+        extension_id: "app.songr.controller",
+        display_name: `Songr (${os.hostname()})`,
+        display_version: version,
+        publisher: "Songr",
+      });
+      expect(capturedOptions.get_persisted_state()).toEqual(persisted);
+      expect(fs.readFileSync(tokenPath, "utf8")).toBe(saved);
+    }
+  });
+
   it("get_persisted_state returns {} when token file does not exist", async () => {
     const tokenPath = await makeTokenPath();
     new RoonClient({ tokenPath, logger: stubLogger }).start();

@@ -51,6 +51,8 @@ import { loadRecentlyPlayed } from './recentlyPlayedStore';
 import { loadFavorites } from './favoritesStore';
 import { loadHealth } from './healthStore';
 import { loadNavigationSettings } from './navigationSettingsStore';
+import { loadPresentationSettings } from './presentationSettingsStore';
+export { presentationSettingsStore, loadPresentationSettings, applyPresentationSettings } from './presentationSettingsStore';
 export { navigationSettingsStore, loadNavigationSettings, applyNavigationSettings } from './navigationSettingsStore';
 
 export async function initializeStores(fetchFn: typeof fetch): Promise<void> {
@@ -60,6 +62,7 @@ export async function initializeStores(fetchFn: typeof fetch): Promise<void> {
 		loadRecentlyPlayed(fetchFn),
 		loadFavorites(fetchFn),
 		loadHealth(fetchFn),
-		loadNavigationSettings(fetchFn)
+		loadNavigationSettings(fetchFn),
+		loadPresentationSettings(fetchFn)
 	]);
 }

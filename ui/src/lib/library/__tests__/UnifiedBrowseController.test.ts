@@ -348,7 +348,7 @@ describe('UnifiedBrowseActionController', () => {
 					]);
 				}
 				issued.push(options.itemKey ?? 'missing');
-				return page([]);
+				return page([], { action: 'none' });
 			}),
 			browseLoad: vi.fn(),
 			browsePop: vi.fn(),
@@ -445,7 +445,7 @@ describe('UnifiedBrowseActionController', () => {
 
 
 describe('exact public Browse action selection', () => {
-	function fixture() {
+	function fixture(reply: () => Promise<BrowseResult> = async () => page([], { action: 'none' })) {
 		const copies = ['copy-one', 'copy-two'].map(itemKey => row('(Coffee’s for Closers)', itemKey,
 			{ subtitle: 'Fall Out Boy', hint: 'action_list', itemType: 'track' }));
 		const issued: string[] = [];
@@ -461,7 +461,7 @@ describe('exact public Browse action selection', () => {
 					row('Queue', `${key}:${options.zoneId}:queue`, { hint: 'action', isPlayable: true })
 				], { title: 'Actions', level: 1 });
 				issued.push(key);
-				return page([]);
+				return reply();
 			}),
 			browseLoad: vi.fn(), browsePop: vi.fn(), browseSearch: vi.fn()
 		} as unknown as ClassicBrowseApiTransaction;
@@ -472,6 +472,46 @@ describe('exact public Browse action selection', () => {
 			item: copies[1], restoreCount: copies.length };
 		return { controller, source, transaction, deps, issued, expire: () => { expired = true; } };
 	}
+
+	it.each(['play-now', 'add-next', 'queue'] as const)('reports an explicit Roon refusal for %s without retrying', async semantic => {
+		const { controller, source, transaction, issued } = fixture(async () => page([], {
+			action: 'message', isError: true, message: 'The selected track is unavailable.'
+		}));
+		await controller.open(CLAIM, source, 'zone-a');
+
+		expect(await controller.execute(CLAIM, semantic, 'zone-a')).toBe(false);
+		expect(get(controller)).toMatchObject({ phase: 'rejected', error: 'The selected track is unavailable.',
+			available: { 'play-now': false, 'add-next': false, queue: false }, actions: [] });
+		expect(await controller.execute(CLAIM, semantic, 'zone-a')).toBe(false);
+		expect(issued).toHaveLength(1);
+		expect(transaction.browse).toHaveBeenCalledTimes(2);
+	});
+
+	it('keeps an informational public message without an optional error flag successful', async () => {
+		const { controller, source, issued } = fixture(async () => page([], { action: 'message', message: 'Added to queue.' }));
+		await controller.open(CLAIM, source, 'zone-a');
+		expect(await controller.execute(CLAIM, 'queue', 'zone-a')).toBe(true);
+		expect(get(controller)).toMatchObject({ phase: 'success', error: null });
+		expect(issued).toEqual(['copy-two:zone-a:queue']);
+	});
+
+	it('marks a missing action acknowledgment unknown and retires its selected leaf', async () => {
+		const { controller, source, issued } = fixture(async () => page([]));
+		await controller.open(CLAIM, source, 'zone-a');
+		expect(await controller.execute(CLAIM, 'queue', 'zone-a')).toBe(false);
+		expect(get(controller)).toMatchObject({ phase: 'outcome-unknown' });
+		expect(await controller.execute(CLAIM, 'queue', 'zone-a')).toBe(false);
+		expect(issued).toEqual(['copy-two:zone-a:queue']);
+	});
+
+	it('keeps a lost reply uncertain and does not retry the issued action', async () => {
+		const { controller, source, issued } = fixture(async () => { throw new Error('Roon reply was lost'); });
+		await controller.open(CLAIM, source, 'zone-a');
+		expect(await controller.execute(CLAIM, 'queue', 'zone-a')).toBe(false);
+		expect(get(controller)).toMatchObject({ phase: 'outcome-unknown', error: 'Roon reply was lost' });
+		expect(await controller.execute(CLAIM, 'queue', 'zone-a')).toBe(false);
+		expect(issued).toEqual(['copy-two:zone-a:queue']);
+	});
 
 	it('opens the exact second identical track and executes only its advertised leaf without replay', async () => {
 		const { controller, source, transaction, issued } = fixture();
@@ -484,6 +524,44 @@ describe('exact public Browse action selection', () => {
 		expect(vi.mocked(transaction.browse).mock.calls.map(([options]) => options.itemKey)).toEqual(['copy-two', 'copy-two:zone-a:next']);
 		expect(transaction.browseLoad).not.toHaveBeenCalled();
 		expect(transaction.browsePop).not.toHaveBeenCalled();
+	});
+
+	it('runs the dispatch guard once immediately before the exact advertised leaf', async () => {
+		const { controller, source, transaction, issued } = fixture();
+		await controller.open(CLAIM, source, 'zone-a');
+		const beforeDispatch = vi.fn(() => {
+			expect(issued).toEqual([]);
+			expect(transaction.browse).toHaveBeenCalledTimes(1);
+		});
+
+		expect(await controller.execute(CLAIM, 'queue', 'zone-a', beforeDispatch)).toBe(true);
+
+		expect(beforeDispatch).toHaveBeenCalledTimes(1);
+		expect(issued).toEqual(['copy-two:zone-a:queue']);
+		expect(transaction.browse).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not dispatch a selected leaf cancelled while its transaction is queued', async () => {
+		const { controller, source, transaction, deps, issued } = fixture();
+		await controller.open(CLAIM, source, 'zone-a');
+		let release!: () => Promise<void>;
+		deps.transaction.mockImplementationOnce((_role, _claim, work) => new Promise((resolve, reject) => {
+			release = async () => { try { resolve(await work(transaction)); } catch (error) { reject(error); } };
+		}));
+		let cancelled = false;
+		const beforeDispatch = vi.fn(() => {
+			if (cancelled) throw new Error('Selection cancelled before dispatch');
+		});
+		const pending = controller.execute(CLAIM, 'queue', 'zone-a', beforeDispatch);
+		expect(beforeDispatch).not.toHaveBeenCalled();
+		cancelled = true;
+		await release();
+
+		expect(await pending).toBe(false);
+		expect(beforeDispatch).toHaveBeenCalledTimes(1);
+		expect(transaction.browse).toHaveBeenCalledTimes(1);
+		expect(issued).toEqual([]);
+		expect(get(controller).error).toBe('Selection cancelled before dispatch');
 	});
 
 	it('keeps the exact selection when the same published source is reprobed for a new zone', async () => {

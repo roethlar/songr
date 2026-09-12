@@ -161,6 +161,7 @@ export type AlbumActionCancelAck =
   | { success: false; error: string; code: "INVALID_REQUEST" };
 
 export const ALBUM_ACTION_EXECUTE_REJECTION_CODES = [
+  "ROON_REJECTED",
   "ZONE_NOT_FOUND",
   "ZONE_CHANGED",
   "ALBUM_UNRESOLVED",

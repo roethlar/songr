@@ -9,6 +9,9 @@ export interface BrowseRowActions {
 	status: string | null;
 	error: boolean;
 	onAction: (item: BrowseItem, semantic: UnifiedSongActionSemantic) => void;
+	onBatchAction?: (items: readonly BrowseItem[], semantic: UnifiedSongActionSemantic) => void;
+	onBatchFavorite?: (items: readonly BrowseItem[]) => void;
+	onCancel?: () => void;
 	onFavorite?: (item: BrowseItem) => void;
 	onMore: (item: BrowseItem) => void;
 	onCloseMore: () => void;

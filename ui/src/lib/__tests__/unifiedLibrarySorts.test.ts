@@ -6,7 +6,6 @@ import {
 	ARTIST_SORT_MENU,
 	genreDrillSortMenu,
 	GENRE_SORT_MENU,
-	isChronologicalAlbumSort,
 	namedCountBuckets,
 	reverseBuckets,
 	seededShuffle,
@@ -65,13 +64,7 @@ describe('sort menus', () => {
 	});
 
 
-	it('marks exactly the year orders as chronological for the rail rule', () => {
-		expect(isChronologicalAlbumSort('year-asc')).toBe(true);
-		expect(isChronologicalAlbumSort('year-desc')).toBe(true);
-		for (const other of ['az', 'za', 'by-artist', 'shuffle', 'release-year']) {
-			expect(isChronologicalAlbumSort(other)).toBe(false);
-		}
-	});
+
 });
 
 describe('sortArtists', () => {
@@ -131,15 +124,6 @@ describe('sortAlbums', () => {
 	it('seededShuffle preserves membership', () => {
 		const items = [1, 2, 3, 4, 5];
 		expect([...seededShuffle(items, 3)].sort()).toEqual(items);
-	});
-});
-
-describe('saved unsupported album sorts', () => {
-	it('keeps supported menu choices and migrates stored date orders to alphabetical', () => {
-		const entries = [album('Alpha', 'Artist'), album('Beta', 'Artist')];
-		expect(liveAlbumSortMenu().map(entry => entry.id)).toEqual(['az', 'za', 'by-artist', 'shuffle']);
-		expect(sortAlbums(entries, 'year-asc', 1)).toEqual(entries);
-		expect(sortAlbums(entries, 'year-desc', 1)).toEqual(entries);
 	});
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "roon-controller-desktop",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "private": true,
   "description": "Electron shell that runs the Roon controller engine as a desktop app",
   "main": "dist/main.js",
@@ -19,6 +19,7 @@
   "devDependencies": {
     "@types/jest": "^30.0.0",
     "@types/node": "^26.1.2",
+    "@types/semver": "^7.8.0",
     "electron": "^43.3.0",
     "electron-builder": "^26.15.3",
     "jest": "^30.4.2",
@@ -26,6 +27,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "semver": "^7.8.5",
     "socket.io-client": "^4.8.3"
   }
 }

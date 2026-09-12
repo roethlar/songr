@@ -45,7 +45,7 @@ async function pinnedClick(page: Page, control: Locator) {
 
 async function expectRailClearance(page: Page) {
 	await expect.poll(async () => {
-		const target = (await page.locator('[data-grp="M"]:visible').boundingBox())!;
+		const target = (await page.locator('[data-letter="M"]:visible').first().boundingBox())!;
 		const bar = (await page.locator('.library-list-toolbar:visible').boundingBox())!;
 		const gap = target.y - bar.y - bar.height;
 		return gap >= 0 && gap <= 32;
@@ -173,7 +173,7 @@ test.describe('exact credit pages', () => {
 		await expect(page.getByTestId('unified-credit-missing')).toBeVisible();
 	});
 
-	test('group → album → track survives native new tabs, reload, parent traversal and browser history', async ({ page, context }) => {
+	test('group → album survives native new tabs, reload, parent traversal and browser history', async ({ page, context }) => {
 		await page.goto('/library');
 		await expect(page.getByTestId('unified-credit-artist').filter({ visible: true })).toHaveCount(5);
 		await expect(group(page, 'Single Release').locator('.ac')).toHaveText('1');
@@ -197,7 +197,7 @@ test.describe('exact credit pages', () => {
 		const albumTab = await albumOpened;
 		await expect(albumTab.getByTestId('unified-album-title')).toHaveText('Collaboration; One');
 		await albumTab.reload();
-		await expect(albumTab.getByTestId('unified-track-info-1')).toBeVisible();
+		await expect(albumTab.getByTestId('unified-album-tracks')).toContainText('Track 02');
 		await albumTab.getByTestId('unified-album-back').click();
 		await expect.poll(() => new URL(albumTab.url()).pathname).toBe(groupHref);
 		await albumTab.close();
@@ -208,33 +208,12 @@ test.describe('exact credit pages', () => {
 		await expect(page.getByTestId('unified-album-action-choices')).toBeVisible();
 		await page.getByTestId('unified-album-action-choices').getByRole('button', { name: 'Cancel' }).click();
 		await expect.poll(() => new URL(page.url()).pathname).toBe(albumHref);
-		const trackLink = page.getByTestId('unified-track-info-1');
-		const trackHref = (await trackLink.getAttribute('href'))!;
-		const trackOpened = context.waitForEvent('page');
-		await trackLink.click({ modifiers: [modifier] });
-		const trackTab = await trackOpened;
-		await expect(trackTab.getByTestId('unified-album-track-info')).toContainText('Track 02');
-		await trackTab.reload();
-		await expect(trackTab.getByTestId('unified-album-track-info')).toContainText('Track 02');
-		await trackTab.getByTestId('unified-album-track-info-back').click();
-		await expect.poll(() => new URL(trackTab.url()).pathname).toBe(albumHref);
-		await trackTab.getByTestId('unified-album-back').click();
-		await expect.poll(() => new URL(trackTab.url()).pathname).toBe(groupHref);
-		await trackTab.getByTestId('unified-credit-back').click();
-		await expect(trackTab).toHaveURL(/\/library\/album-artists$/);
-		await trackTab.close();
-
-		await trackLink.click();
-		await expect.poll(() => new URL(page.url()).pathname).toBe(trackHref);
-		await page.goBack();
-		await expect(page.getByTestId('unified-album-track-info')).toHaveCount(0);
 		await page.goBack();
 		await expect(page.getByTestId('unified-list-heading')).toHaveText('AC/DC / Björk; 100%');
 		await page.goForward();
-		await page.goForward();
-		await expect(page.getByTestId('unified-album-track-info')).toContainText('Track 02');
+		await expect(page.getByTestId('unified-album-title')).toHaveText('Collaboration; One');
 		await page.reload();
-		await expect(page.getByTestId('unified-album-track-info')).toContainText('Track 02');
+		await expect(page.getByTestId('unified-album-tracks')).toContainText('Track 02');
 		expect(await page.evaluate(() => window.libraryScrollFixture.liveOpenRefs.every(ref => !ref.token.startsWith('artist:')))).toBe(true);
 	});
 
@@ -307,7 +286,7 @@ test.describe('cold credit deep links', () => {
 	}
 
 	for (const track of [false, true]) {
-		test(`${track ? 'track' : 'album'} address survives cold start and reload`, async ({ page }) => {
+		test(`${track ? 'retired track' : 'album'} address restores its album through cold start and reload`, async ({ page }) => {
 			const path = track ? trackPath : albumPath;
 			await page.goto(path);
 			for (const rootsFirst of [false, true]) {
@@ -316,7 +295,8 @@ test.describe('cold credit deep links', () => {
 				await page.evaluate(() => window.libraryScrollFixture.publishInitialRoots());
 				await expect(page.getByTestId('unified-album-tracks')).toBeVisible();
 				await expect(page.getByTestId('unified-album-title')).toHaveText('Solo Record');
-				if (track) await expect(page.getByTestId('unified-album-track-info')).toContainText('Track 02');
+				await expect(page.getByTestId('unified-album-tracks')).toContainText('Track 02');
+				await expect(page.getByTestId('unified-album-track-info')).toHaveCount(0);
 				await page.evaluate(() => window.libraryScrollFixture.fireConnection('connect'));
 				await page.evaluate(() => window.libraryScrollFixture.publishInitialRoots());
 				await expect.poll(() => page.evaluate(() => window.libraryScrollFixture.liveOpenRefs)).toEqual([
@@ -324,10 +304,6 @@ test.describe('cold credit deep links', () => {
 				]);
 				await expect.poll(() => new URL(page.url()).pathname).toBe(path);
 				if (!rootsFirst) await page.reload();
-			}
-			if (track) {
-				await page.getByTestId('unified-album-track-info-back').click();
-				await expect.poll(() => new URL(page.url()).pathname).toBe(albumPath);
 			}
 			await page.getByTestId('unified-album-back').click();
 			await expect.poll(() => new URL(page.url()).pathname).toBe(groupPath);

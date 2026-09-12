@@ -122,18 +122,16 @@ test('replacement generation reacquires previews and genre Actions can be cancel
 	await expect(page.getByTestId('genre-overview')).toBeVisible();
 });
 
-test('a preview artist keeps genre ancestry through an album and track reload', async ({ page }) => {
+test('a preview artist keeps genre ancestry through an album reload', async ({ page }) => {
 	await overview(page, '80s');
 	const artist = await page.getByTestId('genre-preview-artist').first().locator('.tt').innerText();
 	await page.getByTestId('genre-preview-artist').first().click();
 	await expect(page.getByTestId('unified-artist-name')).toHaveText(artist);
 	await page.getByTestId('unified-tile').filter({ visible: true }).first().click();
-	await page.getByTestId('unified-track-info-1').click();
-	await expect(page.getByTestId('unified-album-track-info')).toContainText('Track 02');
+	await expect(page.getByTestId('unified-album-tracks')).toContainText('Track 02');
 	expect(decodeURIComponent(new URL(page.url()).pathname)).toContain('/section;Artists;;/artist;');
 	await page.reload();
-	await expect(page.getByTestId('unified-album-track-info')).toContainText('Track 02');
-	await page.goBack(); await expect(page.getByTestId('unified-album-track-info')).toHaveCount(0);
+	await expect(page.getByTestId('unified-album-tracks')).toContainText('Track 02');
 	await page.goBack(); await expect(page.getByTestId('unified-artist-name')).toHaveText(artist);
 	await page.goBack(); await expect(page.getByTestId('genre-overview')).toBeVisible();
 });

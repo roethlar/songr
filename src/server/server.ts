@@ -18,6 +18,8 @@ import { ImageService } from "../core/roon/ImageService";
 import { RecentlyPlayedService } from "../core/recently-played/RecentlyPlayedService";
 import { NavigationSettingsService } from "../core/navigation/NavigationSettingsService";
 import { registerNavigationSettingsBroadcast } from "./routes/navigationSettings";
+import { PresentationSettingsService } from "../core/presentation/PresentationSettingsService";
+import { registerPresentationSettingsBroadcast } from "./routes/presentationSettings";
 import { FavoritesService } from "../core/favorites/FavoritesService";
 import { BrowseSessionCoordinator } from "../core/roon/BrowseSessionCoordinator";
 import { AlbumActionResolver } from "../core/roon/AlbumActionResolver";
@@ -226,6 +228,10 @@ export const startServer = (
     filePath: config.navigationSettingsPath,
   });
 
+  const presentationSettingsService = new PresentationSettingsService(logger, {
+    filePath: config.presentationSettingsPath,
+  });
+
   // Create HTTP app with services
   const app: Application = createHttpApp(
     roonClient,
@@ -235,7 +241,8 @@ export const startServer = (
     favoritesService,
     logger,
     liveLibrary,
-    navigationSettingsService
+    navigationSettingsService,
+    presentationSettingsService
   );
   const httpServer = http.createServer(app);
 
@@ -258,6 +265,10 @@ export const startServer = (
     navigationSettingsService, socketContext.io
   );
   httpServer.once("close", stopNavigationBroadcast);
+  const stopPresentationBroadcast = registerPresentationSettingsBroadcast(
+    presentationSettingsService, socketContext.io
+  );
+  httpServer.once("close", stopPresentationBroadcast);
 
   let zonesSubscribed = false;
 
@@ -440,6 +451,7 @@ export const startServer = (
     favoritesService.start(),
     // Navigation must load before any client can read or overwrite defaults.
     navigationSettingsService.start(),
+    presentationSettingsService.start(),
   ]).then(
     () => {
       if (shutdownRequested) {

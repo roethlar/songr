@@ -3,6 +3,8 @@ import { get } from 'svelte/store';
 import type { Zone } from '@shared/types';
 
 import { interpolatedSeekStore } from '../interpolatedSeekStore';
+import { presentationSettingsStore } from '../presentationSettingsStore';
+import { DEFAULT_PRESENTATION_SETTINGS } from '@shared/presentationSettings';
 import { setZonesSnapshot, updateSeekPosition } from '../zonesStore';
 
 function makeZone(overrides: Partial<Zone> = {}): Zone {
@@ -22,12 +24,17 @@ function makeZone(overrides: Partial<Zone> = {}): Zone {
 }
 
 describe('interpolatedSeekStore (seek interpolation between 1 Hz ticks)', () => {
+	const subscriptions: (() => void)[] = [];
 	beforeEach(() => {
 		vi.useFakeTimers();
+		presentationSettingsStore.reset();
+		presentationSettingsStore.applySnapshot(DEFAULT_PRESENTATION_SETTINGS);
 		setZonesSnapshot([]);
 	});
 
 	afterEach(() => {
+		subscriptions.splice(0).forEach(stop => stop());
+		presentationSettingsStore.reset();
 		vi.useRealTimers();
 		setZonesSnapshot([]);
 	});
@@ -35,6 +42,7 @@ describe('interpolatedSeekStore (seek interpolation between 1 Hz ticks)', () => 
 	it('advances a playing zone between server ticks', () => {
 		setZonesSnapshot([makeZone({ seek_position: 30 })]);
 		const unsub = interpolatedSeekStore.subscribe(() => {});
+		subscriptions.push(unsub);
 
 		expect(get(interpolatedSeekStore).get('zone-a')).toBe(30);
 		vi.advanceTimersByTime(500);
@@ -48,6 +56,7 @@ describe('interpolatedSeekStore (seek interpolation between 1 Hz ticks)', () => 
 	it('re-bases on a fresh server tick instead of compounding drift', () => {
 		setZonesSnapshot([makeZone({ seek_position: 30 })]);
 		const unsub = interpolatedSeekStore.subscribe(() => {});
+		subscriptions.push(unsub);
 
 		vi.advanceTimersByTime(1000);
 		// Server tick lands (absolute truth) — interpolation restarts
@@ -62,6 +71,7 @@ describe('interpolatedSeekStore (seek interpolation between 1 Hz ticks)', () => 
 	it('passes a paused zone through untouched', () => {
 		setZonesSnapshot([makeZone({ state: 'paused', seek_position: 42 })]);
 		const unsub = interpolatedSeekStore.subscribe(() => {});
+		subscriptions.push(unsub);
 
 		vi.advanceTimersByTime(2000);
 		expect(get(interpolatedSeekStore).get('zone-a')).toBe(42);
@@ -72,6 +82,7 @@ describe('interpolatedSeekStore (seek interpolation between 1 Hz ticks)', () => 
 	it('re-bases after an absolute seek backwards', () => {
 		setZonesSnapshot([makeZone({ seek_position: 100 })]);
 		const unsub = interpolatedSeekStore.subscribe(() => {});
+		subscriptions.push(unsub);
 
 		vi.advanceTimersByTime(500);
 		updateSeekPosition('zone-a', 10); // user seeked back
@@ -84,6 +95,7 @@ describe('interpolatedSeekStore (seek interpolation between 1 Hz ticks)', () => 
 	it('stops ticking when the last subscriber leaves (no idle timer)', () => {
 		setZonesSnapshot([makeZone({ seek_position: 30 })]);
 		const unsub = interpolatedSeekStore.subscribe(() => {});
+		subscriptions.push(unsub);
 		unsub();
 
 		// With no subscriber the interval is torn down; advancing time
@@ -91,4 +103,31 @@ describe('interpolatedSeekStore (seek interpolation between 1 Hz ticks)', () => 
 		// vitest fails the test on unhandled interval errors).
 		vi.advanceTimersByTime(5000);
 	});
+	it('stops cosmetic ticking when motion is off but still accepts actual playback updates', () => {
+		setZonesSnapshot([makeZone({ seek_position: 30 })]);
+		const unsub = interpolatedSeekStore.subscribe(() => {});
+		subscriptions.push(unsub);
+		presentationSettingsStore.applySnapshot({ ...DEFAULT_PRESENTATION_SETTINGS, revision: 1, interfaceMotion: false });
+		vi.advanceTimersByTime(2000);
+		expect(get(interpolatedSeekStore).get('zone-a')).toBe(30);
+		expect(vi.getTimerCount()).toBe(0);
+		updateSeekPosition('zone-a', 32);
+		expect(get(interpolatedSeekStore).get('zone-a')).toBe(32);
+		presentationSettingsStore.applySnapshot({ ...DEFAULT_PRESENTATION_SETTINGS, revision: 2 });
+		expect(get(interpolatedSeekStore).get('zone-a')).toBe(32);
+		vi.advanceTimersByTime(250);
+		expect(get(interpolatedSeekStore).get('zone-a')).toBe(32.25);
+		unsub();
+	});
+	it('does not animate before the first confirmed settings snapshot', () => {
+		presentationSettingsStore.reset();
+		setZonesSnapshot([makeZone({ seek_position: 30 })]);
+		const unsub = interpolatedSeekStore.subscribe(() => {});
+		subscriptions.push(unsub);
+		vi.advanceTimersByTime(1000);
+		expect(get(interpolatedSeekStore).get('zone-a')).toBe(30);
+		expect(vi.getTimerCount()).toBe(0);
+		unsub();
+	});
+
 });

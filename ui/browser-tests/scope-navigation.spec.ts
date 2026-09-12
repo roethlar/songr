@@ -39,7 +39,7 @@ test('defaults retain the compact chips and More only selects other pages', asyn
  expect(snapshot).toEqual(DEFAULT_NAVIGATION_SETTINGS);
  await more(page).click();
  await expect(menu(page).getByText(/settings|options|customize/i)).toHaveCount(0);
- await menu(page).getByRole('menuitem', { name: 'Favorites', exact: true }).click();
+ await menu(page).getByRole('menuitem', { name: 'Bookmarks', exact: true }).click();
  await expect(menu(page)).toHaveCount(0);
  await expect(page.getByTestId('unified-pane')).toHaveAttribute('data-scope', 'favorites');
  await expect(more(page)).toHaveClass(/\bon\b/);
@@ -53,10 +53,10 @@ test('server snapshots update pins and ordering without remounting the library',
  const firstRow = await page.getByTestId('unified-row').first().elementHandle();
  const order: NavigationDestinationId[] = ['favorites', 'genres', 'albums', 'artists', ...NAVIGATION_DESTINATION_IDS.filter(id => !['favorites', 'genres', 'albums', 'artists'].includes(id))];
  const snapshot = await apply(page, { order, pinned: ['favorites', 'albums'] });
- await expect(primary(page)).toHaveText(['Favorites', 'Albums']);
+ await expect(primary(page)).toHaveText(['Bookmarks', 'Albums']);
  expect(await firstRow!.evaluate(node => node.isConnected)).toBe(true);
  expect(await page.evaluate(snapshot => window.libraryScrollFixture.applyNavigationSnapshot(snapshot), DEFAULT_NAVIGATION_SETTINGS)).toBe(false);
- await expect(primary(page)).toHaveText(['Favorites', 'Albums']);
+ await expect(primary(page)).toHaveText(['Bookmarks', 'Albums']);
  expect(await page.evaluate(() => window.libraryScrollFixture.navigationSnapshot)).toEqual(snapshot);
 });
 

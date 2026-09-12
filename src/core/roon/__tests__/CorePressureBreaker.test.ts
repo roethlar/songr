@@ -150,11 +150,9 @@ describe("the core pressure breaker", () => {
     jest.useRealTimers();
   });
 
-  it("admits every background workload while it is closed", () => {
+  it("admits background library reads while it is closed", () => {
     const { breaker } = harness({});
-    expect(breaker.admit(CORE_ID, "catalog-refresh")).toBe(true);
-    expect(breaker.admit(CORE_ID, "artist-album-binding")).toBe(true);
-    expect(breaker.admit(CORE_ID, "catalog-walk")).toBe(true);
+    expect(breaker.admit(CORE_ID, "library-roots")).toBe(true);
     expect(breaker.stateFor(CORE_ID)).toBe("closed");
   });
 
@@ -162,27 +160,25 @@ describe("the core pressure breaker", () => {
     const { breaker } = harness({});
     breaker.reportPressure(CORE_ID, { source: "browse-canary", kind: "timeout" });
     expect(breaker.stateFor(CORE_ID)).toBe("open");
-    expect(breaker.admit(CORE_ID, "catalog-refresh")).toBe(false);
-    expect(breaker.admit(CORE_ID, "artist-album-binding")).toBe(false);
-    expect(breaker.admit(CORE_ID, "catalog-walk")).toBe(false);
+    expect(breaker.admit(CORE_ID, "library-roots")).toBe(false);
   });
 
   it("cancels work already running, not just the work not yet started", () => {
     const { breaker } = harness({});
-    const refresh = recordingSubscriber("catalog-refresh");
-    const binding = recordingSubscriber("artist-album-binding");
-    breaker.register(refresh);
-    breaker.register(binding);
+    const reader = recordingSubscriber("library-roots");
+    const secondReader = recordingSubscriber("library-roots");
+    breaker.register(reader);
+    breaker.register(secondReader);
     breaker.reportPressure(CORE_ID, {
-      source: "artist-album-binding",
+      source: "library-roots",
       kind: "connection-lost",
     });
     // The whole point of the slice: a gate that only declined the next pass
     // would leave ten minutes of reads running against the Core it has just
     // declared overloaded.
-    expect(refresh.suspends).toEqual([CORE_ID]);
-    expect(binding.suspends).toEqual([CORE_ID]);
-    expect(refresh.resumes).toEqual([]);
+    expect(reader.suspends).toEqual([CORE_ID]);
+    expect(secondReader.suspends).toEqual([CORE_ID]);
+    expect(reader.resumes).toEqual([]);
   });
 
   it("trips only after latency is sustained, never on one slow sample", () => {
@@ -214,7 +210,7 @@ describe("the core pressure breaker", () => {
     // would make the degradation look normal to itself. Hard signals still
     // work, which is what keeps the breaker useful on a stock install.
     expect(breaker.stateFor(CORE_ID)).toBe("closed");
-    breaker.reportPressure(CORE_ID, { source: "catalog-refresh", kind: "timeout" });
+    breaker.reportPressure(CORE_ID, { source: "library-roots", kind: "timeout" });
     expect(breaker.stateFor(CORE_ID)).toBe("open");
   });
 
@@ -237,13 +233,13 @@ describe("the core pressure breaker", () => {
 
   it("closes on a probe that answers inside the threshold, and re-authorizes the workloads", async () => {
     const { breaker, advance } = harness({ answers: [{ latencyMs: 50 }] });
-    const refresh = recordingSubscriber("catalog-refresh");
-    breaker.register(refresh);
+    const reader = recordingSubscriber("library-roots");
+    breaker.register(reader);
     breaker.reportPressure(CORE_ID, { source: "browse-canary", kind: "timeout" });
     await advance(BACKOFF_MS + 1_000);
     expect(breaker.stateFor(CORE_ID)).toBe("closed");
-    expect(refresh.resumes).toEqual([CORE_ID]);
-    expect(breaker.admit(CORE_ID, "catalog-refresh")).toBe(true);
+    expect(reader.resumes).toEqual([CORE_ID]);
+    expect(breaker.admit(CORE_ID, "library-roots")).toBe(true);
   });
 
   it("does not close on a probe that answers but is still too slow", async () => {
@@ -282,7 +278,7 @@ describe("the core pressure breaker", () => {
     expect(breaker.stateFor(CORE_ID)).toBe("closed");
     expect(breaker.tripsFor(CORE_ID)).toBe(1);
 
-    breaker.reportPressure(CORE_ID, { source: "catalog-refresh", kind: "timeout" });
+    breaker.reportPressure(CORE_ID, { source: "library-roots", kind: "timeout" });
     expect(breaker.stateFor(CORE_ID)).toBe("open");
     expect(breaker.tripsFor(CORE_ID)).toBe(2);
     const before = probes.length;
@@ -311,7 +307,7 @@ describe("the core pressure breaker", () => {
     await advance(BACKOFF_MS * 4);
     expect(probes).toHaveLength(1);
     expect(breaker.stateFor(CORE_ID)).toBe("open");
-    expect(breaker.admit(CORE_ID, "catalog-refresh")).toBe(false);
+    expect(breaker.admit(CORE_ID, "library-roots")).toBe(false);
 
     breaker.onCorePaired(CORE_ID);
     // Still open, still requiring a probe: the re-pair did not itself count
@@ -347,7 +343,7 @@ describe("the core pressure breaker", () => {
     // one's trouble, and the old Core's record goes with it rather than
     // waiting to ambush a later re-pair.
     expect(breaker.stateFor(OTHER_CORE_ID)).toBe("closed");
-    expect(breaker.admit(OTHER_CORE_ID, "catalog-refresh")).toBe(true);
+    expect(breaker.admit(OTHER_CORE_ID, "library-roots")).toBe(true);
     expect(breaker.stateFor(CORE_ID)).toBe("closed");
     expect(breaker.tripsFor(CORE_ID)).toBe(0);
   });
@@ -355,30 +351,30 @@ describe("the core pressure breaker", () => {
   it("ignores a report about a Core that is no longer the paired one", () => {
     const canary = { suspend: jest.fn(), resume: jest.fn() };
     const { breaker, probes, logger } = harness({ canary });
-    const refresh = recordingSubscriber("catalog-refresh");
-    breaker.register(refresh);
+    const reader = recordingSubscriber("library-roots");
+    breaker.register(reader);
     breaker.onCorePaired(CORE_ID);
     breaker.onCorePaired(OTHER_CORE_ID);
 
-    // A refresh or a binding pass aimed at A can still be unwinding when B
+    // A library read aimed at A can still be unwinding when B
     // pairs, and its failure arrives afterwards. Acting on it would open a
     // breaker for A that nothing can close, suspend B's workloads on A's
     // evidence, and — worst of the three — start probing "A" through a
     // BrowseService that now reaches B, putting the recovery traffic on the
     // one Core nobody has complained about.
     breaker.reportPressure(CORE_ID, {
-      source: "catalog-refresh",
+      source: "library-roots",
       kind: "timeout",
     });
 
     expect(breaker.stateFor(CORE_ID)).toBe("closed");
     expect(breaker.stateFor(OTHER_CORE_ID)).toBe("closed");
     expect(breaker.tripsFor(CORE_ID)).toBe(0);
-    expect(refresh.suspends).toEqual([]);
+    expect(reader.suspends).toEqual([]);
     expect(canary.suspend).not.toHaveBeenCalled();
     expect(probes).toHaveLength(0);
     expect(jest.getTimerCount()).toBe(0);
-    expect(breaker.admit(OTHER_CORE_ID, "catalog-refresh")).toBe(true);
+    expect(breaker.admit(OTHER_CORE_ID, "library-roots")).toBe(true);
     expect(
       (logger.debug as jest.Mock).mock.calls.some(
         ([, message]) =>
@@ -407,13 +403,13 @@ describe("the core pressure breaker", () => {
 
   it("ignores a report that arrives while no Core is paired", async () => {
     const { breaker, probes, advance } = harness({});
-    const refresh = recordingSubscriber("catalog-refresh");
-    breaker.register(refresh);
+    const reader = recordingSubscriber("library-roots");
+    breaker.register(reader);
     breaker.onCorePaired(CORE_ID);
     breaker.onCoreUnpaired();
 
     breaker.reportPressure(CORE_ID, {
-      source: "artist-album-binding",
+      source: "library-roots",
       kind: "connection-lost",
     });
 
@@ -421,7 +417,7 @@ describe("the core pressure breaker", () => {
     // would call reRoot with no Core paired at all, which is the one state
     // the canary's own start is careful never to be in.
     expect(breaker.stateFor(CORE_ID)).toBe("closed");
-    expect(refresh.suspends).toEqual([]);
+    expect(reader.suspends).toEqual([]);
     await advance(BACKOFF_MS * 4);
     expect(probes).toHaveLength(0);
   });
@@ -443,34 +439,30 @@ describe("the core pressure breaker", () => {
   it("hands a different Core an unpaused world", () => {
     const canary = { suspend: jest.fn(), resume: jest.fn() };
     const { breaker } = harness({ canary });
-    const refresh = recordingSubscriber("catalog-refresh");
-    const binding = recordingSubscriber("artist-album-binding");
-    breaker.register(refresh);
-    breaker.register(binding);
+    const reader = recordingSubscriber("library-roots");
+    const secondReader = recordingSubscriber("library-roots");
+    breaker.register(reader);
+    breaker.register(secondReader);
     breaker.onCorePaired(CORE_ID);
     breaker.reportPressure(CORE_ID, { source: "browse-canary", kind: "timeout" });
-    expect(refresh.suspends).toEqual([CORE_ID]);
+    expect(reader.suspends).toEqual([CORE_ID]);
     expect(canary.suspend).toHaveBeenCalledTimes(1);
 
     breaker.onCorePaired(OTHER_CORE_ID);
 
-    // Dropping the old Core's record is not enough, because what the trip
-    // actually did was process-wide: `pauseRefresh` and the binding pass's
-    // pause take no Core at all, and the canary has one instance. Forgetting
-    // A's open state without resuming would leave B's refresh and binding
-    // pass revoked, and the canary silent, for as long as B stayed paired —
-    // and with A's record gone, nothing would ever close them again.
-    expect(refresh.resumes).toEqual([OTHER_CORE_ID]);
-    expect(binding.resumes).toEqual([OTHER_CORE_ID]);
+    // Dropping the old Core's record cannot leave shared readers suspended or
+    // the canary silent: with A's record gone, nothing could resume them.
+    expect(reader.resumes).toEqual([OTHER_CORE_ID]);
+    expect(secondReader.resumes).toEqual([OTHER_CORE_ID]);
     expect(canary.resume).toHaveBeenCalledTimes(1);
-    expect(breaker.admit(OTHER_CORE_ID, "catalog-refresh")).toBe(true);
+    expect(breaker.admit(OTHER_CORE_ID, "library-roots")).toBe(true);
   });
 
   it("still sees a Core change when the switch went through an unpair", () => {
     const canary = { suspend: jest.fn(), resume: jest.fn() };
     const { breaker } = harness({ canary });
-    const refresh = recordingSubscriber("catalog-refresh");
-    breaker.register(refresh);
+    const reader = recordingSubscriber("library-roots");
+    breaker.register(reader);
     breaker.reportPressure(CORE_ID, { source: "browse-canary", kind: "timeout" });
 
     // The ordinary shape of switching Cores: A goes away first, and only
@@ -483,16 +475,16 @@ describe("the core pressure breaker", () => {
 
     expect(breaker.stateFor(CORE_ID)).toBe("closed");
     expect(breaker.tripsFor(CORE_ID)).toBe(0);
-    expect(refresh.resumes).toEqual([OTHER_CORE_ID]);
+    expect(reader.resumes).toEqual([OTHER_CORE_ID]);
     expect(canary.resume).toHaveBeenCalledTimes(1);
-    expect(breaker.admit(OTHER_CORE_ID, "catalog-refresh")).toBe(true);
+    expect(breaker.admit(OTHER_CORE_ID, "library-roots")).toBe(true);
   });
 
   it("resumes nothing when the Core it replaces was never suspended", () => {
     const canary = { suspend: jest.fn(), resume: jest.fn() };
     const { breaker } = harness({ canary });
-    const refresh = recordingSubscriber("catalog-refresh");
-    breaker.register(refresh);
+    const reader = recordingSubscriber("library-roots");
+    breaker.register(reader);
     breaker.onCorePaired(CORE_ID);
 
     breaker.onCorePaired(OTHER_CORE_ID);
@@ -500,7 +492,7 @@ describe("the core pressure breaker", () => {
     // A resume nobody asked for is not free: it would lift a pause an
     // operator set by hand, and it would make the resume log say a recovery
     // happened where none did.
-    expect(refresh.resumes).toEqual([]);
+    expect(reader.resumes).toEqual([]);
     expect(canary.resume).not.toHaveBeenCalled();
   });
 
@@ -518,14 +510,14 @@ describe("the core pressure breaker", () => {
 
   it("clears on an explicit operator reset and re-authorizes the workloads", () => {
     const { breaker } = harness({});
-    const refresh = recordingSubscriber("catalog-refresh");
-    breaker.register(refresh);
+    const reader = recordingSubscriber("library-roots");
+    breaker.register(reader);
     breaker.onCorePaired(CORE_ID);
     breaker.reportPressure(CORE_ID, { source: "browse-canary", kind: "timeout" });
     breaker.reset(CORE_ID);
     expect(breaker.stateFor(CORE_ID)).toBe("closed");
-    expect(refresh.resumes).toEqual([CORE_ID]);
-    expect(breaker.admit(CORE_ID, "catalog-refresh")).toBe(true);
+    expect(reader.resumes).toEqual([CORE_ID]);
+    expect(breaker.admit(CORE_ID, "library-roots")).toBe(true);
   });
 
   it("suspends the fixed-rate canary while it is open and resumes it on close", async () => {
@@ -586,7 +578,7 @@ describe("the core pressure breaker", () => {
     held[0]?.();
     await flush();
     expect(breaker.stateFor(CORE_ID)).not.toBe("closed");
-    expect(breaker.admit(CORE_ID, "catalog-refresh")).toBe(false);
+    expect(breaker.admit(CORE_ID, "library-roots")).toBe(false);
   });
 
   it("keeps one probe on the wire, deferring the next until the abandoned one drains", async () => {
@@ -663,18 +655,18 @@ describe("the core pressure breaker", () => {
   it("survives a subscriber that refuses to suspend", () => {
     const { breaker, logger } = harness({});
     breaker.register({
-      workload: "catalog-refresh",
+      workload: "library-roots",
       suspend: () => {
         throw new Error("synthetic suspend failure");
       },
       resume: () => undefined,
     });
-    const binding = recordingSubscriber("artist-album-binding");
-    breaker.register(binding);
+    const secondReader = recordingSubscriber("library-roots");
+    breaker.register(secondReader);
     breaker.reportPressure(CORE_ID, { source: "browse-canary", kind: "timeout" });
     // One workload's bug must not leave the other one running against a Core
     // the breaker has already opened for.
-    expect(binding.suspends).toEqual([CORE_ID]);
+    expect(secondReader.suspends).toEqual([CORE_ID]);
     expect(breaker.stateFor(CORE_ID)).toBe("open");
     expect(
       (logger.warn as jest.Mock).mock.calls.some(

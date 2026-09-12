@@ -318,35 +318,20 @@ describe('UnifiedAlbumPage', () => {
 		expect(heading.querySelector('strong')).toBeNull();
 	});
 
-	it('renders source, date, duration, availability, and play-state metadata on the shared page', async () => {
+	it('renders public edition text and track count on the shared page', async () => {
 		const base = resolvedState();
-		const version = {
-			...base.versions[0],
-			editionText: 'Deluxe',
-			sourceLabel: 'Local',
-			releaseDate: '1993-07-05',
-			durationSeconds: 401,
-			available: false,
-			playCount: 4,
-			lastPlayedAt: '2026-08-01T12:30:00.000Z',
-			isFavorite: true,
-			isListenLater: true
-		};
+		const version = { ...base.versions[0], editionText: 'Deluxe' };
 		makeHarness({
 			...base,
-			// Two versions: the Versions tab only renders when there is a
-			// real choice (owner ruling 2026-08-17), and this test needs it.
 			versions: [version, { ...base.versions[0], versionId: VERSION_B }]
 		});
 
 		expect(screen.getByTestId('unified-album-selected-version')).toHaveTextContent('Deluxe');
-		expect(screen.getByTestId('unified-album-selected-version')).toHaveTextContent(
-			'2 tracks · 6:41 · 1993-07-05 · Local · Unavailable · Favorite · Listen Later · 4 plays · Last played 2026-08-01'
-		);
+		expect(screen.getByTestId('unified-album-selected-version')).toHaveTextContent('2 tracks');
 
 		await fireEvent.click(screen.getByRole('button', { name: /Versions/u }));
 		expect(screen.getByTestId('unified-album-version-0')).toHaveTextContent('Deluxe');
-		expect(screen.getByTestId('unified-album-version-0')).toHaveTextContent('1993-07-05');
+		expect(screen.getByTestId('unified-album-version-0')).toHaveTextContent('2 tracks');
 	});
 
 	it('keeps failed rows retryable while other versions remain available', async () => {
@@ -702,7 +687,7 @@ describe('UnifiedAlbumPage', () => {
 		expect(screen.queryByTestId('unified-album-action-retry')).toBeNull();
 	});
 
-	it('suppresses the row index when every track on the page carries its own ordinal', () => {
+	it('preserves public title prefixes without an additional number column', () => {
 		makeHarness(
 			sheetState({
 				phase: 'details',
@@ -718,12 +703,12 @@ describe('UnifiedAlbumPage', () => {
 		);
 		const list = screen.getByTestId('unified-album-tracks');
 		expect(list.querySelectorAll('.tn')).toHaveLength(0);
-		// Roon's title renders byte-for-byte in both branches.
+		// Roon's title renders byte-for-byte.
 		expect(screen.getByText("1. 'Round Midnight")).toBeInTheDocument();
 		expect(screen.getByText('2. Ah-Leu-Cha')).toBeInTheDocument();
 	});
 
-	it('keeps the row index on every row when one title on the page lacks an ordinal', () => {
+	it('preserves mixed public titles without inventing track numbers', () => {
 		makeHarness(
 			sheetState({
 				phase: 'details',
@@ -737,14 +722,13 @@ describe('UnifiedAlbumPage', () => {
 				]
 			})
 		);
-		// Per-page, never per-row: a mixed page keeps the index on ALL rows,
-		// including the ordinal-carrying one, so the title column cannot jag.
-		expect(screen.getByTestId('unified-album-tracks').querySelectorAll('.tn')).toHaveLength(2);
+		// Raw prefixes remain in the title; positions never become display numbers.
+		expect(screen.getByTestId('unified-album-tracks').querySelectorAll('.tn')).toHaveLength(0);
 	});
 
-	it('keeps the row index when no titles carry ordinals', () => {
+	it('shows unnumbered titles without an invented ordinal column', () => {
 		makeHarness(resolvedState(3));
-		expect(screen.getByTestId('unified-album-tracks').querySelectorAll('.tn')).toHaveLength(3);
+		expect(screen.getByTestId('unified-album-tracks').querySelectorAll('.tn')).toHaveLength(0);
 	});
 
 	it('hides the editorial review on multi-version pages', () => {
@@ -792,53 +776,6 @@ describe('UnifiedAlbumPage', () => {
 		expect(screen.queryByTestId('unified-album-review')).toBeNull();
 		expect(screen.queryByTestId('unified-album-review-failed')).toBeNull();
 		expect(screen.queryByTestId('unified-album-credits')).toBeNull();
-	});
-
-	it('offers exact-track info only on single-version pages and reports the zero-based position', async () => {
-		const onOpenTrackInfo = vi.fn();
-		const first = makeHarness(resolvedState(3), actionState(), null, null, { onOpenTrackInfo });
-		await fireEvent.click(screen.getByTestId('unified-track-info-2'));
-		expect(onOpenTrackInfo).toHaveBeenCalledWith(2);
-		first.unmount();
-		// A multi-version page has no exact album/version/index binding.
-		const multi = resolvedState();
-		makeHarness(
-			{
-				...multi,
-				versions: [
-					...multi.versions,
-					{
-						versionId: VERSION_B,
-						editionText: 'Deluxe Edition',
-						phase: 'idle',
-						trackCount: null,
-						code: null,
-						error: null
-					}
-				]
-			},
-			actionState(),
-			null,
-			null,
-			{ onOpenTrackInfo }
-		);
-		expect(screen.queryByTestId('unified-track-info-0')).toBeNull();
-	});
-
-	it('opens the track child view from the page’s own public data', async () => {
-		const onOpenTrackInfo = vi.fn();
-		const onCloseTrackInfo = vi.fn();
-		makeHarness(resolvedState(3), actionState(), null, null, {
-			onOpenTrackInfo,
-			onCloseTrackInfo
-		});
-		// The child opens with the page's own exact track title (ri5-2) —
-		// which is exactly what the address names.
-		await fireEvent.click(screen.getByTestId('unified-track-info-1'));
-		expect(screen.getByTestId('unified-album-track-info').textContent).toContain('Track 2');
-		await fireEvent.click(screen.getByTestId('unified-album-track-info-back'));
-		expect(onCloseTrackInfo).toHaveBeenCalledTimes(1);
-		expect(screen.queryByTestId('unified-album-track-info')).toBeNull();
 	});
 
 });

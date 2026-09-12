@@ -1,11 +1,12 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
+	import { createTrackSelection, type TrackSelection } from '$lib/trackSelection';
 	import RetainedLibraryPanel from './RetainedLibraryPanel.svelte';
 	import { prepareLibraryGrid } from '$lib/preparedLibraryGrid';
 	import { libraryArtwork } from '$lib/actions/libraryArtwork';
 	import type { UnifiedLibraryDrillTarget, UnifiedLibraryScope } from '$lib/libraryPageState';
 	import { imageUrl } from '$lib/imageUrl';
 	import { shouldHandleLibraryAnchorClick } from '$lib/libraryPageNavigation';
-	import type { UnifiedSongActionSemantic } from '@shared/unifiedSearchContracts';
 	import type { RecentlyPlayedEntry } from '@shared/types';
 	import type {
 		LetterBucket,
@@ -24,7 +25,6 @@
 		UnifiedGenresSort
 	} from '$lib/stores/unifiedLibraryPrefsStore';
 	import {
-		NO_IMPORT_DATES_REASON,
 		seededShuffle,
 		sortAlbums,
 		sortArtists,
@@ -50,7 +50,7 @@
 		};
 		randomSeed?: number;
 		surpriseSeed?: number;
-		groupAlbums?: boolean;
+		groupByLetter?: boolean;
 		retainScopes?: boolean;
 		layoutRevision?: unknown;
 		railTarget: LetterBucket | null;
@@ -68,7 +68,8 @@
 		 */
 		onOpenLiveArtist?: (entry: LibraryArtistEntry) => void;
 		onOpenLiveAlbum?: (entry: LibraryAlbumEntry) => void;
-		onFindRecent?: (entry: RecentlyPlayedEntry) => void;
+		recentSelection?: TrackSelection<RecentlyPlayedEntry>;
+		bookmarkBusy?: boolean;
 		hrefForArtist?: (entry: LibraryArtistEntry) => string | null;
 	hrefForAlbum?: (entry: LibraryAlbumEntry) => string | null;
 	hrefForDrill?: (target: UnifiedLibraryDrillTarget) => string | null;
@@ -82,7 +83,7 @@
 		sorts,
 		randomSeed = 1,
 		surpriseSeed = randomSeed,
-		groupAlbums = true,
+		groupByLetter = false,
 		retainScopes = false,
 		layoutRevision,
 		railTarget,
@@ -91,12 +92,18 @@
 		onDrill,
 		onOpenLiveArtist,
 		onOpenLiveAlbum,
-		onFindRecent,
+		recentSelection = createTrackSelection<RecentlyPlayedEntry>(),
+		bookmarkBusy = false,
 		hrefForArtist,
 		hrefForAlbum,
 		hrefForDrill,
 		albumTestId = 'unified-tile'
 	}: Props = $props();
+	$effect(() => {
+		recentSelection.retain(recent.entries, recent.entries);
+		if (scope !== 'recently-played') recentSelection.clear();
+	});
+	onDestroy(() => recentSelection.clear());
 
 	interface TileItem {
 		readonly source?: LibraryAlbumEntry;
@@ -160,7 +167,7 @@
 
 	const artistsSorted = $derived(sortArtists(artists, sorts.artists));
 	const artistGroups = $derived(
-		sorts.artists === 'az' || sorts.artists === 'za'
+		groupByLetter && (sorts.artists === 'az' || sorts.artists === 'za')
 			? groupBy(artistsSorted, (a) => letterOf(a.searchKey), sorts.artists)
 			: null
 	);
@@ -178,7 +185,7 @@
 
 	const albumsSorted = $derived(sortAlbums(albums, sorts.albums, sorts.albums === 'shuffle' ? randomSeed : 0));
 	const albumGroups = $derived.by((): Group<TileItem>[] | null => {
-		if (!groupAlbums) return null;
+		if (!groupByLetter) return null;
 		if (sorts.albums === 'az' || sorts.albums === 'za')
 			return groupBy(albumsSorted, (b) => letterOf(b.searchKey), sorts.albums).map((g) => ({
 				letter: g.letter,
@@ -227,7 +234,7 @@
 	const genreCards = $derived(namedCards(genres, sorts.genres));
 	const cardGroups = $derived.by((): Group<CardItem>[] | null => {
 		const sort = sorts.genres;
-		if (sort !== 'az' && sort !== 'za') return null;
+		if (!groupByLetter || (sort !== 'az' && sort !== 'za')) return null;
 		return groupBy(
 			genreCards,
 			(card) => letterOf(stripArticle(card.label).toLowerCase()),
@@ -238,7 +245,13 @@
 	$effect(() => {
 		if (!railTarget || !scroller) return;
 		if (scroller.closest('[data-retained-library-panel][aria-hidden="true"]')) return;
-		const target = scroller.querySelector<HTMLElement>(`[data-scope-panel="${scope}"] [data-grp="${railTarget.letter}"], :scope > .grp[data-grp="${railTarget.letter}"]`);
+		const activeScope = retainScopes
+			? scroller.querySelector<HTMLElement>(`[data-scope-panel="${scope}"]`)
+			: scroller;
+		if (!activeScope || activeScope.closest('[data-retained-library-panel][aria-hidden="true"]')) return;
+		const target = activeScope.querySelector<HTMLElement>(
+			`[data-grp="${railTarget.letter}"], [data-letter="${railTarget.letter}"]`
+		);
 		if (target && typeof target.scrollIntoView === 'function')
 			target.scrollIntoView({ block: 'start' });
 	});
@@ -255,7 +268,7 @@
 				return 'No recent plays yet.';
 		}
 		if (scope === 'artists' && artists.length === 0) return 'No artists in this library.';
-		if ((scope === 'albums' || scope === 'surprise' || scope === 'recently-added') && albums.length === 0)
+		if ((scope === 'albums' || scope === 'surprise') && albums.length === 0)
 			return 'No albums in this library.';
 		return null;
 	}
@@ -268,7 +281,7 @@
 </script>
 
 {#snippet artistRows(rows: readonly LibraryArtistEntry[])}
-	<div class="alist">
+	<div class={artistGroups ? 'alist' : 'alist artist-grid'}>
 		{#each rows as entry (entry.id)}
 			{@const href = hrefForArtist?.(entry) ?? null}
 			{@const open = onOpenLiveArtist ? () => onOpenLiveArtist(entry) : undefined}
@@ -278,6 +291,7 @@
 				type={href === null ? 'button' : undefined}
 				{href}
 				class="arow"
+				data-letter={letterOf(entry.searchKey)}
 				data-testid="unified-row"
 				disabled={href === null && open === undefined}
 				onclick={(event: MouseEvent) =>
@@ -298,23 +312,19 @@
 	<div class="tiles" use:prepareLibraryGrid={[items, layoutRevision]}>
 		{#each items as tile (tile.key)}
 			{@const liveEntry = tile.live}
-			{@const recentEntry = tile.recent}
-			{@const findable = recentEntry !== undefined && onFindRecent !== undefined &&
-				Boolean(recentEntry.title?.trim() || recentEntry.artist?.trim())}
 			{@const drillable = liveEntry !== undefined && onOpenLiveAlbum !== undefined}
 			{@const href = tile.source === undefined ? null : (hrefForAlbum?.(tile.source) ?? null)}
-			{@const open = findable && recentEntry !== undefined
-				? () => onFindRecent?.(recentEntry)
-				: drillable && liveEntry !== undefined ? () => onOpenLiveAlbum?.(liveEntry) : undefined}
+			{@const open = drillable && liveEntry !== undefined ? () => onOpenLiveAlbum?.(liveEntry) : undefined}
 			<svelte:element
 				this={href === null ? 'button' : 'a'}
 				role={href === null ? 'button' : 'link'}
 				type={href === null ? 'button' : undefined}
 				{href}
 				class="tile"
+				data-letter={letterOf(sorts.albums === 'by-artist'
+					? stripArticle(tile.artist) : (tile.source?.searchKey ?? stripArticle(tile.title)))}
 				data-testid={albumTestId}
 				disabled={href === null && open === undefined}
-				title={findable ? 'Find track' : undefined}
 				onclick={(event: MouseEvent) =>
 					href === null ? open?.() : followAddress(event, open)}
 			>
@@ -350,6 +360,7 @@
 				type={href === null ? 'button' : undefined}
 				{href}
 				class="gcard"
+				data-letter={letterOf(stripArticle(card.label))}
 				data-testid="unified-card"
 				disabled={href === null && open === undefined}
 				onclick={(event: MouseEvent) =>
@@ -405,16 +416,25 @@
 			<div class="hint">+ means at least this many albums.</div>
 		{/if}
 	{:else if selectedScope === 'recently-played'}
-		{@render albumTiles(recentTiles)}
-	{:else if selectedScope === 'playlists' || selectedScope === 'most-played'}
-		<p class="hint" data-testid="unified-retired-scope">{selectedScope === 'playlists' ? 'Playlists are unavailable because Roon does not identify which playlists this controller can open.' : 'Most played is unavailable because Roon does not provide a complete play history to this controller.'} Choose another Library page above.</p>
-	{:else if selectedScope === 'recently-added'}
-		<!-- A restored address outliving the feature: the honest reason, never a
-		     guessed order. Roon's public browse API exposes no import date, and
-		     the native layer that used to supply one is gone. -->
-		<p class="hint" data-testid="unified-recently-added-gated">
-			{NO_IMPORT_DATES_REASON}
-		</p>
+		<div class="tiles recent-tiles" use:prepareLibraryGrid={[recentTiles, layoutRevision]}>
+			{#each recentTiles as tile (tile.key)}
+				{@const entry = tile.recent!}
+				<div class="tile recent-tile" data-testid={albumTestId} data-track-select-row
+					use:recentSelection.row={{ item: entry, ordered: () => recent.entries,
+						generation: recent.entries, disabled: bookmarkBusy || scope !== 'recently-played' }}>
+					<div class="art">
+						{#if tile.imageKey}
+							<img use:libraryArtwork={imageUrl(tile.imageKey, { scale: 'fit', width: 300, height: 300 })} alt="" />
+						{:else}
+							{@const mono = monogram(tile.title)}
+							<div class="mono-tile" style={mono.style}>{mono.letter}</div>
+						{/if}
+					</div>
+					<button type="button" class="tt" data-track-select-target aria-label="Select {tile.title}" aria-pressed="false">{tile.title}</button>
+					<div class="ta">{tile.artist}</div>
+				</div>
+			{/each}
+		</div>
 	{/if}
 {/snippet}
 
@@ -422,9 +442,9 @@
 	{#if retainScopes}
 		{#each ['artists', 'albums', 'genres', 'recently-played', 'surprise'] as heldScope (heldScope)}
 			<RetainedLibraryPanel active={scope === heldScope}
-				revision={heldScope === 'artists' ? [artists, sorts.artists, layoutRevision] :
-					heldScope === 'albums' ? [albums, sorts.albums, groupAlbums, layoutRevision, sorts.albums === 'shuffle' ? randomSeed : 0] :
-					heldScope === 'genres' ? [genres, sorts.genres, layoutRevision] :
+				revision={heldScope === 'artists' ? [artists, sorts.artists, groupByLetter, layoutRevision] :
+					heldScope === 'albums' ? [albums, sorts.albums, groupByLetter, layoutRevision, sorts.albums === 'shuffle' ? randomSeed : 0] :
+					heldScope === 'genres' ? [genres, sorts.genres, groupByLetter, layoutRevision] :
 					heldScope === 'surprise' ? [albums, surpriseSeed, layoutRevision] : [recent, layoutRevision]}>
 				<div data-scope-panel={heldScope}>{@render scopeContent(heldScope as UnifiedLibraryScope)}</div>
 			</RetainedLibraryPanel>
@@ -436,3 +456,7 @@
 		{@render scopeContent(scope)}
 	{/if}
 </div>
+
+<style>
+	.recent-tile { position: relative; }
+</style>

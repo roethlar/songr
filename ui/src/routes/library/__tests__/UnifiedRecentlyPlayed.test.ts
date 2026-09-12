@@ -16,9 +16,8 @@ describe('Recently played navigation', () => {
 			}] }], error: null });
 		});
 		const action = vi.fn().mockResolvedValue({ authorityRetired: false });
-		const relationship = vi.fn().mockResolvedValue({ songTitle: 'A Recent Track', albums: [], composerLabels: [] });
 		const harness = mountMode({ liveLibrary: harnessLibrary(), recentStore: fakeRecentStore(), paletteSearchStore,
-			searchPaletteData: search, songRelationshipClient: { relationship },
+			searchPaletteData: search,
 			songActionController: new UnifiedSongActionController({ action }) });
 		await fireEvent.click(screen.getByTestId('unified-scope-recently-played'));
 		const card = activeLibraryScreen.getByText('A Recent Track').closest('button')!;
@@ -27,12 +26,10 @@ describe('Recently played navigation', () => {
 		expect(screen.getByTestId('unified-palette-input')).toHaveValue('A Recent Track');
 		await waitFor(() => expect(search).toHaveBeenCalledWith(expect.anything(), 'A Recent Track'));
 		expect(action).not.toHaveBeenCalled();
-		expect(relationship).not.toHaveBeenCalled();
 		expect(harness.openLiveRef).not.toHaveBeenCalled();
 		const result = within(screen.getByTestId('unified-palette')).getByText('A Recent Track').closest('a,button')!;
 		await fireEvent.click(result);
 		await waitFor(() => expect(screen.getByTestId('unified-song-title')).toHaveTextContent('A Recent Track'));
-		expect(relationship).toHaveBeenCalledWith(expect.anything(), 'current-public-result');
 		expect(action).not.toHaveBeenCalled();
 		expect(harness.openLiveRef).not.toHaveBeenCalled();
 	});

@@ -1,6 +1,12 @@
 <script lang="ts">
+	import { bookmarkPayload, bookmarkSearchQuery, resolveBookmarkTarget } from '$lib/bookmarks';
+	import { createBookmarkActions } from '$lib/stores/bookmarkActions';
 	import { libraryDestinationsStore } from '$lib/stores/libraryDestinationsStore';
-	import { createDefaultLibraryDestinationInventory, resolveLibraryDestination, DEFAULT_PUBLIC_LIBRARY_DESTINATIONS, identifyLibraryDestination, isLibraryDestinationRoot, filterSortLibraryCollection, filterRedundantBrowseItems, type LibraryDestinationInventory, type LibraryDestination, type LibraryCollectionSort } from '$lib/library/LibraryDestinations';
+	import { createDefaultLibraryDestinationInventory, resolveLibraryDestination, DEFAULT_PUBLIC_LIBRARY_DESTINATIONS, identifyLibraryDestination, isLibraryDestinationRoot, filterRedundantBrowseItems, type LibraryDestinationInventory, type LibraryDestination, type LibraryCollectionSort } from '$lib/library/LibraryDestinations';
+	import { CollectionOrderCanceled, prepareCollectionOrder } from '$lib/library/prepareCollectionOrder';
+	import { runTrackActionBatch, type TrackActionBatchGuard, type TrackActionBatchDispatchResult } from '$lib/library/trackActionBatch';
+	import { trackPlaybackOrder } from '$lib/library/trackPlaybackOrder';
+	import { prepareAlbumBatchAction, dispatchAlbumBatchAction } from '$lib/library/albumBatchAction';
 	import LibraryScopeNavigation from './LibraryScopeNavigation.svelte';
 	import { navigationSettingsStore } from '$lib/stores/navigationSettingsStore';
 	import { DEFAULT_NAVIGATION_SETTINGS, type NavigationDestinationId } from '@shared/navigationSettings';
@@ -22,7 +28,6 @@
 		buildUnifiedLibraryPageState,
 		type BrowseBreadcrumb,
 		type BrowseHistorySnapshot,
-		type UnifiedItemDetailTarget,
 		type UnifiedItemTarget,
 		type UnifiedLibraryDrillTarget,
 		type UnifiedLibraryPageState,
@@ -30,7 +35,6 @@
 	} from '$lib/libraryPageState';
 	import { LibraryItemPageController } from '$lib/library/LibraryItemPageController';
 	import {
-		expectSelfAuthoredLibraryPageState as expectLibraryRoute,
 		preflightLibraryPageState as preflightLibraryRoute,
 		pushLibraryPageState as pushLibraryRoute,
 		replaceLibraryPageState as replaceLibraryRoute,
@@ -77,6 +81,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	import { swallowsTypedText } from '$lib/a11y/keyboardOwnership';
 	import { claimModalSurface } from '$lib/actions/focusTrap';
 	import { openSettingsMenu, settingsMenuOpen } from '$lib/stores/settingsMenuStore';
+	import { updateCheckStore } from '$lib/stores/updateCheckStore';
 	import {
 		registerUnifiedLibraryDensityRequestHandler,
 		unifiedLibraryPrefsStore,
@@ -88,7 +93,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		artistDrillSortMenu,
 		ARTIST_SORT_MENU,
 		GENRE_SORT_MENU,
-		isChronologicalAlbumSort,
 		namedCountBuckets,
 		reverseBuckets,
 		sortAlbums,
@@ -112,6 +116,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	import type { LibraryIntent } from '$lib/libraryIntent';
 	import { parseCountFilter } from '$lib/unifiedSmartFilters';
 	import { loadRecentlyPlayed, recentlyPlayedStore } from '$lib/stores/recentlyPlayedStore';
+	import { createTrackSelection } from '$lib/trackSelection';
+	import TrackSelectionControls from './TrackSelectionControls.svelte';
 	import type { RecentlyPlayedEntry } from '@shared/types';
 	import { zonesStore } from '$lib/stores/zonesStore';
 	import { selectedZoneStore } from '$lib/stores/selectedZoneStore';
@@ -143,10 +149,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		type FavoritesState
 	} from '$lib/stores/favoritesStore';
 	import {
-		unifiedSearchClient,
-		type UnifiedSearchClient
-	} from '$lib/unifiedSearchClient';
-	import {
 		AlbumActionController,
 		type AlbumActionBeginInput,
 		type AlbumActionSocket
@@ -155,30 +157,25 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	import {
 		normalizeLibraryText
 	} from '@shared/libraryText';
-	import type {
-		UnifiedSongActionSemantic,
-		UnifiedSongAlbumRelationship,
-		UnifiedSongRelationship
-	} from '@shared/unifiedSearchContracts';
+	import type { UnifiedSongActionSemantic } from '@shared/unifiedSearchContracts';
 	import type {
 		AddFavoriteRequest,
 		BrowseItem,
 		BrowseResult,
 		FavoriteEntry,
-		FavoriteType,
 		SearchResult
 	} from '@shared/types';
 	import type { LibraryLevelRow } from '@shared/libraryOpenContracts';
 	import UnifiedScopeViews from './UnifiedScopeViews.svelte';
+	import LibrarySortMenu from './LibrarySortMenu.svelte';
 	import UnifiedLiveCollectionPage from './UnifiedLiveCollectionPage.svelte';
 	import UnifiedAlbumPage from './UnifiedAlbumPage.svelte';
 	import UnifiedArtistPage from './UnifiedArtistPage.svelte';
 	import UnifiedPalette from './UnifiedPalette.svelte';
-	import UnifiedTrackPage from './UnifiedTrackPage.svelte';
 	import UnifiedBrowseView from './UnifiedBrowseView.svelte';
 	import UnifiedPublicEntityPage from './UnifiedPublicEntityPage.svelte';
-	import { classifyBrowsePage, type BrowseRowActions } from '$lib/library/browsePresentation';
-	import UnifiedFavoritesView from './UnifiedFavoritesView.svelte';
+	import { classifyBrowsePage, classifyBrowseRow, type BrowseRowActions } from '$lib/library/browsePresentation';
+	import UnifiedBookmarksView from './UnifiedBookmarksView.svelte';
 	import './unified-surface.css';
 	import { version as uiBuildRevision } from '$app/environment';
 	import { coreStore, isCorePaired } from '$lib/stores/coreStore';
@@ -187,13 +184,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	interface ScopeChip {
 		readonly id: UnifiedLibraryScope;
 		readonly label: string;
-	}
-
-	interface SongRelationshipViewState {
-		readonly phase: 'idle' | 'loading' | 'ready' | 'unavailable';
-		readonly resultId: string | null;
-		readonly relationship: UnifiedSongRelationship | null;
-		readonly error: string | null;
 	}
 
 	interface UnifiedConnectionSocket {
@@ -208,20 +198,13 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		{ id: 'albums', label: 'Albums' },
 		{ id: 'genres', label: 'Genres' },
 		{ id: 'recently-played', label: 'Recently played' },
-		{ id: 'favorites', label: 'Favorites' }
+		{ id: 'favorites', label: 'Bookmarks' }
 	];
 	const SURPRISE_CHIP: ScopeChip = { id: 'surprise', label: 'Surprise me' };
 
-	/**
-	 * Recently added (Slice 5) rides the date-feature gate exactly like the
-	 * release-year sort. Per the 2026-07-24 owner correction an unavailable
-	 * chip is absent, never rendered disabled.
-	 */
-	const RECENTLY_ADDED_CHIP: ScopeChip = { id: 'recently-added', label: 'Recently added' };
 	const ALL_SCOPE_CHIPS: readonly ScopeChip[] = [
 		...LEADING_SCOPE_CHIPS,
-		SURPRISE_CHIP,
-		RECENTLY_ADDED_CHIP
+		SURPRISE_CHIP
 	];
 
 	const SORT_MENUS: Partial<Record<UnifiedLibraryScope, readonly SortMenuEntry[]>> = {
@@ -269,6 +252,9 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	let brandShowsLatin = $state(false);
 	/** About panel: the only surface in this view carrying version provenance. */
 	let aboutOpen = $state(false);
+	$effect(() => {
+		if (aboutOpen) void updateCheckStore.loadVersion(fetchFn);
+	});
 	/** About's toggle button and panel are not a shared wrapper (the panel
 	 *  renders as a header sibling), so outside-click detection needs both. */
 	let aboutButton = $state<HTMLElement | null>(null);
@@ -358,7 +344,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		browseController: suppliedBrowseController,
 		browseActionController: suppliedBrowseActionController,
 		addFavoriteData = addFavorite,
-		songRelationshipClient = unifiedSearchClient,
 		albumActionController: suppliedAlbumActionController,
 		getSocketClient = () => getSocket() as UnifiedConnectionSocket | null
 	}: {
@@ -392,7 +377,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		browseController?: UnifiedBrowseController;
 		browseActionController?: UnifiedBrowseActionController;
 		addFavoriteData?: (fetchFn: typeof fetch, payload: AddFavoriteRequest) => Promise<void>;
-		songRelationshipClient?: Pick<UnifiedSearchClient, 'relationship'>;
 		albumActionController?: AlbumActionController;
 		getSocketClient?: () => UnifiedConnectionSocket | null;
 	} = $props();
@@ -468,14 +452,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	 */
 	let itemOriginName = $state<string | null>(null);
 	let itemEntryRelationship: EntryRelationship = 'transient';
-	/**
-	 * Live-pushed entry ownership for in-page child closes (ri8-1): a
-	 * child that pushed its own entry in this session exits by
-	 * traversing back to the parent entry instead of rewriting its own
-	 * into a duplicate. Restored children never claim this — their
-	 * neighbouring entries are unknown.
-	 */
-	let trackChildOwnsEntry = false;
 	/** The element that opened the live item page; Back refocuses it (§4.3). */
 	let itemInvoker: HTMLElement | null = null;
 	/** Pane scroll position captured at item open, restored on Back. */
@@ -492,14 +468,21 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	let paletteOpen = $state(false);
 	let paletteQuery = $state('');
 	let paletteSelectedRowId = $state<string | null>(null);
-	let selectedSong = $state<PaletteSearchRow | null>(null);
 	let browseActionFromPalette = $state(false);
 	let inlineTrackAction = $state<{ busy: boolean; status: string | null; error: boolean } | null>(null);
 	let inlineTrackGesture = 0;
 	let inlineTrackOwner = $state.raw<{ kind: 'browse' | 'search'; result: object; claimEpoch: number; query?: string } | null>(null);
 	let browseMenuItem = $state.raw<BrowseItem | null>(null);
-	let songFavoriteBusy = $state(false);
-	let songFavoriteStatus = $state<string | null>(null);
+	let trackBatch = $state({ busy: false, status: null as string | null, error: false });
+	let trackBatchAbort: AbortController | null = null;
+	let trackBatchCurrent = $state.raw<(() => boolean) | null>(null);
+	const bookmarkActions = createBookmarkActions(entry => addFavoriteData(fetchFn, entry));
+	const bookmarkBusy = $derived($bookmarkActions.busy);
+	const bookmarkStatus = $derived($bookmarkActions.status);
+	$effect(() => {
+		void scope; void itemTarget; void paletteQuery;
+		untrack(() => bookmarkActions.clearStatus());
+	});
 	let favoriteMutationBusy = $state(false);
 	let favoritesStatus = $state<string | null>(null);
 	let returnToPalette = $state(false);
@@ -514,13 +497,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	let paletteArtistListReturnContext: PaletteArtistListReturnContext | null = null;
 	let classicSearchOwnerGeneration = 0;
 	let paletteSearchHandoff: Promise<void> = Promise.resolve();
-	let songRelationship = $state<SongRelationshipViewState>({
-		phase: 'idle',
-		resultId: null,
-		relationship: null,
-		error: null
-	});
-	let relationshipFence = 0;
 	let albumSongFocusTitle = $state<string | null>(null);
 	let pane: HTMLDivElement | null = $state(null);
 	let claim: ClassicBrowseSessionClaim | null = null;
@@ -592,7 +568,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	let sheetActionRetryAvailable = $state(false);
 	const sheetState = $derived($albumController);
 	const sheetActionState = $derived($sheetActionController);
-	const songActionState = $derived($songActionController);
 	const browseState = $derived($browseController);
 	const browseActionState = $derived($browseActionController);
 	const sheetZones = $derived(
@@ -636,7 +611,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	const creditGroupActive = $derived(scope === 'artists' && artistView === 'album-artists' && albumCredit !== null);
 	const selectedCreditGroup = $derived(albumCredit === null ? null :
 		albumArtistGroups.find(group => group.key === albumCreditKey(albumCredit!)) ?? null);
-	const creditAlbumSort = $derived(resolveAlbumOrder(prefs.sorts.artist));
+	const creditAlbumSort = $derived(prefs.sorts.artist);
 	const creditAlbums = $derived(selectedCreditGroup?.albums ?? []);
 	const creditViewSorts = $derived({ ...prefs.sorts, albums: creditAlbumSort });
 	const surfacePhase = $derived.by((): 'loading' | 'error' | 'ready' | 'idle' => {
@@ -689,9 +664,32 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	const browsePresentation = $derived(classifyBrowsePage(browseState, collectionRoot?.id));
 	const collectionContentItems = $derived(collectionRoot ? browsePresentation.contentItems
 		: filterRedundantBrowseItems(browseState.snapshot, [...browsePresentation.contentItems], destinationInventory));
-	const collectionMatches = $derived(completeCollection ? filterSortLibraryCollection({
-		...completeCollection, items: [...collectionContentItems], totalCount: collectionContentItems.length
-	}, collectionChoice) : null);
+	let collectionMatches = $state.raw<Awaited<ReturnType<typeof prepareCollectionOrder>> | null>(null);
+	let collectionOrderPending = $state(false);
+	let collectionOrderError = $state<string | null>(null);
+	$effect(() => {
+		const complete = completeCollection;
+		const rows = collectionContentItems;
+		const choice = { ...collectionChoice };
+		const presentation = browsePresentation;
+		let current = true;
+		collectionMatches = null;
+		collectionOrderPending = Boolean(complete);
+		collectionOrderError = null;
+		if (complete) void prepareCollectionOrder(rows, choice, {
+			isCurrent: () => current,
+			isSelectable: item => ['track', 'recording'].includes(classifyBrowseRow(item, presentation))
+		}).then(result => {
+			if (!current) return;
+			collectionMatches = result;
+			collectionOrderPending = false;
+		}).catch(error => {
+			if (!current || error instanceof CollectionOrderCanceled) return;
+			collectionOrderPending = false;
+			collectionOrderError = error instanceof Error ? error.message : 'Could not prepare this list.';
+		});
+		return () => { current = false; };
+	});
 	$effect(() => {
 		const inventory = destinationInventory;
 		navigationPrefsStore.setAvailableDestinations([...LEADING_SCOPE_CHIPS.map(item => item.id as NavigationDestinationId),
@@ -730,32 +728,22 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		collectionChoices[collectionKey] = { ...collectionChoice, ...change };
 	}
 
-	/**
-	 * A persisted chronological sort outlives the surface that could perform it.
-	 *
-	 * Every album list this mode renders — the Albums scope (Roon's own root,
-	 * Slice 2), the artist page and the genre drill — shows rows carrying a
-	 * title and a credit line and no date. So a sort saved when one of them
-	 * could order by year falls back to A–Z rather than selecting an entry the
-	 * menu no longer offers and an order nothing can perform.
-	 */
-	function resolveAlbumOrder<T extends string>(sort: T): T | 'az' {
-		return isChronologicalAlbumSort(sort) ? 'az' : sort;
-	}
 	const sortMenu = $derived(
 		creditGroupActive ? artistDrillSortMenu() :
 			scope === 'albums' ? liveAlbumSortMenu() : (SORT_MENUS[scope] ?? null)
 	);
 	const sortValue = $derived(
-		creditGroupActive ? creditAlbumSort : sortMenu ? resolveAlbumOrder(prefs.sorts[scope as SortableUnifiedScope]) : null
+		creditGroupActive ? creditAlbumSort : sortMenu ? prefs.sorts[scope as SortableUnifiedScope] : null
 	);
-	const viewSorts = $derived({
-		...prefs.sorts,
-		albums: resolveAlbumOrder(prefs.sorts.albums)
-	});
+	const groupingScope = $derived<SortableUnifiedScope | null>(
+		creditGroupActive ? 'artist' : ['artists', 'albums', 'genres', 'artist', 'genre'].includes(scope)
+			? scope as SortableUnifiedScope : null
+	);
+	const groupByLetter = $derived(groupingScope === null ? false : prefs.groupByLetter[groupingScope]);
+	const viewSorts = $derived(prefs.sorts);
 	const liveCollectionSorts = $derived({
 		...viewSorts,
-		albums: resolveAlbumOrder(prefs.sorts.genre)
+		albums: prefs.sorts.genre
 	});
 	/** Header count, verbatim per approved prototype `head(...)` calls. */
 	const scopeSummary = $derived.by(() => {
@@ -770,8 +758,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 				return `${$genresStore.totalCount.toLocaleString()} TOTAL`;
 			case 'recently-played':
 				return `${$recentStore.entries.length} TRACKS`;
-			case 'recently-added':
-				return `${listAlbums.length.toLocaleString()} TOTAL`;
 			case 'surprise':
 				return `RANDOM FROM ${listAlbums.length.toLocaleString()}`;
 			default:
@@ -1286,7 +1272,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		// that is the actual back target — not the current scope or
 		// collection drill (issue #6).
 		if (itemOriginName !== null) return itemOriginName;
-		return ALL_SCOPE_CHIPS.find((chip) => chip.id === scope)?.label ?? (scope === 'playlists' ? 'Playlists' : scope === 'most-played' ? 'Most played' : 'Library');
+		return ALL_SCOPE_CHIPS.find((chip) => chip.id === scope)?.label ?? 'Library';
 	});
 
 	/** Serialize auxiliary session reads so one request cannot replace another cursor. */
@@ -1351,25 +1337,12 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	}
 
 	function unifiedSemanticState(density: UnifiedLibraryDensity = prefs.density) {
-		const trackTitle =
-			editorialTrackIndex === null
-				? null
-				: (get(albumController).orderedTracks[editorialTrackIndex]?.title ?? null);
 		return buildUnifiedLibraryPageState({
 			scope,
 			artistView,
 			albumCredit,
 			collectionDrill: null,
 			itemTarget,
-			// The exact-track child is reconstructible product semantics
-			// (album localId + zero-based index, Slice 8); opaque follow
-			// destinations are deliberately never persisted.
-			itemDetail:
-				(itemTarget?.kind === 'collection' ||
-					(itemTarget?.kind === 'live' && livePageKind === 'album')) &&
-				trackTitle !== null
-					? { kind: 'track', title: trackTitle }
-					: null,
 			// The composition surface persists by composer context + exact
 			// title intent (Slice 8); live browse keys never persist, and
 			// nested recording pages restore to their top composition.
@@ -1491,43 +1464,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		}); } catch { return null; }
 	}
 
-	function routeWithTrack(route: LibraryRoute, track: string | undefined): LibraryRoute {
-		if (track === undefined) return route;
-		switch (route.kind) {
-			case 'credit-album':
-				return { ...route, kind: 'credit-album-track', track };
-			case 'credit-album-track':
-				return { ...route, track };
-			case 'artist-album':
-				return { ...route, kind: 'artist-album-track', track };
-			case 'artist-album-track':
-				return { ...route, track };
-			case 'album':
-				return { ...route, kind: 'album-track', track };
-			case 'album-track':
-				return { ...route, track };
-			case 'genre-album':
-				return { ...route, kind: 'genre-album-track', track };
-			case 'genre-album-track':
-				return { ...route, track };
-			case 'live-path':
-				return {
-					...route,
-					path: {
-						...route.path,
-						steps: [...route.path.steps, { kind: 'track', title: track }]
-					}
-				};
-			default:
-				return route;
-		}
-	}
-
-	function hrefForTrack(track: string): string | null {
-		const route = durableRouteForState(unifiedSemanticState());
-		return route === undefined ? null : encodeLibraryRoute(routeWithTrack(route, track));
-	}
-
 	/** Serialize display semantics; opaque controller authority never enters a URL. */
 	function durableRouteForState(state: UnifiedLibraryPageState): LibraryRoute | undefined {
 		return libraryRouteFromPageState(state) ?? undefined;
@@ -1564,10 +1500,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		if (result === 'pushed') return 'owned';
 		if (result === 'deduped') return previous;
 		return 'transient';
-	}
-
-	function expectSelfAuthoredLibraryPageState(state: UnifiedLibraryPageState): void {
-		expectLibraryRoute(state, durableRouteForState(state));
 	}
 
 	/** Returns whether a new entry was actually pushed (dedupe may skip). */
@@ -1642,7 +1574,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		artistView = candidateState.snapshot.artistView;
 		albumCredit = candidateState.snapshot.albumCredit;
 		railTarget = null;
-		trackChildOwnsEntry = false;
 		// Captured for every open: an in-place close (no history entry)
 		// returns focus to the invoking row/tile when it is still mounted.
 		itemInvoker =
@@ -1673,7 +1604,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			// The live page is its own reader; the item-page controller still
 			// owns retirement of whatever it displaced.
 			itemPageController.open(target);
-			clearTrackChildAnchor();
 			itemEntryRelationship = entryRelationshipAfterWrite(
 				writeResult,
 				previousEntryRelationship,
@@ -1686,7 +1616,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		albumSongFocusTitle = albumOptions?.songFocusTitle ?? null;
 		itemTarget = target;
 		const pageGeneration = itemPageController.open(target);
-		clearTrackChildAnchor();
 		itemEntryRelationship = entryRelationshipAfterWrite(
 			writeResult,
 			previousEntryRelationship,
@@ -1694,78 +1623,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		);
 		resetPaneAfterRender();
 		await openAlbumRead({ kind: 'collection', locator: target.locator }, pageGeneration);
-	}
-
-	/**
-	 * The exact-track child anchor (Slice 5), retained so the page-chain
-	 * entry and the address both name the track the reader asked for.
-	 */
-	let editorialTrackIndex: number | null = null;
-
-	/**
-	 * A restored exact-track title, consumed once the album's current track
-	 * order arrives; cleared by every fresh anchor open.
-	 */
-	let restoredTrackInfoTitle = $state<string | null>(null);
-
-	/** Clears the exact-track anchor whenever a fresh item page opens. */
-	function clearTrackChildAnchor(): void {
-		editorialTrackIndex = null;
-		restoredTrackInfoTitle = null;
-	}
-
-	/** Opens the exact-track child of the album page (Slice 5). */
-	function openEditorialTrack(trackPosition: number): void {
-		const target = itemTarget;
-		const current = itemPageController.current;
-		if (
-			(target?.kind !== 'collection' && target?.kind !== 'live') ||
-			current.target === null
-		) {
-			return;
-		}
-		// A consume of the restored child re-lands on the SAME history
-		// entry (Slice 8): it must not push a duplicate chain step.
-		const trackTitle = get(albumController).orderedTracks[trackPosition]?.title ?? null;
-		const restoredConsume = trackTitle !== null && restoredTrackInfoTitle === trackTitle;
-		restoredTrackInfoTitle = null;
-		editorialTrackIndex = trackPosition;
-		// The exact-track child is a page-chain step (Slice 8): one
-		// semantic entry per transition, restored by album + title. A
-		// transient parent (palette-opened, ri1-2) owns no semantic entry,
-		// so its children must not create one either (ri8-1). A restored
-		// child re-landed on an entry whose neighbours are unknown, so it
-		// never claims live-pushed ownership. A RETRY of the same child
-		// dedupes the push against the child's own entry — claimed
-		// ownership survives that (ri8-1 reopen).
-		const pushed =
-			!restoredConsume &&
-			itemEntryRelationship !== 'transient' &&
-			pushUnifiedSemanticState();
-		trackChildOwnsEntry = pushed || (trackChildOwnsEntry && !restoredConsume);
-	}
-
-
-	/** Composition surface state (plan Slice 6). */
-	/** Leaves the exact-track child and returns to the album's own view. */
-	function closeTrackChild(): void {
-		const currentState = unifiedSemanticState();
-		editorialTrackIndex = null;
-		restoredTrackInfoTitle = null;
-		// The closed child must stop being the restore target (Slice 8).
-		// A live-pushed child traverses back to the parent entry — the
-		// close stays synchronous and the expected-state mark absorbs
-		// the pop without a teardown restore (ri8-1). A restored child
-		// rewrites its entry instead (its neighbours are unknown), and
-		// a transient parent owns no entry to touch.
-		if (trackChildOwnsEntry) {
-			trackChildOwnsEntry = false;
-			expectSelfAuthoredLibraryPageState(unifiedSemanticState());
-			window.history.back();
-		} else if (itemEntryRelationship === 'restored') {
-			const parent = libraryParentPageState(currentState);
-			if (parent !== null) replaceLibraryPageState(parent);
-		}
 	}
 
 	/** Cancels the live page's read and action authority. */
@@ -1797,7 +1654,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		itemTarget = null;
 		itemOriginName = null;
 		itemEntryRelationship = 'transient';
-		trackChildOwnsEntry = false;
 		const invoker = itemInvoker;
 		itemInvoker = null;
 		const returnScrollTop = itemReturnScrollTop;
@@ -1929,8 +1785,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			resetItemPage(false);
 			restorePaletteArtistListReturnContext();
 			returnToPalette = false;
-			selectedSong = null;
-			resetSongRelationship();
 			paletteOpen = true;
 			return;
 		}
@@ -2206,8 +2060,10 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	function beginSheetAction(
 		track: { index: number; title: string } | null,
 		zoneId: string,
-		desiredSemantic: AlbumActionSemantic
+		desiredSemantic: AlbumActionSemantic | null
 	): void {
+		if (trackBatch.busy) return;
+		trackBatch.status = null;
 		const live = sheetState.live;
 		if (itemTarget?.kind === 'live' && live !== null) {
 			const ref = track === null ? live.playRef : (live.trackRefs[track.index] ?? null);
@@ -2259,6 +2115,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	}
 
 	function beginLiveRowAction(row: LibraryLevelRow, semantic: UnifiedSongActionSemantic | null): void {
+		if (trackBatch.busy) return;
+		trackBatch.status = null;
 		if (!getSocketClient()?.connected || itemTarget?.kind !== 'live' ||
 			livePage.phase !== 'ready' || actionZoneId === null) return;
 		const index = livePage.level?.rows.indexOf(row) ?? -1;
@@ -2279,7 +2137,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			if (!recent.loaded && !recent.loading) void loadRecent(fetchFn);
 		} else if (next === 'favorites') {
 			const current = $favoritesDataStore;
-			if (!current.loaded && !current.loading) void loadFavoritesData(fetchFn);
+			if (!current.loading) void loadFavoritesData(fetchFn);
 		}
 	}
 
@@ -2307,8 +2165,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			returnToPalette = false;
 			paletteQuery = '';
 			paletteSelectedRowId = null;
-			selectedSong = null;
-			resetSongRelationship();
 			startPaletteAuthorityRetirement();
 		}
 		// Remember where this scope was before leaving it, so coming back is a
@@ -2353,94 +2209,61 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		}
 	}
 
+	const recentSelection = createTrackSelection<RecentlyPlayedEntry>();
+	const selectedRecentEntry = $derived.by(() => {
+		$recentSelection;
+		const items = recentSelection.ordered($recentStore.entries);
+		return items.length === 1 ? items[0] : null;
+	});
+	const recentBookmarkDisabled = $derived.by(() => {
+		for (const entry of $recentSelection.selected) if (!entry.title?.trim()) return true;
+		return false;
+	});
+	function bookmarkRecent(entries: RecentlyPlayedEntry[]): void {
+		if (bookmarkBusy || scope !== 'recently-played' || !entries.length ||
+			entries.some(entry => !$recentStore.entries.includes(entry) || !entry.title?.trim())) return;
+		bookmarkItems(entries.map(entry => bookmarkPayload('track', {
+			title: entry.title!, artist: entry.artist, album: entry.album, imageKey: entry.image_key
+		})));
+	}
+
 	function findRecentTrack(entry: RecentlyPlayedEntry): void {
 		openPalette(entry.title?.trim() || entry.artist?.trim() || '');
 	}
 
 	function activateFavorite(favorite: FavoriteEntry): void {
-		openPalette(favorite.title);
+		if (!resumed) return;
+		const target = resolveBookmarkTarget(favorite, roots);
+		if (target?.kind === 'artist') { openLiveArtist(target.entry); return; }
+		if (target?.kind === 'album') { openLiveAlbum(target.entry); return; }
+		openPalette(bookmarkSearchQuery(favorite));
 	}
 
-	async function removeFavoriteEntry(favorite: FavoriteEntry): Promise<void> {
-		if (favoriteMutationBusy) return;
+	function bookmarkItems(entries: readonly AddFavoriteRequest[]): void {
+		if (!resumed || bookmarkBusy || entries.length === 0) return;
+		trackBatch.status = null;
+		void bookmarkActions.save(entries);
+	}
+
+	async function removeFavoriteEntries(entries: readonly FavoriteEntry[]): Promise<void> {
+		if (favoriteMutationBusy || entries.length === 0) return;
 		favoriteMutationBusy = true;
 		favoritesStatus = null;
+		let removed = 0;
 		try {
-			await removeFavoriteData(fetchFn, favorite.id);
-			favoritesStatus = `Removed “${favorite.title}” from favorites.`;
+			for (const favorite of entries) {
+				await removeFavoriteData(fetchFn, favorite.id);
+				removed++;
+			}
+			favoritesStatus = `Removed ${removed.toLocaleString()} bookmarks.`;
 		} catch (error) {
-			favoritesStatus =
-				error instanceof Error ? error.message : 'Could not remove this favorite.';
+			favoritesStatus = `${removed.toLocaleString()} removed. ${error instanceof Error ? error.message : 'Could not remove this bookmark.'}`;
 		} finally {
 			favoriteMutationBusy = false;
 		}
 	}
 
 	// ---- Palette + smart-filter pages (plan §3.2 slice 7) -------------
-
-	function resetSongRelationship(): void {
-		relationshipFence += 1;
-		songRelationship = {
-			phase: 'idle',
-			resultId: null,
-			relationship: null,
-			error: null
-		};
-	}
-
-	function loadSongRelationship(song: PaletteSearchRow): void {
-		const activeClaim = claim;
-		relationshipFence += 1;
-		const token = relationshipFence;
-		songRelationship = {
-			phase: 'loading',
-			resultId: song.resultId,
-			relationship: null,
-			error: null
-		};
-		if (!activeClaim) {
-			songRelationship = {
-				phase: 'unavailable',
-				resultId: song.resultId,
-				relationship: null,
-				error: 'Song relationships are unavailable.'
-			};
-			return;
-		}
-		void songRelationshipClient
-			.relationship(activeClaim, song.resultId)
-			.then((relationship) => {
-				if (
-					token !== relationshipFence ||
-					selectedSong?.resultId !== song.resultId
-				) {
-					return;
-				}
-				songRelationship = {
-					phase: 'ready',
-					resultId: song.resultId,
-					relationship,
-					error: null
-				};
-			})
-			.catch((error) => {
-				if (
-					token !== relationshipFence ||
-					selectedSong?.resultId !== song.resultId
-				) {
-					return;
-				}
-				songRelationship = {
-					phase: 'unavailable',
-					resultId: song.resultId,
-					relationship: null,
-					error:
-						error instanceof Error
-							? error.message
-							: 'Song relationships are unavailable.'
-				};
-			});
-	}
 
 	function openPalette(seedText = ''): void {
 		if (!resumed) return;
@@ -2453,8 +2276,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		classicSearchOwnerGeneration += 1;
 		paletteQuery = seedText;
 		paletteSelectedRowId = null;
-		selectedSong = null;
-		resetSongRelationship();
 		returnToPalette = false;
 		// The app-wide Space shortcut asks `hasOpenModalSurface()` before
 		// toggling playback, but the palette's aria-modal dialog only reaches
@@ -2559,12 +2380,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		paletteOpen = false;
 		paletteQuery = '';
 		paletteSelectedRowId = null;
-		selectedSong = null;
 		returnToPalette = false;
 		songActionController.reset();
-		songFavoriteBusy = false;
-		songFavoriteStatus = null;
-		resetSongRelationship();
 		startPaletteAuthorityRetirement();
 	}
 
@@ -2585,8 +2402,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 
 	function paletteDrill(target: UnifiedLibraryDrillTarget): void {
 		paletteOpen = false;
-		selectedSong = null;
-		resetSongRelationship();
 		returnToPalette = true;
 		// Palette destinations are nested search views, not semantic history
 		// entries. Keeping them inside this mounted mode preserves both the
@@ -2621,52 +2436,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	}
 
 
-	function paletteSong(song: PaletteSearchRow): void {
-		songActionController.reset();
-		songFavoriteBusy = false;
-		songFavoriteStatus = null;
-		selectedSong = song;
-		loadSongRelationship(song);
-	}
-
-	function backToPaletteResults(): void {
-		songActionController.reset();
-		songFavoriteBusy = false;
-		songFavoriteStatus = null;
-		selectedSong = null;
-		resetSongRelationship();
-	}
-
-	function favoritePayload(item: BrowseItem, type: FavoriteType): AddFavoriteRequest {
-		return {
-			type,
-			title: item.title,
-			...(type !== 'artist' && item.subtitle ? { artist: item.subtitle } : {}),
-			...(item.imageKey ? { image_key: item.imageKey } : {})
-		};
-	}
-
-	async function favoriteSong(): Promise<void> {
-		const song = selectedSong;
-		if (!song || songFavoriteBusy) return;
-		songFavoriteBusy = true;
-		songFavoriteStatus = null;
-		try {
-			await addFavoriteData(fetchFn, {
-				type: 'track',
-				title: song.title,
-				...(song.subtitle ? { artist: song.subtitle } : {}),
-				...(song.imageKey ? { image_key: song.imageKey } : {})
-			});
-			songFavoriteStatus = 'Added to favorites.';
-		} catch (error) {
-			songFavoriteStatus =
-				error instanceof Error ? error.message : 'Could not add this favorite.';
-		} finally {
-			songFavoriteBusy = false;
-		}
-	}
-
 	function publishBrowseStateAfter(restored: boolean, activeClaim: ClassicBrowseSessionClaim): void {
 		if (restored && claim === activeClaim && scope === 'browse') {
 			restorePaneScrollTop(scopeScrollTops.get(listScrollKey()) ?? 0);
@@ -2686,6 +2455,13 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		inlineTrackOwner = null;
 		browseMenuItem = null;
 		browseActionController.reset();
+	}
+
+	function dismissBrowseMenu(): void {
+		// Closing a menu must not invalidate the acknowledgement of a command
+		// already issued. Navigation still retires its owner through reset.
+		if (browseActionState.phase === 'executing') browseMenuItem = null;
+		else resetBrowseActions();
 	}
 
 	function inlineActionOwnerCurrent(): boolean {
@@ -2720,35 +2496,159 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		browseActionFromPalette = source.kind === 'search';
 	}
 
-	async function beginInlineTrackAction(
-		item: BrowseItem, semantic: UnifiedSongActionSemantic, query?: string
-	): Promise<void> {
-		const activeClaim = claim, zoneId = actionZoneId;
-		const source = actionSource(item, query);
-		if (!activeClaim || !zoneId || !source || inlineTrackAction?.busy) return;
-		resetBrowseActions();
-		ownInlineAction(source);
-		const gesture = inlineTrackGesture;
-		const current = () => gesture === inlineTrackGesture && claim === activeClaim &&
-			actionZoneId === zoneId && inlineActionOwnerCurrent() && Boolean(getSocketClient()?.connected);
-		inlineTrackAction = { busy: true, status: `Loading actions for “${item.title}”…`, error: false };
-		const opened = await browseActionController.open(activeClaim, source, zoneId);
-		if (!current()) { if (gesture === inlineTrackGesture) resetBrowseActions(); return; }
-		if (!opened || !get(browseActionController).available[semantic]) {
-			inlineTrackAction = { busy: false, error: true,
-				status: get(browseActionController).error ?? `This action is unavailable for “${item.title}”.` };
-			browseActionController.reset(); return;
-		}
-		inlineTrackAction = { busy: true, status: `Sending action for “${item.title}”…`, error: false };
-		const executed = await browseActionController.execute(activeClaim, semantic, zoneId);
-		if (!current()) { if (gesture === inlineTrackGesture) resetBrowseActions(); return; }
-		const success = semantic === 'queue' ? 'Queued' : semantic === 'add-next' ? 'Added next' : 'Playing';
-		inlineTrackAction = { busy: false, error: !executed,
-			status: executed ? `${success}: ${item.title}` : get(browseActionController).error ?? `Could not act on “${item.title}”.` };
+	function cancelTrackBatch(): void {
+		if (!trackBatchAbort) return;
+		trackBatchAbort.abort();
 		browseActionController.reset();
+		sheetActionController.cancel();
 	}
 
+	$effect(() => {
+		if (trackBatchCurrent && !trackBatchCurrent()) untrack(() => {
+			cancelTrackBatch();
+			trackBatch.status = null;
+			trackBatch.error = false;
+			if (!trackBatchAbort) trackBatchCurrent = null;
+		});
+	});
+
+	async function runSelectedTracks<T, P>(
+		rows: readonly T[], semantic: UnifiedSongActionSemantic, ownerCurrent: () => boolean,
+		prepare: (item: T, semantic: UnifiedSongActionSemantic, guard: TrackActionBatchGuard, signal: AbortSignal) => Promise<P>,
+		dispatch: (prepared: P, item: T, semantic: UnifiedSongActionSemantic, guard: TrackActionBatchGuard, signal: AbortSignal) => Promise<TrackActionBatchDispatchResult>
+	): Promise<void> {
+		if (bookmarkBusy || trackBatch.busy || !rows.length || !ownerCurrent()) return;
+		bookmarkActions.clearStatus();
+		resetBrowseActions();
+		closeLiveRowMore();
+		const abort = new AbortController();
+		trackBatchAbort = abort;
+		trackBatchCurrent = ownerCurrent;
+		trackBatch = { busy: true, status: `Preparing ${rows.length.toLocaleString()} selected tracks…`, error: false };
+		try {
+			const result = await runTrackActionBatch<T, P, UnifiedSongActionSemantic>({
+				steps: trackPlaybackOrder(rows, semantic), signal: abort.signal,
+				isCurrent: () => trackBatchAbort === abort && ownerCurrent(),
+				prepare: (item, action, guard) => prepare(item, action, guard, abort.signal),
+				dispatch: (prepared, item, action, guard) => dispatch(prepared, item, action, guard, abort.signal),
+				onProgress: progress => {
+					if (trackBatchAbort === abort && ownerCurrent()) trackBatch = {
+						busy: true, error: false,
+						status: `${progress.completed.toLocaleString()} of ${progress.total.toLocaleString()} tracks sent…`
+					};
+				}
+			});
+			if (trackBatchAbort !== abort) return;
+			const label = semantic === 'queue' ? 'Queued' : semantic === 'add-next' ? 'Added next' : 'Started selection';
+			const problem = result.outcomes.find(outcome => outcome.status === 'failed' || outcome.status === 'uncertain');
+			trackBatch = { busy: false, error: result.failed > 0 || result.uncertain > 0,
+				status: !ownerCurrent() ? null : result.stoppedReason === 'completed'
+					? `${label}: ${result.completed.toLocaleString()} tracks.`
+					: `${result.completed.toLocaleString()} sent; ${result.unattempted.toLocaleString()} not sent. ${problem?.message ?? 'Cancelled.'}${result.uncertain ? ' The last action was not retried because its outcome is unknown.' : ''}` };
+		} finally {
+			if (trackBatchAbort === abort) {
+				trackBatchAbort = null;
+				// Keep the feedback owner until navigation retires its message.
+				if (!trackBatch.status || !ownerCurrent()) trackBatchCurrent = null;
+				trackBatch.busy = false;
+				browseActionController.reset();
+				sheetActionController.cancel();
+			}
+		}
+	}
+
+	async function beginBrowseBatch(items: readonly BrowseItem[], semantic: UnifiedSongActionSemantic, query?: string): Promise<void> {
+		const activeClaim = claim, zoneId = actionZoneId;
+		if (!activeClaim || !zoneId) return;
+		const ownerResult = query === undefined ? browseState.result : get(paletteSearchStore);
+		const epoch = claimEpoch;
+		const availableRows = query === undefined ? browseState.result?.items ?? []
+			: get(paletteSearchStore).browseGroups?.flatMap(group => group.rows) ?? [];
+		const membership = new Set<BrowseItem>(availableRows);
+		if (items.some(item => !membership.has(item))) return;
+		const current = () => resumed && claim === activeClaim && claimEpoch === epoch && actionZoneId === zoneId &&
+			Boolean(getSocketClient()?.connected) && (query === undefined
+				? scope === 'browse' && itemTarget === null && browseState.phase === 'ready' && browseState.result === ownerResult
+				: paletteOpen && paletteQuery.trim() === query && $paletteSearchStore === ownerResult);
+		await runSelectedTracks(items, semantic, current, async (item, action, guard) => {
+			guard.assertCurrent();
+			const source: UnifiedBrowseActionSource = query === undefined
+				? { kind: 'browse', snapshot: browseState.snapshot, item, restoreCount: availableRows.length }
+				: { kind: 'search', query, item: item as SearchResult };
+			const opened = await browseActionController.open(activeClaim, source, zoneId);
+			guard.assertCurrent();
+			if (!opened || !get(browseActionController).available[action]) {
+				throw new Error(get(browseActionController).error ?? `This action is unavailable for “${item.title}”.`);
+			}
+			return source;
+		}, async (_source, _item, action, guard) => {
+			let issued = false;
+			const executed = await browseActionController.execute(activeClaim, action, zoneId, () => { guard.markIssued(); issued = true; });
+			if (!executed && !issued) guard.assertCurrent();
+			const result = get(browseActionController);
+			return executed ? { status: 'completed' } : {
+				status: result.phase === 'rejected' || !issued ? 'failed' : 'uncertain',
+				message: result.error ?? 'The action was not acknowledged.'
+			};
+		});
+	}
+
+	async function beginAlbumTracksBatch(tracks: readonly { index: number; title: string }[], zoneId: string, semantic: AlbumActionSemantic): Promise<void> {
+		if (semantic !== 'play-now' && semantic !== 'add-next' && semantic !== 'queue') return;
+		const page = sheetState, activeClaim = claim, target = itemTarget;
+		const positions = new Map<object, number>(page.orderedTracks.map((track, position) => [track, position]));
+		if (!activeClaim || !page.actionsAvailable || tracks.some(track => !positions.has(track))) return;
+		const current = () => resumed && claim === activeClaim && itemTarget === target && sheetState === page &&
+			actionZoneId === zoneId && Boolean(getSocketClient()?.connected);
+		await runSelectedTracks(tracks, semantic, current, async (track, action, guard, signal) => {
+			const session = await activeClaim.ready;
+			guard.assertCurrent();
+			const common = { zoneId, tabId: getTabId(), generation: session.generation };
+			const ref = page.live?.trackRefs[positions.get(track)!];
+			const input: AlbumActionBeginInput | null = ref ? { ...common, ref }
+				: page.operationId && page.selectedVersionId ? { ...common, pageId: page.operationId,
+					versionId: page.selectedVersionId, track: { index: track.index, title: track.title } } : null;
+			if (!input) throw new Error('This track is no longer available.');
+			return prepareAlbumBatchAction(sheetActionController, input, action, guard, signal);
+		}, (prepared, _item, _action, guard, signal) => dispatchAlbumBatchAction(sheetActionController, prepared, guard, signal));
+	}
+
+	async function beginLiveRowsBatch(rows: readonly LibraryLevelRow[], semantic: UnifiedSongActionSemantic): Promise<void> {
+		const page = livePage, activeClaim = claim, target = itemTarget, zoneId = actionZoneId;
+		const membership = new Set(page.level?.rows ?? []);
+		if (!activeClaim || !zoneId || page.phase !== 'ready' || rows.some(row => !membership.has(row))) return;
+		const current = () => resumed && claim === activeClaim && itemTarget === target && livePage === page &&
+			actionZoneId === zoneId && roots.generation === page.level?.generation && Boolean(getSocketClient()?.connected);
+		await runSelectedTracks(rows, semantic, current, async (row, action, guard, signal) => {
+			const session = await activeClaim.ready;
+			guard.assertCurrent();
+			return prepareAlbumBatchAction(sheetActionController,
+				{ zoneId, tabId: getTabId(), generation: session.generation, ref: row.ref }, action, guard, signal);
+		}, (prepared, _item, _action, guard, signal) => dispatchAlbumBatchAction(sheetActionController, prepared, guard, signal));
+	}
+
+	async function beginPaletteSongsBatch(songs: readonly PaletteSearchRow[], semantic: UnifiedSongActionSemantic): Promise<void> {
+		const owner = get(paletteSearchStore), activeClaim = claim, zoneId = actionZoneId;
+		const available = new Set(owner.groups.flatMap(group => group.rows));
+		if (!activeClaim || !zoneId || songs.some(song => !available.has(song))) return;
+		const current = () => resumed && claim === activeClaim && actionZoneId === zoneId && paletteOpen &&
+			$paletteSearchStore === owner && paletteQuery.trim() === owner.query && Boolean(getSocketClient()?.connected);
+		await runSelectedTracks(songs, semantic, current, async (song, _action, guard) => { guard.assertCurrent(); return song; },
+			async (song, _item, action, guard) => {
+				let issued = false;
+				const started = await songActionController.execute({ claim: activeClaim, resultId: song.resultId, semantic: action, zoneId,
+					beforeDispatch: () => { guard.markIssued(); issued = true; } });
+				const result = songActionController.snapshot();
+				if ((!started || result.phase !== 'executed') && !issued) guard.assertCurrent();
+				return started && result.phase === 'executed' ? { status: 'completed' }
+					: { status: result.phase === 'outcome-unknown' ? 'uncertain' : 'failed', message: result.error ?? 'The action failed.' };
+			});
+	}
+
+
 	async function openInlineMore(item: BrowseItem, query?: string): Promise<void> {
+		if (trackBatch.busy) return;
+		trackBatch.status = null;
 		const activeClaim = claim, source = actionSource(item, query);
 		if (!activeClaim || !source || inlineTrackAction?.busy) return;
 		resetBrowseActions();
@@ -2759,6 +2659,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	}
 
 	async function chooseInlineAction(item: BrowseItem): Promise<void> {
+		if (trackBatch.busy) return;
 		const activeClaim = claim, zoneId = actionZoneId;
 		if (!activeClaim || !zoneId || !browseMenuItem || !inlineActionOwnerCurrent() ||
 			!getSocketClient()?.connected || browseActionState.phase !== 'ready') return;
@@ -2777,53 +2678,37 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 
 	const browseRowActions = $derived<BrowseRowActions>({
 		enabled: actionZoneId !== null && resumed,
-		busy: (inlineTrackAction?.busy ?? false) || browseActionState.phase === 'executing',
-		status: inlineTrackAction?.status ?? null, error: inlineTrackAction?.error ?? false,
-		onAction: (item, semantic) => void beginInlineTrackAction(item, semantic),
-		onFavorite: item => void favoriteInlineTrack(item),
-		onMore: item => void openInlineMore(item), onCloseMore: resetBrowseActions,
+		busy: bookmarkBusy || trackBatch.busy || (inlineTrackAction?.busy ?? false) || browseActionState.phase === 'executing',
+		status: bookmarkStatus ?? trackBatch.status ?? inlineTrackAction?.status ?? null, error: trackBatch.error || (inlineTrackAction?.error ?? false),
+		onAction: (item, semantic) => void beginBrowseBatch([item], semantic),
+		onBatchAction: (items, semantic) => void beginBrowseBatch(items, semantic),
+		onCancel: trackBatch.busy ? cancelTrackBatch : undefined,
+		onFavorite: item => void favoriteInlineTracks([item]),
+		onBatchFavorite: items => void favoriteInlineTracks(items),
+		onMore: item => void openInlineMore(item), onCloseMore: dismissBrowseMenu,
 		menu: browseMenuItem && !browseActionFromPalette
 			? { item: browseMenuItem, state: browseActionState, onChoose: item => void chooseInlineAction(item) } : undefined
 	});
 	const paletteRowActions = $derived<BrowseRowActions>({
 		...browseRowActions,
-		onAction: (item, semantic) => void beginInlineTrackAction(item, semantic, paletteQuery.trim()),
+		onAction: (item, semantic) => void beginBrowseBatch([item], semantic, paletteQuery.trim()),
+		onBatchAction: (items, semantic) => void beginBrowseBatch(items, semantic, paletteQuery.trim()),
 		onFavorite: undefined,
+		onBatchFavorite: undefined,
 		onMore: item => void openInlineMore(item, paletteQuery.trim()),
 		menu: browseMenuItem && browseActionFromPalette
 			? { item: browseMenuItem, state: browseActionState, onChoose: item => void chooseInlineAction(item) } : undefined
 	});
 
-	async function favoriteInlineTrack(item: BrowseItem): Promise<void> {
-		if (inlineTrackAction?.busy || browseState.phase !== 'ready' || !browseState.result?.items.includes(item)) return;
+	function favoriteInlineTracks(items: readonly BrowseItem[]): void {
+		if (bookmarkBusy || browseState.phase !== 'ready' || !items.length) return;
+		const available = new Set(browseState.result?.items ?? []);
+		if (items.some(item => !available.has(item))) return;
 		resetBrowseActions();
-		const gesture = inlineTrackGesture;
-		inlineTrackOwner = { kind: 'browse', result: browseState.result!, claimEpoch };
-		inlineTrackAction = {
-			busy: true,
-			status: `Saving “${item.title}”…`,
-			error: false
-		};
-		try {
-			await addFavoriteData(fetchFn, favoritePayload(item, 'track'));
-			if (gesture === inlineTrackGesture) {
-				inlineTrackAction = {
-					busy: false,
-					status: `Added to favorites: ${item.title}`,
-					error: false
-				};
-			}
-		} catch (error) {
-			if (gesture === inlineTrackGesture) {
-				inlineTrackAction = {
-					busy: false,
-					error: true,
-					status: error instanceof Error ? error.message : 'Could not add this favorite.'
-				};
-			}
-		}
+		bookmarkItems(items.map(item => bookmarkPayload('track', {
+			title: item.title, artist: item.subtitle, imageKey: item.imageKey
+		})));
 	}
-
 
 	function browseItem(item: BrowseItem): void {
 		const activeClaim = claim;
@@ -2883,8 +2768,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		if (!activeClaim || !paletteOpen) return null;
 		classicSearchOwnerGeneration += 1;
 		paletteOpen = false;
-		selectedSong = null;
-		resetSongRelationship();
 		returnToPalette = false;
 		await queuePaletteAuthorityRetirement();
 		return claim === activeClaim ? activeClaim : null;
@@ -2915,46 +2798,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			void browseController
 				.openSearchCategory(activeClaim, query, categoryTitle, sheetZones[0]?.zoneId)
 				.then((restored) => publishBrowseStateAfter(restored, activeClaim));
-		});
-	}
-
-	function leaveSongPanelForDrill(): void {
-		relationshipFence += 1;
-		songActionController.reset();
-		paletteOpen = false;
-		returnToPalette = true;
-	}
-
-	function openSongComposer(label: string): void {
-		const relationship = songRelationship.relationship;
-		if (
-			songRelationship.phase !== 'ready' ||
-			!relationship ||
-			!relationship.composerLabels.includes(label)
-		) {
-			return;
-		}
-		leaveSongPanelForDrill();
-		void openDrill({ kind: 'composer', label }, false);
-	}
-
-	function beginSongAction(
-		semantic: 'play-now' | 'add-next' | 'queue',
-		zoneId: string
-	): void {
-		const activeClaim = claim;
-		const song = selectedSong;
-		if (
-			!activeClaim ||
-			!song ||
-			(songActionState.resultId === song.resultId && songActionState.authorityRetired)
-		)
-			return;
-		void songActionController.execute({
-			claim: activeClaim,
-			resultId: song.resultId,
-			semantic,
-			zoneId
 		});
 	}
 
@@ -3039,6 +2882,11 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	function setLiveCollectionAlbumSort(value: string): void {
 		if (value === 'shuffle') shuffleSeed += 1;
 		prefsStore.setSort('genre', value);
+	}
+
+	function setLetterGrouping(target: SortableUnifiedScope, value: boolean): void {
+		railTarget = null;
+		drillNotice = prefsStore.setGroupByLetter(target, value) ? null : 'This browser could not save your grouping preference.';
 	}
 
 	function setDensity(value: UnifiedLibraryDensity): boolean {
@@ -3132,8 +2980,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		resetBrowseActions();
 		browseActionFromPalette = false;
 		browseController.reset(browseState.snapshot);
-		selectedSong = null;
-		resetSongRelationship();
 		resetPaletteSearchData();
 	}
 
@@ -3223,7 +3069,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		activationGeneration = lifecycleGeneration;
 		const pageState = activation?.pageState;
 		let restoredItem: UnifiedItemTarget | null = null;
-		let restoredDetail: UnifiedItemDetailTarget | null = null;
 		/** Issue #6: the persisted artist-origin label for a restored album page. */
 		let restoredOriginName: string | null = null;
 		if (pageState && pageState.libraryView === 'unified') {
@@ -3233,7 +3078,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			creditEntryRelationship = albumCredit === null ? 'transient' : 'restored';
 			browseController.reset(pageState.snapshot.browseHistory);
 			restoredItem = pageState.snapshot.itemTarget;
-			restoredDetail = pageState.snapshot.itemDetail;
 			restoredOriginName = pageState.snapshot.itemOriginName;
 			surpriseSeed = pageState.snapshot.surpriseSeed ?? surpriseSeed;
 			const restoredDensity = pageState.snapshot.density;
@@ -3281,13 +3125,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			// returns here (album targets yield only on the later `await
 			// openAlbumRead(...)`).
 			itemOriginName = restoredOriginName;
-			// The exact-track child restores AFTER the album page opens: the
-			// page consumes the index once its single-version track order
-			// arrives, and a stale index simply keeps the parent (the
-			// session-bound restoration rule, Slice 8).
-			if (restoredDetail?.kind === 'track') {
-				restoredTrackInfoTitle = restoredDetail.title;
-			}
 		}
 		// A Back initiated from an item page returns to this entry: restore
 		// the scroll captured at item open instead of the reset-to-top the
@@ -3327,14 +3164,12 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		classicSearchOwnerGeneration += 1;
 		itemPageController.close();
 		livePageController.reset();
-		clearTrackChildAnchor();
 		itemTarget = null;
 		albumCredit = null;
 		artistView = 'all-artists';
 		creditEntryRelationship = 'transient';
 		itemOriginName = null;
 		itemEntryRelationship = 'transient';
-		trackChildOwnsEntry = false;
 		itemInvoker = null;
 		drillNotice = null;
 		// Palette capture detaches with `resumed`; state resets here so a
@@ -3342,18 +3177,14 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		paletteOpen = false;
 		paletteQuery = '';
 		paletteSelectedRowId = null;
-		selectedSong = null;
 		returnToPalette = false;
 		filterText = '';
 		songActionController.reset();
 		resetBrowseActions();
 		browseActionFromPalette = false;
-		songFavoriteBusy = false;
-		songFavoriteStatus = null;
 		favoriteMutationBusy = false;
 		favoritesStatus = null;
 		browseController.reset();
-		resetSongRelationship();
 		resetPaletteSearchData();
 		if (claim) {
 			sessionClient.release(claim);
@@ -3488,7 +3319,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 					data-testid="unified-about-connection"
 				>{connectedLabel}</dd>
 				<dt>Version</dt>
-				<dd data-testid="unified-about-app-version">{__APP_VERSION__}</dd>
+				<dd data-testid="unified-about-app-version">{$updateCheckStore.currentVersion ?? ($updateCheckStore.loadingVersion ? 'Reading…' : 'Unavailable')}</dd>
 				<dt>Interface</dt>
 				<dd data-testid="unified-about-ui-revision">rev {uiBuildRevision}</dd>
 				<dt>Core</dt>
@@ -3498,6 +3329,19 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 					{$coreStore.core?.displayVersion ?? '—'}
 				</dd>
 			</dl>
+			<div class="ab-updates">
+				<button type="button" class="ab-close ab-update mono" disabled={$updateCheckStore.checking}
+					onclick={() => void updateCheckStore.check(fetchFn)}>{$updateCheckStore.checking ? 'Checking…' : 'Check for updates'}</button>
+				<div class="ab-update-result" role="status" aria-live="polite" aria-atomic="true">
+					{#if $updateCheckStore.error}<p class="ab-update-error">{$updateCheckStore.error}</p>
+					{:else if $updateCheckStore.result?.status === 'update-available'}
+						<p>Songr {$updateCheckStore.result.latestVersion} is available. Updating this server is recommended.</p>
+						<a class="ab-update-release" href={$updateCheckStore.result.releaseUrl!} target="_blank" rel="noopener noreferrer">View release</a>
+					{:else if $updateCheckStore.result?.status === 'current'}<p>This server is up to date.</p>
+					{:else if $updateCheckStore.result?.status === 'ahead'}<p>No newer public release is available.</p>
+					{:else if $updateCheckStore.result?.status === 'no-release'}<p>No public release is available.</p>{/if}
+				</div>
+			</div>
 			<p class="ab-legal">Not affiliated with or endorsed by Roon Labs LLC.</p>
 			<button
 				type="button"
@@ -3512,11 +3356,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 
 
 
-	<!-- The library body stays MOUNTED but hidden while the search-track
-	     page is live (ri5-1) — the same restoration pattern the item
-	     pages use for the collection host: Back re-surfaces the exact
-	     prior context, transient state intact. -->
-	<div class="body" hidden={paletteOpen && selectedSong !== null}>
+	<div class="body">
 		<div class="library-index-slot">
 		{#if railVisible}
 			<nav class="rail" aria-label="A to Z index" data-testid="unified-rail">
@@ -3536,6 +3376,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		</div>
 		<div
 			class="pane u-main"
+			class:browse-pane={scope === 'browse' && itemTarget === null}
 			data-testid="unified-pane"
 			data-library-scroll-pane
 			data-scope={scope}
@@ -3555,11 +3396,20 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 				{#if !collectionRoot && (browsePresentation.kind === 'artist' || browsePresentation.kind === 'album')}
 					<UnifiedPublicEntityPage state={browseState} kind={browsePresentation.kind}
 						onBack={browseBack} onItem={browseItem} hrefForItem={hrefForBrowseItem}
-						actions={browseRowActions} />
+						actions={browseRowActions} onBookmark={bookmarkItems} {bookmarkBusy} {bookmarkStatus}
+						albumSort={prefs.sorts.artist} randomSeed={shuffleSeed} groupByLetter={prefs.groupByLetter.artist}
+						onSetAlbumSort={value => { if (value === 'shuffle') shuffleSeed += 1; prefsStore.setSort('artist', value); }}
+						onSetGroupByLetter={value => setLetterGrouping('artist', value)} />
 				{:else}
+				{#if collectionOrderError}<p class="status error" role="alert">{collectionOrderError}</p>{/if}
 				<UnifiedBrowseView
 					state={browseState}
 					displayItems={collectionMatches?.items ?? collectionContentItems}
+					orderedItems={collectionMatches?.orderedItems}
+					selectableItems={collectionMatches?.selectableItems}
+					orderedSelectableItems={collectionMatches?.orderedSelectableItems}
+					preparing={collectionOrderPending || collectionOrderError !== null}
+					layoutRevision={prefs.density}
 					collection={browseState.result?.listHint !== 'action_list' ? {
 						id: collectionRoot?.id, root: Boolean(collectionRoot), label: collectionLabel, filter: collectionChoice.filter, sort: collectionChoice.sort, ready: completeCollection !== null,
 						matchCount: collectionMatches?.matchCount ?? 0, totalCount: collectionMatches?.totalCount,
@@ -3576,12 +3426,12 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 					/>
 				{/if}
 			{:else if scope === 'favorites' && itemTarget === null}
-				<UnifiedFavoritesView
+				<UnifiedBookmarksView
 					state={favorites as FavoritesState}
 					busy={favoriteMutationBusy}
 					status={favoritesStatus}
 					onActivate={activateFavorite}
-					onRemove={(favorite) => void removeFavoriteEntry(favorite)}
+					onRemoveBatch={removeFavoriteEntries}
 				/>
 			{:else if surfacePhase === 'loading'}
 				<p class="status" data-testid="unified-loading">Loading library…</p>
@@ -3615,7 +3465,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 						</div>
 					</section>
 				{:else if itemTarget?.kind === 'collection' || (itemTarget?.kind === 'live' && livePageKind === 'album')}
-					<UnifiedAlbumPage
+					<UnifiedAlbumPage onBookmark={bookmarkItems} {bookmarkBusy} {bookmarkStatus}
 						controller={albumController}
 						actionController={sheetActionController}
 						zoneId={actionZoneId}
@@ -3629,13 +3479,13 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 						actionRetryAvailable={sheetActionRetryAvailable}
 						onRetryAction={retryFailedSheetAction}
 						onBeginAction={beginSheetAction}
-						onOpenTrackInfo={openEditorialTrack}
-						onCloseTrackInfo={closeTrackChild}
-						{hrefForTrack}
-						initialTrackInfoTitle={restoredTrackInfoTitle}
+						onBeginBatchAction={beginAlbumTracksBatch}
+						batchBusy={trackBatch.busy}
+						batchStatus={trackBatch.status}
+						onCancelBatch={cancelTrackBatch}
 					/>
 				{:else if itemTarget?.kind === 'live' && livePageKind === 'artist'}
-					<UnifiedArtistPage
+					<UnifiedArtistPage onBookmark={bookmarkItems} {bookmarkBusy} {bookmarkStatus}
 						artist={liveArtist}
 						albums={liveArtistAlbums}
 						overlayPhase={livePage.phase === 'opening'
@@ -3649,15 +3499,20 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 						backLabel={itemBackLabel}
 						onBack={backFromItem}
 					>
+						{#snippet headerExtra()}
+							<LibrarySortMenu options={artistDrillSortMenu()} value={prefs.sorts.artist}
+								onSort={value => { if (value === 'shuffle') shuffleSeed += 1; prefsStore.setSort('artist', value); }}
+								groupByLetter={prefs.groupByLetter.artist} onGroupByLetter={value => setLetterGrouping('artist', value)} />
+						{/snippet}
 						{#snippet discography()}
 							{#key liveArtist?.name}
 								<UnifiedScopeViews
 									scope="albums"
 									artists={[]}
 									albums={liveArtistAlbums}
-									sorts={viewSorts}
+									sorts={{ ...viewSorts, albums: prefs.sorts.artist }}
 									randomSeed={shuffleSeed}
-									groupAlbums={false}
+									groupByLetter={prefs.groupByLetter.artist}
 									layoutRevision={prefs.density}
 									railTarget={null}
 									genres={$genresStore}
@@ -3672,7 +3527,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 						{/snippet}
 					</UnifiedArtistPage>
 				{:else if itemTarget?.kind === 'live' && livePageKind !== null}
-					<UnifiedLiveCollectionPage
+					<UnifiedLiveCollectionPage onBookmark={bookmarkItems} {bookmarkBusy} {bookmarkStatus}
 						page={livePage}
 						levelKind={livePageKind}
 						backLabel={itemBackLabel}
@@ -3685,11 +3540,17 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 						actionController={sheetActionController}
 						actionsEnabled={actionZoneId !== null}
 						onRowAction={beginLiveRowAction}
+						onRowsAction={beginLiveRowsBatch}
+						batchBusy={trackBatch.busy}
+						batchStatus={trackBatch.status}
+						onCancelBatch={cancelTrackBatch}
 						onRowMore={row => beginLiveRowAction(row, null)}
 						onCloseRowMore={closeLiveRowMore}
 						sorts={liveCollectionSorts}
 						randomSeed={shuffleSeed}
 						onSetAlbumSort={setLiveCollectionAlbumSort}
+						groupByLetter={prefs.groupByLetter.genre}
+						onSetGroupByLetter={value => setLetterGrouping('genre', value)}
 						genrePreviews={genrePreviews}
 						density={prefs.density}
 						onPreviewCapacity={capacity => genrePreviewController.setCapacity(capacity)}
@@ -3765,13 +3626,22 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 							<button type="button" class="back" data-testid="unified-credit-back" onclick={backFromCreditGroup}>← Album artists</button>
 						{/if}
 						<h2 tabindex="-1" data-testid="unified-list-heading">{creditGroupActive && albumCredit !== null
-							? albumCreditLabel(albumCredit) : ALL_SCOPE_CHIPS.find((chip) => chip.id === scope)?.label ?? (scope === 'playlists' ? 'Playlists' : scope === 'most-played' ? 'Most played' : 'Library')}</h2>
-						{#if scope !== 'most-played'}
-							<span class="n mono" data-testid="unified-summary">
-								<!-- No truncation notice: Roon's roots are read whole or not at
-								     all, so a partial listing is never published. -->
-								{scopeSummary}
-							</span>
+							? albumCreditLabel(albumCredit) : ALL_SCOPE_CHIPS.find((chip) => chip.id === scope)?.label ?? 'Library'}</h2>
+						<span class="n mono" data-testid="unified-summary">
+							<!-- No truncation notice: Roon's roots are read whole or not at
+							     all, so a partial listing is never published. -->
+							{scopeSummary}
+						</span>
+						{#if scope === 'recently-played'}
+							<div class="recent-selection-header">
+								<TrackSelectionControls selection={recentSelection} orderedItems={$recentStore.entries}
+									visibleItems={$recentStore.entries} label={entry => entry.title?.trim() || 'Unknown track'}
+									busy={bookmarkBusy} status={bookmarkStatus} onBookmark={bookmarkRecent} bookmarkDisabled={recentBookmarkDisabled}
+									actions={[{ id: 'find', label: 'Find in Library',
+										disabled: !selectedRecentEntry || !Boolean(selectedRecentEntry.title?.trim() || selectedRecentEntry.artist?.trim()),
+										run: items => { if (items.length === 1) findRecentTrack(items[0]); }
+									}]} />
+							</div>
 						{/if}
 						{#if scope === 'artists' && albumCredit === null}
 							<div class="artist-view-switch" role="group" aria-label="Artist list">
@@ -3802,20 +3672,22 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 											type="button"
 											class="so"
 											class:on={option.id === sortValue}
-											class:dis={option.disabledReason !== undefined}
-											disabled={option.disabledReason !== undefined}
-											title={option.disabledReason}
 											data-testid="unified-sort-option-{option.id}"
 											onclick={() => {
 												setSort(option.id);
 												sortOpen = false;
 											}}
 										>
-											{option.label}{#if option.disabledReason}<span class="why"
-												>{option.disabledReason}</span
-											>{/if}
+											{option.label}
 										</button>
 									{/each}
+									{#if groupingScope}
+										<button type="button" class="so grouping-option" class:on={groupByLetter}
+											aria-pressed={groupByLetter} disabled={!['az', 'za', 'by-artist'].includes(sortValue ?? '')}
+											onclick={() => { if (groupingScope) setLetterGrouping(groupingScope, !groupByLetter); sortOpen = false; }}>
+											Group by letter
+										</button>
+									{/if}
 								</div>
 							</div>
 						{/if}
@@ -3827,14 +3699,14 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 						<p class="notice" data-testid="unified-credit-missing">No albums currently have this album-artist credit.</p>
 					{/if}
 					<RetainedLibraryPanel active={scope === 'artists' && artistView === 'album-artists' && albumCredit === null}
-						revision={[orderedCreditGroups, prefs.density]}>
-						<UnifiedAlbumArtistList groups={orderedCreditGroups} grouped={prefs.sorts.artists === 'az' || prefs.sorts.artists === 'za'}
+						revision={[orderedCreditGroups, prefs.density, prefs.groupByLetter.artists]}>
+						<UnifiedAlbumArtistList groups={orderedCreditGroups} grouped={prefs.groupByLetter.artists && (prefs.sorts.artists === 'az' || prefs.sorts.artists === 'za')}
 							{railTarget} hrefForGroup={hrefForCreditGroup} onOpen={openCreditGroup} />
 					</RetainedLibraryPanel>
 					<RetainedLibraryPanel active={!creditGroupActive && !(scope === 'artists' && artistView === 'album-artists')}
 						revision={roots.generation}>
-						<UnifiedScopeViews {scope} artists={listArtists} albums={listAlbums} onFindRecent={findRecentTrack}
-							sorts={viewSorts} randomSeed={albumShuffleSeed} {surpriseSeed} {railTarget}
+						<UnifiedScopeViews {recentSelection} {bookmarkBusy} {scope} artists={listArtists} albums={listAlbums}
+							sorts={viewSorts} {groupByLetter} randomSeed={albumShuffleSeed} {surpriseSeed} {railTarget}
 							genres={$genresStore} recent={$recentStore}
 							onDrill={(target) => void openDrill(target)} onOpenLiveArtist={openLiveArtist}
 							onOpenLiveAlbum={openLiveAlbum} {hrefForArtist} hrefForAlbum={hrefForRootAlbum} {hrefForDrill}
@@ -3842,7 +3714,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 					</RetainedLibraryPanel>
 					{#if creditGroupActive && selectedCreditGroup !== null}
 						<UnifiedScopeViews scope="albums" artists={listArtists} albums={creditAlbums}
-							sorts={creditViewSorts} randomSeed={shuffleSeed} {railTarget}
+							sorts={creditViewSorts} groupByLetter={prefs.groupByLetter.artist} randomSeed={shuffleSeed} {railTarget}
 							genres={$genresStore} recent={$recentStore} onOpenLiveAlbum={openCreditAlbum}
 							hrefForAlbum={hrefForCreditAlbum} layoutRevision={prefs.density} />
 					{/if}
@@ -3852,34 +3724,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		</div>
 	</div>
 
-	{#if paletteOpen && selectedSong}
-		<UnifiedTrackPage
-			song={selectedSong}
-			zoneId={actionZoneId}
-			busy={songActionState.phase === 'executing'}
-			error={songActionState.resultId === selectedSong.resultId ? songActionState.error : null}
-			relationshipPhase={songRelationship.resultId === selectedSong.resultId
-				? songRelationship.phase
-				: 'idle'}
-			relationship={songRelationship.resultId === selectedSong.resultId
-				? songRelationship.relationship
-				: null}
-			relationshipError={songRelationship.resultId === selectedSong.resultId
-				? songRelationship.error
-				: null}
-			onBack={backToPaletteResults}
-			onClose={closePalette}
-			onAction={songActionState.resultId === selectedSong.resultId &&
-			songActionState.authorityRetired
-				? undefined
-				: beginSongAction}
-			onFavorite={() => void favoriteSong()}
-			favoriteBusy={songFavoriteBusy}
-			favoriteStatus={songFavoriteStatus}
-			onOpenComposer={openSongComposer}
-		/>
-	{:else if paletteOpen}
-		<UnifiedPalette
+	{#if paletteOpen}
+		<UnifiedPalette onBookmark={bookmarkItems} {bookmarkBusy} {bookmarkStatus}
 			{roots}
 			genres={$genresStore}
 			composers={$composersStore}
@@ -3890,7 +3736,10 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			onDrill={paletteDrill}
 			onOpenLiveArtist={paletteOpenLiveArtist}
 			onOpenLiveAlbum={paletteOpenLiveAlbum}
-			onSong={paletteSong}
+			onSongsAction={beginPaletteSongsBatch}
+			songBatchBusy={trackBatch.busy}
+			songBatchStatus={trackBatch.status}
+			onCancelSongBatch={cancelTrackBatch}
 			onBrowseResult={paletteBrowseResult}
 			browseActions={paletteRowActions}
 			onBrowseCategory={paletteBrowseCategory}
@@ -3902,6 +3751,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 </section>
 
 <style>
+	/* Preparation must not toggle scrollbar width and trigger itself again. */
+	.browse-pane { scrollbar-gutter: stable; }
 	.unified-library-mode {
 		--unified-bg: var(--songr-bg);
 		--unified-fg: var(--songr-text-high);
@@ -3915,12 +3766,6 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 
 	.status {
 		color: var(--unified-dim);
-	}
-
-	/* The shared surface sheet sets display on .body; the ri5-1 hidden
-	   gate must still win while the search-track page is live. */
-	.body[hidden] {
-		display: none;
 	}
 
 	.ctab {

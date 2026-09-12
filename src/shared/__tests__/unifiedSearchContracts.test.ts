@@ -3,8 +3,6 @@ import {
   normalizeUnifiedSearchClearRequest,
   normalizeUnifiedSongActionAck,
   normalizeUnifiedSongActionRequest,
-  normalizeUnifiedSongRelationshipAck,
-  normalizeUnifiedSongRelationshipRequest,
   normalizeUnifiedSongSearchAck,
   normalizeUnifiedSongSearchRequest,
 } from "../unifiedSearchContracts";
@@ -98,101 +96,6 @@ describe("unified search contracts", () => {
     ).toBeNull();
   });
 
-  it("accepts only a correlated allowlisted song relationship", () => {
-    const relationship = normalizeUnifiedSongRelationshipRequest({
-      requestId: "relationship-request-1",
-      tabId: "tab-1",
-      session: request.session,
-      resultId: "song-result-1",
-    })!;
-    const album = {
-      albumLocalId: "album-1",
-      artistLocalId: "artist-1",
-      title: "Hamilton",
-      artist: "Orlando Ballet Chorus",
-      editionText: "",
-    };
-
-    expect(
-      normalizeUnifiedSongRelationshipAck(
-        {
-          success: true,
-          data: {
-            requestId: "relationship-request-1",
-            session: request.session,
-            resultId: "song-result-1",
-            songTitle: "Dear Theodosia",
-            albums: [album],
-            composerLabels: ["Lio-Marcus Mendel"],
-          },
-        },
-        relationship
-      )
-    ).toEqual({
-      success: true,
-      data: {
-        requestId: "relationship-request-1",
-        session: request.session,
-        resultId: "song-result-1",
-        songTitle: "Dear Theodosia",
-        albums: [album],
-        composerLabels: ["Lio-Marcus Mendel"],
-      },
-    });
-  });
-
-  it("rejects stale, duplicate, or extra song relationship authority", () => {
-    const relationship = normalizeUnifiedSongRelationshipRequest({
-      requestId: "relationship-request-1",
-      tabId: "tab-1",
-      session: request.session,
-      resultId: "song-result-1",
-    })!;
-    const album = {
-      albumLocalId: "album-1",
-      artistLocalId: null,
-      title: "Hamilton",
-      artist: "Orlando Ballet Chorus",
-      editionText: "",
-    };
-    const data = {
-      requestId: "relationship-request-1",
-      session: request.session,
-      resultId: "song-result-1",
-      songTitle: "Dear Theodosia",
-      albums: [album],
-      composerLabels: [],
-    };
-
-    expect(
-      normalizeUnifiedSongRelationshipAck(
-        {
-          success: true,
-          data: { ...data, resultId: "replaced-song" },
-        },
-        relationship
-      )
-    ).toBeNull();
-    expect(
-      normalizeUnifiedSongRelationshipAck(
-        {
-          success: true,
-          data: { ...data, albums: [album, album] },
-        },
-        relationship
-      )
-    ).toBeNull();
-    expect(
-      normalizeUnifiedSongRelationshipAck(
-        {
-          success: true,
-          data: { ...data, itemKey: "raw-roon-key" },
-        },
-        relationship
-      )
-    ).toBeNull();
-  });
-
   it("accepts only an exact correlated semantic song action", () => {
     const action = normalizeUnifiedSongActionRequest({
       requestId: "action-request-1",
@@ -243,6 +146,23 @@ describe("unified search contracts", () => {
         action
       )
     ).toBeNull();
+  });
+
+  it("preserves a public Roon refusal through song action normalization", () => {
+    const action = normalizeUnifiedSongActionRequest({
+      requestId: "action-request-1",
+      tabId: "tab-1",
+      session: request.session,
+      resultId: "song-result-1",
+      zoneId: "zone-1",
+      semantic: "play-now",
+    })!;
+    const refusal = {
+      success: false,
+      code: "ROON_REJECTED",
+      error: "This track is unavailable",
+    };
+    expect(normalizeUnifiedSongActionAck(refusal, action)).toEqual(refusal);
   });
 
   it("rejects invented song semantics and extra action authority", () => {
