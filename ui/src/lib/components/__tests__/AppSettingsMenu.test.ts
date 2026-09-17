@@ -18,6 +18,13 @@ import AppSettingsMenuHarness from './AppSettingsMenuHarness.svelte';
 import { get } from 'svelte/store';
 import { createNavigationSettingsStore, navigationSettingsStore } from '$lib/stores/navigationSettingsStore';
 import { DEFAULT_NAVIGATION_SETTINGS, type NavigationSettingsSnapshot, type NavigationDestinationId } from '@shared/navigationSettings';
+import { presentationSettingsStore } from '$lib/stores/presentationSettingsStore';
+import { DEFAULT_PRESENTATION_SETTINGS } from '@shared/presentationSettings';
+
+beforeEach(() => {
+	presentationSettingsStore.reset();
+	presentationSettingsStore.applySnapshot(DEFAULT_PRESENTATION_SETTINGS);
+});
 
 const CORE_A = {
 	id: 'core-a',
@@ -158,7 +165,7 @@ describe('AppSettingsMenu', () => {
 		const appearance = screen.getByRole('region', { name: 'Appearance' });
 		expect(within(appearance).getByRole('group', { name: 'Color theme' })).toBeInTheDocument();
 		expect(within(appearance).getByRole('group', { name: 'Library density' })).toBeInTheDocument();
-		expect(within(appearance).getByText('This device')).toBeInTheDocument();
+		expect(within(appearance).getByText(/Theme and row size.*this device/)).toBeInTheDocument();
 		expect(screen.queryByRole('heading', { name: 'Density' })).toBeNull();
 		expect(screen.getByRole('button', { name: 'Library navigation' })).toHaveAttribute('aria-expanded', 'false');
 		expect(screen.queryByRole('checkbox')).toBeNull();
@@ -167,18 +174,21 @@ describe('AppSettingsMenu', () => {
 		expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
 	});
 
-	it('switches the Unified color theme', async () => {
+	it('offers all five themes and switches back to Dark', async () => {
 		render(AppSettingsMenuHarness);
 		await openSettings();
 
 		const dark = screen.getByRole('button', { name: 'Dark' });
-		const light = screen.getByRole('button', { name: 'Light' });
 		expect(dark).toHaveAttribute('aria-pressed', 'true');
-		expect(light).toHaveAttribute('aria-pressed', 'false');
-
-		await userEvent.click(light);
-		expect(document.documentElement).toHaveAttribute('data-theme', 'light');
-		expect(light).toHaveAttribute('aria-pressed', 'true');
+		const choices = screen.getByRole('group', { name: 'Color theme' });
+		expect(within(choices).getAllByRole('button')).toHaveLength(5);
+		for (const [id, label] of [['light', 'Light'], ['laser', 'Laser'], ['miami', 'Miami'], ['pop', 'Pop Art'], ['dark', 'Dark']]) {
+			const button = within(choices).getByRole('button', { name: label });
+			await userEvent.click(button);
+			expect(document.documentElement).toHaveAttribute('data-theme', id);
+			expect(button).toHaveAttribute('aria-pressed', 'true');
+			expect(within(choices).getAllByRole('button', { pressed: true })).toHaveLength(1);
+		}
 	});
 
 	it('uses the ruled labels and persists Touch under the stable pi id', async () => {
@@ -396,6 +406,11 @@ describe('songr theme contract', () => {
 
 describe('main Settings — shared Library navigation', () => {
 	const snapshot = (revision: number, pinned: readonly NavigationDestinationId[] = ['artists', 'albums', 'genres']): NavigationSettingsSnapshot => ({ ...DEFAULT_NAVIGATION_SETTINGS, revision, pinned });
+	const navigationRegion = () => within(screen.getByRole('region', { name: 'Library navigation' }));
+	const routeNavigation = (method: 'GET' | 'PUT', respond: (init?: RequestInit) => Response | Promise<Response>) => vi.fn<typeof fetch>(async (url, init) => {
+		if (url !== '/api/settings/navigation' || (init?.method ?? 'GET') !== method) throw new Error(`Unexpected settings request: ${init?.method ?? 'GET'} ${url}`);
+		return respond(init);
+	});
 	const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 	beforeEach(() => { settingsMenuOpen.set(false); });
 
@@ -419,7 +434,8 @@ describe('main Settings — shared Library navigation', () => {
 		const navigationStore = createNavigationSettingsStore(); navigationStore.applySnapshot(snapshot(2));
 		let finish!: (response: Response) => void;
 		const pending = new Promise<Response>(resolve => { finish = resolve; });
-		const fetchFn = vi.fn().mockReturnValueOnce(pending).mockResolvedValueOnce(json(snapshot(3, ['artists', 'albums', 'genres', 'favorites']))) as unknown as typeof fetch;
+		let attempts = 0;
+		const fetchFn = routeNavigation('PUT', () => ++attempts === 1 ? pending : json(snapshot(3, ['artists', 'albums', 'genres', 'favorites'])));
 		render(AppSettingsMenu, { props: { navigationStore, fetchFn } }); openSettingsMenu();
 		await userEvent.click(await screen.findByRole('button', { name: 'Library navigation' }));
 		const favorite = await screen.findByRole('checkbox', { name: 'Bookmarks' });
@@ -427,17 +443,17 @@ describe('main Settings — shared Library navigation', () => {
 		expect(favorite).not.toBeChecked(); expect(favorite).toBeDisabled();
 		expect(screen.getByText('Saving navigation settings…')).toBeInTheDocument();
 		finish(json({ error: 'Disk write failed' }, 503));
-		await screen.findByRole('alert'); expect(favorite).not.toBeChecked(); expect(favorite).toBeEnabled();
-		expect(screen.getByRole('alert')).toHaveTextContent('not saved');
+		await navigationRegion().findByRole('alert'); expect(favorite).not.toBeChecked(); expect(favorite).toBeEnabled();
+		expect(navigationRegion().getByRole('alert')).toHaveTextContent('not saved');
 		await userEvent.click(favorite);
-		await waitFor(() => expect(favorite).toBeChecked()); expect(screen.queryByRole('alert')).toBeNull();
+		await waitFor(() => expect(favorite).toBeChecked()); expect(navigationRegion().queryByRole('alert')).toBeNull();
 	});
 
 	it('keeps save failure and confirmed server choices visible while the editor is collapsed', async () => {
 		const navigationStore = createNavigationSettingsStore();
 		navigationStore.applySnapshot(snapshot(2, ['artists']));
 		let finish!: (response: Response) => void;
-		const fetchFn = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })) as unknown as typeof fetch;
+		const fetchFn = routeNavigation('PUT', () => new Promise<Response>(resolve => { finish = resolve; }));
 		render(AppSettingsMenu, { props: { navigationStore, fetchFn } });
 		openSettingsMenu();
 		const toggle = await screen.findByRole('button', { name: 'Library navigation' });
@@ -448,7 +464,7 @@ describe('main Settings — shared Library navigation', () => {
 		expect(screen.getByRole('status')).toHaveTextContent('Saving navigation settings…');
 		expect(screen.getByTestId('settings-navigation-summary')).toHaveTextContent('Artists');
 		finish(json({ error: 'Disk write failed' }, 503));
-		expect(await screen.findByRole('alert')).toHaveTextContent('not saved');
+		expect(await navigationRegion().findByRole('alert')).toHaveTextContent('not saved');
 		navigationStore.applySnapshot(snapshot(3, ['albums']));
 		await waitFor(() => expect(screen.getByTestId('settings-navigation-summary')).toHaveTextContent('Albums'));
 		expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -457,10 +473,10 @@ describe('main Settings — shared Library navigation', () => {
 	it('uses accessible ordering between eligible neighbors and saves Reset through the server', async () => {
 		const navigationStore = createNavigationSettingsStore(); navigationStore.applySnapshot(snapshot(3));
 		navigationStore.setAvailableDestinations(['artists', 'albums']);
-		const fetchFn = vi.fn(async (_url, init) => {
+		const fetchFn = routeNavigation('PUT', init => {
 			const update = JSON.parse(init?.body as string);
 			return json({ version: 1, revision: update.expectedRevision + 1, order: update.order, pinned: update.pinned });
-		}) as typeof fetch;
+		});
 		render(AppSettingsMenu, { props: { navigationStore, fetchFn } }); openSettingsMenu();
 		await userEvent.click(await screen.findByRole('button', { name: 'Library navigation' }));
 		const up = await screen.findByRole('button', { name: 'Move Albums earlier' });
@@ -476,7 +492,7 @@ describe('main Settings — shared Library navigation', () => {
 
 	it('shows current server choices and a conflict message without claiming the edit saved', async () => {
 		const navigationStore = createNavigationSettingsStore(); navigationStore.applySnapshot(snapshot(3));
-		const fetchFn = vi.fn(async () => json({ error: 'Conflict', current: snapshot(4, ['surprise']) }, 409)) as unknown as typeof fetch;
+		const fetchFn = routeNavigation('PUT', () => json({ error: 'Conflict', current: snapshot(4, ['surprise']) }, 409));
 		render(AppSettingsMenu, { props: { navigationStore, fetchFn } }); openSettingsMenu();
 		await userEvent.click(await screen.findByRole('button', { name: 'Library navigation' }));
 		await userEvent.click(await screen.findByRole('checkbox', { name: 'Bookmarks' }));
@@ -487,12 +503,14 @@ describe('main Settings — shared Library navigation', () => {
 
 	it('loads Settings on opening, exposes read failure, and offers a real retry', async () => {
 		const navigationStore = createNavigationSettingsStore();
-		const fetchFn = vi.fn().mockResolvedValueOnce(json({ error: 'Unavailable' }, 503)).mockResolvedValueOnce(json(snapshot(0))) as unknown as typeof fetch;
+		let attempts = 0;
+		const fetchFn = routeNavigation('GET', () => ++attempts === 1 ? json({ error: 'Unavailable' }, 503) : json(snapshot(0)));
 		render(AppSettingsMenu, { props: { navigationStore, fetchFn } }); openSettingsMenu();
-		await screen.findByRole('alert'); expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+		await screen.findByRole('region', { name: 'Library navigation' });
+		await navigationRegion().findByRole('alert'); expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
 		await userEvent.click(screen.getByRole('button', { name: 'Retry navigation settings' }));
 		await userEvent.click(screen.getByRole('button', { name: 'Library navigation' }));
 		await screen.findByRole('checkbox', { name: 'Artists' });
-		expect(fetchFn).toHaveBeenCalledTimes(2); expect(screen.queryByRole('alert')).toBeNull();
+		expect(fetchFn).toHaveBeenCalledTimes(2); expect(navigationRegion().queryByRole('alert')).toBeNull();
 	});
 });

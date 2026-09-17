@@ -60,6 +60,7 @@ test('a taller hit height at Pi touch density grows the target, not the paint', 
 	await open(page);
 	// What `.play-bar.unified.pi-density` publishes alongside its 14px padding.
 	await page.evaluate(() => window.seekBarFixture.setHitHeight(14));
+	await expect.poll(async () => (await boxOf(page, TRANSPORT)).height).toBe(14);
 
 	const seek = await boxOf(page, TRANSPORT);
 	expect(seek.height).toBe(14);

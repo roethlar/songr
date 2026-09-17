@@ -1,5 +1,7 @@
+import { installLibraryLayout, readyBrowseRows, clickSelectionAction } from '../../../test/libraryLayout';
+import { updateCheckStore } from '$lib/stores/updateCheckStore';
 import { activeLibraryElements, activeLibraryScreen } from '../../../test/activeLibraryQueries';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/svelte';
 import { get, writable } from 'svelte/store';
 import UnifiedLibraryMode from '../UnifiedLibraryMode.svelte';
@@ -13,7 +15,8 @@ import {
 import type { LibraryAlbumController, LibraryAlbumState } from '$lib/library/LibraryAlbumController';
 import { UnifiedSongActionController } from '$lib/library/UnifiedSongActionController';
 import type { UnifiedSearchClient } from '$lib/unifiedSearchClient';
-import type { AlbumActionController } from '$lib/library/AlbumActionController';
+import { FakeSocket } from '../../../test/fixtures/albumActionSocket';
+import { AlbumActionController } from '$lib/library/AlbumActionController';
 import type {
 	UnifiedBrowseActionController,
 	UnifiedBrowseActionSource,
@@ -74,6 +77,13 @@ import {
 	mountMode,
 	type HarnessLiveLibrary
 } from './unifiedLibraryModeHarness';
+
+let layout: ReturnType<typeof installLibraryLayout>;
+beforeEach(() => {
+	layout = installLibraryLayout();
+	updateCheckStore.reset();
+});
+afterEach(() => layout.restore());
 
 function fakeBrowseController() {
 	const rootSnapshot: BrowseHistorySnapshot = {
@@ -153,6 +163,7 @@ function fakeBrowseController() {
 }
 
 function fakeBrowseActionController() {
+	const queueAction: BrowseItem = { itemKey: 'advertised:queue', title: 'Queue', hint: 'action', isLoadable: false, isPlayable: false };
 	const idle = (): UnifiedBrowseActionState => ({
 		phase: 'idle',
 		source: null,
@@ -169,17 +180,21 @@ function fakeBrowseActionController() {
 			source,
 			zoneId: zoneId ?? null,
 			available: { 'play-now': true, 'add-next': true, queue: true },
+			actions: [queueAction],
 			error: null
 		});
 		return true;
 	});
 	const execute = vi.fn(async () => true);
+	const executeItem = vi.fn(async () => true);
 	const reset = vi.fn(() => store.set(idle()));
 	return {
-		controller: { subscribe: store.subscribe, open, execute, reset, executeItem: vi.fn(), openActionList: vi.fn() } as UnifiedBrowseActionController,
+		controller: { subscribe: store.subscribe, open, execute, reset, executeItem, openActionList: vi.fn() } as UnifiedBrowseActionController,
 		store,
 		open,
 		execute,
+		executeItem,
+		queueAction,
 		reset
 	};
 }
@@ -593,6 +608,7 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 		await waitFor(() => expect(browse.restore).toHaveBeenCalledTimes(1));
 		expect(harness.session.claim).toHaveBeenCalledTimes(1);
 		expect(screen.getByTestId('unified-browse-view')).toBeInTheDocument();
+		await readyBrowseRows(1);
 		const libraryLink = screen.getByRole('link', { name: 'Open Library' });
 		expect(libraryLink).toHaveAttribute('href', '/library/browse/Library;;;0');
 		libraryLink.addEventListener('click', (event) => event.preventDefault(), { once: true });
@@ -744,7 +760,7 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 		expect(screen.queryByTestId('unified-scope-browse')).toBeNull();
 	});
 
-	it('retires palette authority before a keyless category result opens explicit actions', async () => {
+	it.each(['execute', 'query change', 'result replacement'])('%s: retains palette authority only while a keyless result owns its inline actions', async change => {
 		const browse = fakeBrowseController();
 		const actions = fakeBrowseActionController();
 		const paletteSearchStore = writable<PaletteSearchState>({
@@ -788,9 +804,7 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 		await fireEvent.click(screen.getByRole('button', { name: /Low/ }));
 
 		await waitFor(() => expect(actions.open).toHaveBeenCalledTimes(1));
-		expect(clearPaletteSearchData.mock.invocationCallOrder[0]).toBeLessThan(
-			actions.open.mock.invocationCallOrder[0]
-		);
+		expect(clearPaletteSearchData).not.toHaveBeenCalled();
 		expect(actions.open).toHaveBeenCalledWith(
 			expect.anything(),
 			expect.objectContaining({
@@ -801,12 +815,22 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 			'zone-1'
 		);
 		expect(actions.execute).not.toHaveBeenCalled();
-		expect(screen.getByTestId('unified-browse-action-sheet')).toBeInTheDocument();
+		expect(screen.getByRole('menu', { name: 'Actions for Low' })).toBeInTheDocument();
+		if (change !== 'execute') {
+			const retiredChoice = screen.getByRole('menuitem', { name: 'Queue' });
+			if (change === 'query change') await fireEvent.input(screen.getByTestId('unified-palette-input'), { target: { value: 'different query' } });
+			else paletteSearchStore.update(state => ({ ...state }));
+			await waitFor(() => expect(screen.queryByRole('menu', { name: 'Actions for Low' })).toBeNull());
+			await fireEvent.click(retiredChoice);
+			expect(actions.executeItem).not.toHaveBeenCalled();
+			expect(actions.open).toHaveBeenCalledTimes(1);
+			return;
+		}
 
-		await fireEvent.click(screen.getByTestId('unified-browse-action-queue'));
-		expect(actions.execute).toHaveBeenCalledWith(
+		await fireEvent.click(screen.getByRole('menuitem', { name: 'Queue' }));
+		expect(actions.executeItem).toHaveBeenCalledWith(
 			expect.anything(),
-			'queue',
+			actions.queueAction,
 			'zone-1'
 		);
 	});
@@ -872,8 +896,8 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 		await waitFor(() => expect(actions.open).toHaveBeenCalled());
 		expect(actions.open.mock.calls[0][2]).toBe('zone-2');
 
-		await fireEvent.click(screen.getByTestId('unified-browse-action-queue'));
-		expect(actions.execute).toHaveBeenCalledWith(expect.anything(), 'queue', 'zone-2');
+		await fireEvent.click(screen.getByRole('menuitem', { name: 'Queue' }));
+		expect(actions.executeItem).toHaveBeenCalledWith(expect.anything(), actions.queueAction, 'zone-2');
 	});
 
 	// The zone picker lives in the layout, outside the sheet's backdrop, and
@@ -945,42 +969,30 @@ describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 	});
 
 	it('keeps Bookmark available after See All enters a keyless Tracks hierarchy', async () => {
-		const actions = fakeBrowseActionController();
-		mountMode({
-			liveLibrary: harnessLibrary(),
-			browseActionController: actions.controller
+		const browse = fakeBrowseController();
+		const item: BrowseItem = { itemKey: 'current:sea-of-love', title: 'Sea of Love', subtitle: 'Cat Power', hint: 'action_list', isLoadable: false, isPlayable: false };
+		const paletteSearchStore = writable<PaletteSearchState>({
+			phase: 'ready', query: 'love', groups: [], error: null,
+			browseGroups: [{ title: 'Tracks', categoryTitle: 'Tracks', resultType: 'track', total: 2,
+				rows: [{ ...item, resultType: 'track', categoryTitle: 'Tracks' }] }]
 		});
-
-		actions.store.set({
-			phase: 'ready',
-			zoneId: 'zone-1',
-			source: {
-				kind: 'browse',
-				snapshot: {
-					context: { hierarchy: 'search', query: 'love' },
-					history: [
-						{
-							hierarchy: 'search',
-							breadcrumb: { title: 'Tracks', searchCategory: true }
-						}
-					],
-					forward: []
-				},
-				item: {
-					title: 'Sea of Love',
-					subtitle: 'Cat Power',
-					hint: 'action_list',
-					isLoadable: false,
-					isPlayable: false
-				}
-			},
-			available: { 'play-now': true, 'add-next': true, queue: true },
-			error: null
+		browse.openSearchCategory.mockImplementation(async (_claim, query, categoryTitle) => {
+			browse.store.set({ phase: 'ready', notice: null, error: null,
+				result: { title: 'Tracks', count: 1, totalCount: 1, level: 1, items: [item], offset: 0 },
+				snapshot: { context: { hierarchy: 'search', query }, history: [{ hierarchy: 'search', breadcrumb: { title: categoryTitle, searchCategory: true } }], forward: [] }
+			});
+			return true;
 		});
-
-		await waitFor(() =>
-			expect(screen.getByRole('button', { name: 'Bookmark' })).toBeEnabled()
-		);
+		const addFavoriteData = vi.fn(async () => {});
+		mountMode({ liveLibrary: harnessLibrary(), browseController: browse.controller, paletteSearchStore, addFavoriteData });
+		await fireEvent.click(screen.getByTestId('unified-find'));
+		await fireEvent.input(screen.getByTestId('unified-palette-input'), { target: { value: 'love' } });
+		await fireEvent.click(screen.getByRole('button', { name: /See all Tracks/ }));
+		await readyBrowseRows(1);
+		expect(get(browse.store).snapshot.history[0].breadcrumb).not.toHaveProperty('itemKey');
+		await fireEvent.click(screen.getByRole('button', { name: /Select Sea of Love/ }));
+		await clickSelectionAction('Bookmark', 'Bookmark selected items');
+		await waitFor(() => expect(addFavoriteData).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({ title: 'Sea of Love' })));
 	});
 
 });
@@ -1093,9 +1105,56 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		resumeCollectionAlbum(harness);
 		await waitFor(() => expect(album.open).toHaveBeenCalledTimes(1));
 		album.store.set(collectionActionState());
-		await screen.findByTestId('unified-album-play');
+		await waitFor(() => expect(screen.getByRole('button', { name: /^Play album / })).toBeEnabled());
 		return { session, album, actions, harness };
 	}
+
+	it('dispatches advertised opaque actions through the real controller from artwork and selected tracks', async () => {
+		setZonesSnapshot([{ zone_id: 'zone-1', display_name: 'Living Room', state: 'paused', is_play_allowed: true, is_pause_allowed: true, is_previous_allowed: true, is_next_allowed: true, is_seek_allowed: true, outputs: [] }]);
+		setSelectedZone('zone-1');
+		const socket = new FakeSocket();
+		let sequence = 0;
+		const controller = new AlbumActionController({ getSocket: () => socket, createRequestId: () => `wire-${++sequence}` });
+		const album = fakeModeAlbumController();
+		const harness = mountMode({ withContext: true, liveLibrary: harnessLibrary(), albumController: album.controller, albumActionController: controller });
+		resumeCollectionAlbum(harness);
+		await waitFor(() => expect(album.open).toHaveBeenCalledOnce());
+		album.store.set(collectionActionState());
+		const play = screen.getByRole('button', { name: /^Play album / });
+		await waitFor(() => expect(play).toBeEnabled());
+		await fireEvent.keyDown(play, { key: 'Enter' });
+		await fireEvent.click(play);
+		await waitFor(() => expect(socket.count('album-action:begin')).toBe(1));
+		function resolve(index: number, semantic: 'play-now' | 'queue') {
+			const begin = socket.emission('album-action:begin', index);
+			const request = begin.value as { requestId: string; generation: number };
+			const operationId = `operation-${index}`;
+			begin.ack({ success: true, data: { requestId: request.requestId, operationId, resolvingDeadlineAt: Date.now() + 5000 } });
+			socket.serverEmit('album-action:resolved', { requestId: request.requestId, generation: request.generation, operationId, choosingDeadlineAt: Date.now() + 5000,
+				actions: [{ actionId: `opaque-${index}`, label: semantic === 'queue' ? 'Queue' : 'Play now', semantic }] });
+		}
+		expect(socket.emission('album-action:begin').value).toEqual({ requestId: 'wire-1', pageId: 'page-1', versionId: 'version-2', zoneId: 'zone-1', tabId: expect.any(String), generation: 1 });
+		resolve(0, 'play-now');
+		await waitFor(() => expect(socket.count('album-action:execute')).toBe(1));
+		expect(socket.emission('album-action:execute').value).toEqual({ actionId: 'opaque-0' });
+		socket.emission('album-action:execute').ack({ success: true, data: { claimed: true, outcome: 'executed' } });
+		await waitFor(() => expect(controller.snapshot().phase).toBe('executed'));
+		await waitFor(() => expect(play).toBeEnabled());
+		await fireEvent.click(screen.getByRole('button', { name: 'Select Exact track' }));
+		await clickSelectionAction('Queue');
+		await waitFor(() => expect(socket.count('album-action:begin')).toBe(2));
+		expect(socket.emission('album-action:begin', 1).value).toEqual({ requestId: 'wire-2', pageId: 'page-1', versionId: 'version-2', zoneId: 'zone-1', tabId: expect.any(String), generation: 1, track: { index: 0, title: 'Exact track' } });
+		expect(socket.count('album-action:execute')).toBe(1);
+		resolve(1, 'queue');
+		await waitFor(() => expect(socket.count('album-action:execute')).toBe(2));
+		expect(socket.emission('album-action:execute', 1).value).toEqual({ actionId: 'opaque-1' });
+		socket.emission('album-action:execute', 1).ack({ success: true, data: { claimed: true, outcome: 'executed' } });
+		await waitFor(() => expect(document.querySelector('.track-selection-controls [role=status]')).toHaveTextContent('Queued: 1 tracks.'));
+		expect(socket.count('album-action:begin')).toBe(2);
+		expect(socket.count('album-action:execute')).toBe(2);
+		harness.unmount();
+		controller.dispose();
+	});
 
 	it('records scope and drill transitions so browser Back stays inside Library', async () => {
 		mountMode({ liveLibrary: harnessLibrary() });
@@ -1220,7 +1279,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		mountMode({ liveLibrary: harnessLibrary(), recentStore: fakeRecentStore() });
 
 		await fireEvent.click(screen.getByTestId('unified-scope-recently-played'));
-		const tile = activeLibraryScreen.getByText('A Recent Track').closest('a,button');
+		const tile = activeLibraryScreen.getByText('A Recent Track').closest('[data-track-select-row]');
 		expect(tile?.querySelector('.ta')).toHaveTextContent('Reference Artist');
 		expect(tile?.querySelector('.ta')).not.toHaveTextContent('Album must not appear');
 	});
@@ -1575,7 +1634,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		// artist for this page to walk up to — and since Slice 4 there is no
 		// second, catalog-shaped album page that could supply one either. The
 		// affordance stays visibly unavailable rather than opening onto a guess.
-		expect(screen.getByTestId('unified-album-artist-link')).toBeDisabled();
+		expect(screen.getByTestId('unified-album-artist').tagName).toBe('DIV');
 	});
 
 	function legacyTrackAlbumFixture() {
@@ -1783,7 +1842,9 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			transitionedAt: 2
 		});
 
-		await fireEvent.click(await screen.findByTestId('unified-album-play'));
+		await waitFor(() => expect(screen.getByRole('button', { name: /^Play album / })).toBeEnabled());
+		await fireEvent.keyDown(screen.getByRole('button', { name: /^Play album / }), { key: 'Enter' });
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
 		expect(actions.begin).toHaveBeenNthCalledWith(1, {
 			pageId: 'page-1',
 			versionId: 'version-2',
@@ -1793,15 +1854,15 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			desiredSemantic: 'play-now'
 		});
 
-		await fireEvent.click(screen.getByTestId('unified-track-action-0'));
+		await fireEvent.click(screen.getByRole('button', { name: 'Select Exact track' }));
+		await clickSelectionAction('Play');
 		expect(actions.begin).toHaveBeenNthCalledWith(2, {
 			pageId: 'page-1',
 			versionId: 'version-2',
 			zoneId: 'zone-1',
 			tabId: expect.any(String),
 			generation: 1,
-			track: { index: 0, title: 'Exact track' },
-			desiredSemantic: 'play-now'
+			track: { index: 0, title: 'Exact track' }
 		});
 	});
 
@@ -1814,7 +1875,8 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		// retired while the page remained visible. The action must ask the claim
 		// now and use its replacement, not a generation captured by page open.
 		session.client.invalidate(activeClaim, { handleId: 'h-1', generation: 1 });
-		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await fireEvent.keyDown(screen.getByRole('button', { name: /^Play album / }), { key: 'Enter' });
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
 
 		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
 		expect(actions.begin).toHaveBeenCalledWith(
@@ -1826,7 +1888,8 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		const { session, actions } = await mountCollectionActionPage();
 		const activeClaim = session.claim.mock.results[0].value as ClassicBrowseSessionClaim;
 
-		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await fireEvent.keyDown(screen.getByRole('button', { name: /^Play album / }), { key: 'Enter' });
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
 		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
 		actions.publish({
 			phase: 'failed',
@@ -1851,7 +1914,8 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 	it('invalidates and reissues once when action resolution loses its session', async () => {
 		const { session, actions } = await mountCollectionActionPage();
 
-		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await fireEvent.keyDown(screen.getByRole('button', { name: /^Play album / }), { key: 'Enter' });
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
 		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
 		actions.publish({
 			phase: 'choosing',
@@ -1859,7 +1923,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			operationId: 'operation-1',
 			actions: [{ actionId: 'choice-1', label: 'Play now', semantic: 'play-now' }]
 		});
-		await screen.findByTestId('unified-album-action-choices');
+		await waitFor(() => expect(screen.getByRole('button', { name: /^Play album / })).toBeDisabled());
 		actions.publish({
 			phase: 'failed',
 			requestId: 'action-1',
@@ -1880,7 +1944,8 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 	it('offers manual Retry after the second refusal and gives it a fresh one-reissue budget', async () => {
 		const { session, actions } = await mountCollectionActionPage();
 
-		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await fireEvent.keyDown(screen.getByRole('button', { name: /^Play album / }), { key: 'Enter' });
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
 		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
 		actions.publish({
 			phase: 'failed',
@@ -1898,7 +1963,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			executionAttempted: false
 		});
 
-		const retry = await screen.findByTestId('unified-album-action-retry');
+		const retry = await screen.findByRole('button', { name: 'Retry action' });
 		expect(retry).toHaveTextContent('Retry action');
 		// The second refused handle is forgotten without eagerly acquiring a
 		// third one. Acquisition remains tied to the explicit Retry gesture.
@@ -1951,7 +2016,8 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		);
 		const { actions } = await mountCollectionActionPage(session);
 
-		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await fireEvent.keyDown(screen.getByRole('button', { name: /^Play album / }), { key: 'Enter' });
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
 		expect(actions.begin).not.toHaveBeenCalled();
 		await fireEvent.click(screen.getByTestId('unified-album-back'));
 		actionReady.resolve({ handleId: 'h-2', generation: 2 });
@@ -1963,7 +2029,8 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 	it('ignores a late failure from the retired request after its replacement begins', async () => {
 		const { session, actions } = await mountCollectionActionPage();
 
-		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await fireEvent.keyDown(screen.getByRole('button', { name: /^Play album / }), { key: 'Enter' });
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
 		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
 		actions.publish({
 			phase: 'failed',
@@ -1986,13 +2053,14 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(actions.begin).toHaveBeenCalledTimes(2);
 		expect(session.invalidate).toHaveBeenCalledTimes(1);
-		expect(screen.queryByTestId('unified-album-action-retry')).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Retry action' })).toBeNull();
 	});
 
 	it('never reissues or offers Retry after execution may have started', async () => {
 		const { session, actions } = await mountCollectionActionPage();
 
-		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await fireEvent.keyDown(screen.getByRole('button', { name: /^Play album / }), { key: 'Enter' });
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
 		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
 		actions.publish({
 			phase: 'failed',
@@ -2004,13 +2072,14 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(actions.begin).toHaveBeenCalledTimes(1);
 		expect(session.invalidate).not.toHaveBeenCalled();
-		expect(screen.queryByTestId('unified-album-action-retry')).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Retry action' })).toBeNull();
 	});
 
 	it('never reissues or offers Retry for an outcome-unknown terminal state', async () => {
 		const { session, actions } = await mountCollectionActionPage();
 
-		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await fireEvent.keyDown(screen.getByRole('button', { name: /^Play album / }), { key: 'Enter' });
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
 		await waitFor(() => expect(actions.begin).toHaveBeenCalledTimes(1));
 		actions.publish({
 			phase: 'outcome-unknown',
@@ -2024,7 +2093,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(actions.begin).toHaveBeenCalledTimes(1);
 		expect(session.invalidate).not.toHaveBeenCalled();
-		expect(screen.queryByTestId('unified-album-action-retry')).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Retry action' })).toBeNull();
 	});
 
 	it('plays an album on the selected zone without asking which one (issue #12)', async () => {
@@ -2083,7 +2152,9 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			transitionedAt: 2
 		} as unknown as LibraryAlbumState);
 
-		await fireEvent.click(await screen.findByTestId('unified-album-play'));
+		await waitFor(() => expect(screen.getByRole('button', { name: /^Play album / })).toBeEnabled());
+		await fireEvent.keyDown(screen.getByRole('button', { name: /^Play album / }), { key: 'Enter' });
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
 		expect(actions.begin).toHaveBeenNthCalledWith(1, {
 			pageId: 'page-1',
 			versionId: 'version-2',
@@ -2558,7 +2629,8 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 		expect(await screen.findByTestId('unified-live-album')).toHaveAttribute('href');
 		expect(screen.getByTestId('unified-live-artist-0')).toHaveAttribute('href');
 		expect(screen.getByTestId('unified-live-composition-1')).toHaveAttribute('href');
-		expect(screen.getByTestId('unified-live-recording-2')).toHaveAttribute('href');
+		expect(screen.getByTestId('unified-live-recording-2')).not.toHaveAttribute('href');
+		expect(within(screen.getByTestId('unified-live-recording-2')).getByRole('button', { name: 'Select Opening — CBS' })).toBeInTheDocument();
 		expect(screen.getByTestId('unified-live-list-3')).toHaveAttribute('href');
 		expect(screen.getByTestId('unified-live-section-4')).toHaveAttribute('href');
 		const fact = screen.getByTestId('unified-live-fact-5');
@@ -2566,17 +2638,17 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 		expect(fact).not.toHaveAttribute('role');
 		expect(screen.getByTestId('unified-live-collection-sort')).toBeInTheDocument();
 
-		const actionButton = screen.getByTestId('unified-live-actions');
+		const actionButton = screen.getByRole('button', { name: 'More actions for Play Composer' });
 		await waitFor(() => expect(actionButton).toBeEnabled());
 		await fireEvent.click(actionButton);
 		expect(begin).toHaveBeenCalledWith(
 			expect.objectContaining({
-				ref: { generation: 'gen-1', token: 'composer:glass' },
+				ref: { generation: 'gen-1', token: 'action:composer' },
 				zoneId: 'zone-1'
 			})
 		);
-		const choices = await screen.findByTestId('unified-live-action-choices');
-		await fireEvent.click(within(choices).getByRole('button', { name: 'Cancel' }));
+		await screen.findByRole('menu', { name: 'Actions for Play Composer' });
+		await fireEvent.keyDown(window, { key: 'Escape' });
 		expect(cancel).toHaveBeenCalledTimes(1);
 	});
 
@@ -2829,7 +2901,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 			await waitFor(() => expect(harness.openLiveRef.mock.calls.at(-1)?.[1]).toEqual({
 				generation: 'gen-2', token: 'artist:Nornir Trio'
 			}));
-			expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('Nornir Trio');
+			await waitFor(() => expect(screen.getByTestId('unified-artist-name')).toHaveTextContent('Nornir Trio'));
 			expect(__getNavigationLog().at(-1)).toEqual(address);
 			expect(fetchFn).toHaveBeenCalledTimes(2);
 			expect(fetchFn.mock.calls[1][0]).toBe('/api/library/roots');
@@ -3050,7 +3122,9 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 			}
 		}) as unknown as LibraryAlbumState);
 
-		await fireEvent.click(await screen.findByTestId('unified-album-play'));
+		await waitFor(() => expect(screen.getByRole('button', { name: /^Play album / })).toBeEnabled());
+		await fireEvent.keyDown(screen.getByRole('button', { name: /^Play album / }), { key: 'Enter' });
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
 		expect(actions.begin).toHaveBeenNthCalledWith(1, {
 			ref: { generation: 'gen-1', token: `play:${albumRef.token}:0` },
 			zoneId: 'zone-2',
@@ -3059,15 +3133,15 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 			desiredSemantic: 'play-now'
 		});
 
-		await fireEvent.click(screen.getByTestId('unified-track-action-1'));
+		await fireEvent.click(screen.getByRole('button', { name: 'Select Gloria' }));
+		await clickSelectionAction('Play');
 		// The SECOND track's own reference, and no track selector beside it: the
 		// reference names the row, so a selector could only disagree with it.
 		expect(actions.begin).toHaveBeenNthCalledWith(2, {
 			ref: { generation: 'gen-1', token: `track:${albumRef.token}:1` },
 			zoneId: 'zone-2',
 			tabId: expect.any(String),
-			generation: 1,
-			desiredSemantic: 'play-now'
+			generation: 1
 		});
 	});
 });
@@ -3257,7 +3331,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		browserBack.mockRestore();
 	});
 
-	it('opens a song panel and returns to the same query and song row', async () => {
+	it('selects and deselects a song while preserving its query and result', async () => {
 		const paletteSearchStore = writable<PaletteSearchState>({
 			phase: 'ready',
 			query: 'dear theodosia',
@@ -3288,17 +3362,15 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		const songRow = activeLibraryScreen.getByText('Dear Theodosia').closest('a,button')!;
 		await fireEvent.click(songRow);
 
-		expect(screen.queryByTestId('unified-palette')).toBeNull();
-		expect(screen.getByTestId('unified-track-page')).toBeInTheDocument();
-
-		await fireEvent.click(screen.getByTestId('unified-song-back'));
-
 		expect(screen.getByTestId('unified-palette')).toBeInTheDocument();
 		expect(screen.getByTestId('unified-palette-input')).toHaveValue('dear theodosia');
-		expect(activeLibraryScreen.getByText('Dear Theodosia').closest('a,button')).toHaveClass('sel');
+		expect(songRow).toHaveAttribute('aria-pressed', 'true');
+		await fireEvent.click(songRow);
+		expect(songRow).toHaveAttribute('aria-pressed', 'false');
+		expect(screen.getByTestId('unified-palette-input')).toHaveValue('dear theodosia');
 	});
 
-	it('hides the library pane under the search-track page (ri5-1)', async () => {
+	it('keeps selected search results in the modal search surface', async () => {
 		const paletteSearchStore = writable<PaletteSearchState>({
 			phase: 'ready',
 			query: 'dear theodosia',
@@ -3328,12 +3400,12 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 		});
 		await fireEvent.click(activeLibraryScreen.getByText('Dear Theodosia').closest('a,button')!);
 
-		// The track page owns the surface: the library body is mounted but
-		// hidden, and Back to the results restores it.
-		expect(screen.getByTestId('unified-track-page')).toBeInTheDocument();
-		expect(screen.getByTestId('unified-pane').closest('.body')).toHaveAttribute('hidden');
-		await fireEvent.click(screen.getByTestId('unified-song-back'));
-		expect(screen.getByTestId('unified-pane').closest('.body')).not.toHaveAttribute('hidden');
+		const search = screen.getByRole('dialog', { name: 'Library search' });
+		expect(search).toHaveAttribute('aria-modal', 'true');
+		expect(within(search).getByRole('button', { name: /Dear Theodosia/ })).toHaveAttribute('aria-pressed', 'true');
+		await fireEvent.keyDown(screen.getByTestId('unified-palette-input'), { key: 'Escape' });
+		expect(screen.queryByRole('dialog', { name: 'Library search' })).toBeNull();
+		expect(screen.getByTestId('unified-pane')).toBeVisible();
 	});
 
 	it('wires a named song action to the retained result and chosen zone', async () => {
@@ -3381,19 +3453,20 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 			target: { value: 'dear theodosia' }
 		});
 		await fireEvent.click(activeLibraryScreen.getByText('Dear Theodosia').closest('a,button')!);
-		await fireEvent.click(screen.getByTestId('unified-song-add-next'));
+		await clickSelectionAction('Add next');
 
 		await waitFor(() =>
 			expect(action).toHaveBeenCalledWith(
 				expect.objectContaining({ owner: 'unified-mode' }),
 				'song-dear-theodosia',
 				'zone-1',
-				'add-next'
+				'add-next',
+				expect.any(Function)
 			)
 		);
 	});
 
-	it('does not apply a settled old-song action to a newly selected song', async () => {
+	it('does not apply a settled old-song action to a reopened search', async () => {
 		setZonesSnapshot([
 			{
 				zone_id: 'zone-1',
@@ -3449,30 +3522,36 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 			target: { value: 'songs' }
 		});
 		await fireEvent.click(activeLibraryScreen.getByText('First Song').closest('a,button')!);
-		await fireEvent.click(screen.getByTestId('unified-song-play-now'));
+		await clickSelectionAction('Play');
 		await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
-		await fireEvent.click(screen.getByRole('button', { name: 'Close search' }));
+		await fireEvent.click(screen.getByTestId('unified-palette'));
+		expect(screen.queryByRole('dialog', { name: 'Library search' })).toBeNull();
 
 		await fireEvent.click(screen.getByTestId('unified-find'));
 		await fireEvent.input(screen.getByTestId('unified-palette-input'), {
 			target: { value: 'songs' }
 		});
 		await fireEvent.click(activeLibraryScreen.getByText('Second Song').closest('a,button')!);
-		expect(screen.getByTestId('unified-song-action-busy')).toBeInTheDocument();
+		expect(action).toHaveBeenCalledTimes(1);
 
+		// An outstanding dispatch keeps selection locked until its outcome settles.
+		expect(screen.getByRole('button', { name: 'Select Second Song' })).toHaveAttribute('aria-pressed', 'false');
 		firstAction.resolve({ authorityRetired: true });
-		await waitFor(() =>
-			expect(screen.queryByTestId('unified-song-action-busy')).not.toBeInTheDocument()
-		);
-		expect(screen.getByTestId('unified-song-play-now')).toBeEnabled();
+		await waitFor(() => expect(songActionController.snapshot().phase).toBe('executed'));
+		await waitFor(() => expect(screen.getByTestId('unified-palette').querySelector('.selection-tools button[aria-label="Select all"]')).toBeEnabled());
+		expect(screen.getByTestId('unified-palette-input')).toHaveValue('songs');
+		await fireEvent.click(screen.getByRole('button', { name: 'Select Second Song' }));
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled());
+		expect(activeLibraryScreen.getByText('Second Song').closest('button')).toHaveAttribute('aria-pressed', 'true');
 
-		await fireEvent.click(screen.getByTestId('unified-song-queue'));
+		await clickSelectionAction('Queue');
 		await waitFor(() =>
 			expect(action).toHaveBeenLastCalledWith(
 				expect.objectContaining({ owner: 'unified-mode' }),
 				'song-second',
 				'zone-1',
-				'queue'
+				'queue',
+				expect.any(Function)
 			)
 		);
 	});
@@ -3802,7 +3881,12 @@ describe('UnifiedLibraryMode — brand wordmark', () => {
 
 describe('UnifiedLibraryMode — About panel', () => {
 	it('is closed until opened, then reports interface and Core version provenance', async () => {
-		mountMode({ liveLibrary: harnessLibrary() });
+		const fetchFn = vi.fn<typeof fetch>(async (url, init) => {
+			expect(url).toBe('/api/updates');
+			expect(init?.method).toBe('GET');
+			return new Response(JSON.stringify({ currentVersion: '9.8.7' }));
+		});
+		mountMode({ liveLibrary: harnessLibrary(), fetchFn });
 
 		expect(screen.queryByTestId('unified-about-panel')).toBeNull();
 		const open = screen.getByTestId('unified-about-open');
@@ -3818,9 +3902,7 @@ describe('UnifiedLibraryMode — About panel', () => {
 		// The product version, not the build revision. Before this row existed
 		// the panel named only an opaque git short SHA, so the release the user
 		// was running was nowhere on the surface.
-		expect(screen.getByTestId('unified-about-app-version').textContent?.trim()).toMatch(
-			/^\d+\.\d+\.\d+/u
-		);
+		await waitFor(() => expect(screen.getByTestId('unified-about-app-version')).toHaveTextContent('9.8.7'));
 		expect(screen.getByTestId('unified-about-ui-revision').textContent).toContain('rev');
 		expect(screen.getByTestId('unified-about-core-name')).toBeTruthy();
 		expect(screen.getByTestId('unified-about-core-version')).toBeTruthy();

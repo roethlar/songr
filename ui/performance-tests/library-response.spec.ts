@@ -1,20 +1,25 @@
 import { expect, test } from '@playwright/test';
 
 for (const sample of [
- { albums: 3914, singleLetter: false, albumsSort: 'az' },
- { albums: 40000, singleLetter: false, albumsSort: 'az' },
- { albums: 40000, singleLetter: true, albumsSort: 'az' },
- { albums: 40000, singleLetter: false, albumsSort: 'shuffle' }
+ { albums: 3914, singleLetter: false, albumsSort: 'az', albumGrouping: undefined },
+ { albums: 40000, singleLetter: false, albumsSort: 'az', albumGrouping: undefined },
+ { albums: 40000, singleLetter: true, albumsSort: 'az', albumGrouping: undefined },
+ { albums: 40000, singleLetter: false, albumsSort: 'shuffle', albumGrouping: undefined },
+ { albums: 3914, singleLetter: false, albumsSort: 'az', albumGrouping: 'artist' },
+ { albums: 40000, singleLetter: false, albumsSort: 'az', albumGrouping: 'artist' },
+ { albums: 40000, singleLetter: false, albumsSort: 'az', albumGrouping: 'artist', theme: 'laser' }
 ] as const) {
- test(`${sample.albums} albums, ${sample.singleLetter ? 'single letter' : sample.albumsSort}: chips and new artwork stay responsive`, async ({ page }, info) => {
+ test(`${sample.albums} albums, ${sample.albumGrouping ?? (sample.singleLetter ? 'single letter' : sample.albumsSort)}${'theme' in sample ? `, ${sample.theme}` : ''}: chips and new artwork stay responsive`, async ({ page }, info) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(String(error)));
   await page.addInitScript(sample => {
+   if ('theme' in sample) localStorage.setItem('roon-controller-theme', sample.theme);
    window.libraryScrollFixtureSize = { artists: 1679, albums: sample.albums };
    window.libraryScrollFixturePresentation = { artwork: true, longTitles: true, ...sample };
   }, sample);
   await page.goto('/fixtures/library-scroll.html');
   await expect(page.locator('html')).toHaveAttribute('data-fixture-ready', 'true');
+  if ('theme' in sample) await expect(page.locator('html')).toHaveAttribute('data-theme', sample.theme);
   await expect(page.getByTestId('unified-row').first()).toBeVisible();
   const timing = [];
   for (const scope of ['albums', 'artists', 'genres', 'albums', 'surprise', 'albums']) {
@@ -51,6 +56,12 @@ for (const sample of [
   // Inspect the destination after timing: querying all offscreen rectangles
   // during measurement would itself force the complete list to paint.
   const last = page.locator('[data-scope-panel="albums"] .tile').last();
+  if (sample.albumGrouping === 'artist') {
+   await expect(page.getByTestId('album-artist-section')).toHaveCount(1679);
+   expect(await page.getByTestId('album-artist-section').evaluateAll(groups =>
+    groups.every(group => group.querySelectorAll('.tile').length <= 24)
+   )).toBe(true);
+  }
   await expect(last).toBeInViewport();
   await expect.poll(() => last.locator('img').evaluate(img => (img as HTMLImageElement).naturalWidth)).toBe(256);
   const sorted = scroll.frames.slice(1).sort((a,b) => a-b);
@@ -62,7 +73,10 @@ for (const sample of [
   expect(scroll.positions.at(-1)).toBe(17850);
   expect(scroll.finalHeight).toBe(scroll.initialHeight);
   expect(scroll.atEnd).toBe(true);
-  expect(scroll.decoded).toBeGreaterThan(300);
+  // The 3,914-album artist sample has only two or three tiles per section
+  // (versus six per flat row). All other samples fill the available columns.
+  if (sample.albumGrouping === 'artist' && sample.albums === 3914) expect(scroll.decoded).toBeGreaterThan(100);
+  else expect(scroll.decoded).toBeGreaterThan(300);
   expect.soft(Math.max(...timing.map(t => t.ms)), 'Every chip, including the first, must present within 50 ms').toBeLessThanOrEqual(50);
   expect.soft(measurements.scrollP95, 'Continuous scrolling must stay within two 60 Hz frames').toBeLessThanOrEqual(33.4);
   expect.soft(measurements.scrollMax, 'Scrolling must not introduce a long frame').toBeLessThanOrEqual(50);

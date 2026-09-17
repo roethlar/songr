@@ -62,3 +62,4 @@ docs/fixtures/timeline-canvas/**/*.tmp-*
 # Machine-local assistant state; never repo content.
 .headroom/
 .claude/settings.local.json.lean-ctx.bak
+.headroom_wrap_settings.lock

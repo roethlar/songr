@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { installLibraryLayout, clickSelectionAction } from '../../../test/libraryLayout';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import UnifiedBookmarksView from '../UnifiedBookmarksView.svelte';
 
@@ -12,7 +13,10 @@ const favorite = {
 };
 
 describe('UnifiedBookmarksView', () => {
-	it('lists, activates, and removes Bookmarks in Unified row language', async () => {
+	let layout: ReturnType<typeof installLibraryLayout>;
+	afterEach(() => layout?.restore());
+	it.each([640, 100])('lists, activates, and removes Bookmarks at toolbar width %i', async width => {
+		layout = installLibraryLayout({ toolbarWidth: width });
 		const onActivate = vi.fn();
 		const onRemoveBatch = vi.fn(async () => {});
 		render(UnifiedBookmarksView, {
@@ -26,9 +30,14 @@ describe('UnifiedBookmarksView', () => {
 		expect(screen.getByTestId('unified-favorite-row')).toHaveTextContent('Heroes');
 		expect(screen.getByTestId('unified-favorite-row')).toHaveTextContent('David Bowie');
 		await fireEvent.click(screen.getByRole('button', { name: 'Select Heroes' }));
-		await fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+		if (width === 640) await waitFor(() => expect(screen.getByRole('button', { name: 'Open' })).toBeEnabled());
+		else {
+			await waitFor(() => expect(screen.queryByRole('button', { name: 'Open' })).toBeNull());
+			expect(screen.getByRole('button', { name: 'More actions' })).toBeEnabled();
+		}
+		await clickSelectionAction('Open');
 		expect(onActivate).toHaveBeenCalledWith(favorite);
-		await fireEvent.click(screen.getByRole('button', { name: 'Remove selected' }));
+		await clickSelectionAction('Remove selected');
 		expect(onRemoveBatch).toHaveBeenCalledWith([favorite]);
 	});
 

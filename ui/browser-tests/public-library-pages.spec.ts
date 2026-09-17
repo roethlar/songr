@@ -157,7 +157,7 @@ for (const display of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'p
 		expect(await page.evaluate(() => window.libraryScrollFixture.publicActions)).toEqual([]);
 		const readsBefore = await page.evaluate(() => window.libraryScrollFixture.publicReads.length);
 		await controls.getByRole('button', { name: 'Queue', exact: true }).click();
-		await expect(page.getByTestId('unified-track-status')).toHaveText('Queued: 1 tracks.');
+		await expect(page.locator('[data-testid=unified-browse-view] .track-selection-controls [role=status]')).toHaveText('Queued: 1 tracks.');
 		const probes = await page.evaluate(() => window.libraryScrollFixture.publicActionProbes);
 		expect(probes).toHaveLength(1);
 		expect(probes[0].rowIndex).toBe(222);
@@ -166,10 +166,10 @@ for (const display of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'p
 		]);
 		expect(await page.evaluate(() => window.libraryScrollFixture.publicReads.length)).toBe(readsBefore);
 		await controls.getByRole('button', { name: 'More actions', exact: true }).click();
-		await page.getByRole('menu', { name: 'Selected track actions' }).getByRole('menuitem', { name: 'Add Next', exact: true }).click();
-		await expect(page.getByTestId('unified-track-status')).toHaveText('Add Next: I Swear');
-		await controls.getByRole('button', { name: 'Bookmark selected items', exact: true }).click();
-		await expect(page.getByTestId('unified-track-status')).toHaveText('Bookmarked.');
+		await page.getByRole('menu', { name: 'More actions for selection' }).getByRole('menuitem', { name: 'Add Next', exact: true }).click();
+		await expect(page.locator('[data-testid=unified-browse-view] .track-selection-controls [role=status]')).toHaveText('Add Next: I Swear');
+		if(display.name === 'phone') { await controls.getByRole('button',{name:'More actions',exact:true}).click(); await page.getByRole('menuitem',{name:'Bookmark',exact:true}).click(); } else await controls.getByRole('button', { name: 'Bookmark selected items', exact: true }).click();
+		await expect(page.locator('[data-testid=unified-browse-view] .track-selection-controls [role=status]')).toHaveText('Bookmarked.');
 		expect(await page.evaluate(() => window.libraryScrollFixture.publicFavoriteWrites)).toEqual([
 			{ type: 'track', title: 'I Swear', artist: 'All-4-One' }
 		]);
@@ -178,7 +178,7 @@ for (const display of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'p
 		await testInfo.attach(`tracks-selection-${display.name}`, { path: screenshot, contentType: 'image/png' });
 		await page.evaluate(() => window.libraryScrollFixture.expirePublicActionAuthority());
 		await controls.getByRole('button', { name: 'Play', exact: true }).click();
-		await expect(page.getByTestId('unified-track-status')).toContainText('expired');
+		await expect(page.locator('[data-testid=unified-browse-view] .track-selection-controls [role=status]')).toContainText('expired');
 		await expect(page.getByTestId('unified-browse-action-sheet')).toHaveCount(0);
 		expect(await page.evaluate(() => window.libraryScrollFixture.publicActions)).toEqual([
 			{ rowIndex: 222, action: 'Queue', generation: probes[0].generation },
@@ -189,7 +189,7 @@ for (const display of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'p
 	});
 }
 
-test('Recently played opens a title search and current track page without playback', async ({ page }) => {
+test('Recently played finds and selects a current result without playback', async ({ page }) => {
 	await page.setViewportSize({ width: 1440, height: 900 });
 	await page.goto('/fixtures/library-scroll.html?public=1&nav=default&recent=1');
 	await expect(page.getByTestId('unified-row').first()).toBeVisible();
@@ -198,12 +198,13 @@ test('Recently played opens a title search and current track page without playba
 	const recent = page.locator('[data-scope-panel="recently-played"]');
 	await expect(recent.getByText(/Only what this controller watched|Roon does not share/)).toHaveCount(0);
 	await recent.getByRole('button', { name: /I Swear/ }).click();
+	await page.getByRole('button', { name: 'Find in Library', exact: true }).click();
 	await expect(page.getByTestId('unified-palette-input')).toHaveValue('I Swear');
 	await expect(page.getByTestId('unified-palette-row').filter({ hasText: 'All-4-One' })).toBeVisible();
 	expect(await page.evaluate(() => window.libraryScrollFixture.publicSearchQueries)).toEqual(['I Swear']);
 	expect(await page.evaluate(() => window.libraryScrollFixture.publicActions)).toEqual([]);
 	await page.getByTestId('unified-palette-row').filter({ hasText: 'All-4-One' }).click();
-	await expect(page.getByTestId('unified-track-page')).toBeVisible();
-	await expect(page.getByTestId('unified-song-title')).toHaveText('I Swear');
+	await expect(page.getByRole('dialog', { name: 'Library search' }).getByRole('button', { name: 'Select I Swear' })).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.getByTestId('unified-palette-input')).toHaveValue('I Swear');
 	expect(await page.evaluate(() => window.libraryScrollFixture.publicActions)).toEqual([]);
 });

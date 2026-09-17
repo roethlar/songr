@@ -12,7 +12,7 @@
 	import { closeSettingsMenu, settingsMenuOpen } from '$lib/stores/settingsMenuStore';
 	import { navigationSettingsStore, type NavigationSettingsStore } from '$lib/stores/navigationSettingsStore';
 	import { getNavigationDestinationLabel, type NavigationDestinationId } from '@shared/navigationSettings';
-	import { setTheme, themeStore, type ThemeMode } from '$lib/stores/themeStore';
+	import { setTheme, themeStore, THEME_OPTIONS, type ThemeMode } from '$lib/stores/themeStore';
 	import { presentationSettingsStore, osReducedMotionStore, type PresentationSettingsStore } from '$lib/stores/presentationSettingsStore';
 	import type { ActionDisplay } from '@shared/presentationSettings';
 	import {
@@ -223,14 +223,14 @@
 						<div class="settings-field">
 							<h4>Theme</h4>
 							<div class="appearance-buttons" role="group" aria-label="Color theme">
-								{#each ['dark', 'light'] as option (option)}
+								{#each THEME_OPTIONS as option (option.id)}
 									<button
 										type="button"
 										class="appearance-button"
-										class:selected={$themeStore === option}
-										aria-pressed={$themeStore === option}
-										onclick={() => selectTheme(option as ThemeMode)}
-									>{option === 'dark' ? 'Dark' : 'Light'}</button>
+										class:selected={$themeStore === option.id}
+										aria-pressed={$themeStore === option.id}
+										onclick={() => selectTheme(option.id)}
+									>{option.label}</button>
 								{/each}
 							</div>
 						</div>

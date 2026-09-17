@@ -115,9 +115,9 @@ test('replacement generation reacquires previews and genre Actions can be cancel
 	const { replacement } = await page.evaluate(() => window.libraryScrollFixture.replaceRetiredLibraryGeneration());
 	await expect.poll(() => page.evaluate(() => window.libraryScrollFixture.livePreviewReads.at(-1)?.ref.generation)).toBe(replacement);
 	await expect(page.getByTestId('genre-preview-album').first()).toBeVisible();
-	await page.getByTestId('unified-live-actions').click();
-	await expect(page.getByTestId('unified-live-action-choices')).toBeVisible();
-	await page.getByTestId('unified-live-action-choices').getByRole('button', { name: 'Cancel' }).click();
+	await page.getByRole('button', { name: /^More actions for Play / }).click();
+	await expect(page.getByRole('menu', { name: /^Actions for Play / })).toBeVisible();
+	await page.keyboard.press('Escape');
 	expect(await page.evaluate(() => window.libraryScrollFixture.actionExecutions)).toBe(0);
 	await expect(page.getByTestId('genre-overview')).toBeVisible();
 });

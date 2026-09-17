@@ -128,9 +128,13 @@ function observe(state: ImageState): () => void {
 				if (!images.has(image.node)) continue;
 				// The tile and slot already exist and have their full prepared
 				// geometry. Only artwork observation is partitioned here.
-				const slot = image.node.closest<HTMLElement>('.tile')?.assignedSlot;
-				const box = slot?.parentElement;
-				const prepared = box?.hasAttribute('data-prepared-library-chunk') ? box : null;
+				let prepared: HTMLElement | null = null;
+				// Small artist grids have no tile slots; their enclosing artist
+				// section belongs to the outer prepared grid instead.
+				for (let owner = image.node.closest<HTMLElement>('.tile'); owner && owner !== root; owner = owner.parentElement) {
+					const box = owner.assignedSlot?.parentElement;
+					if (box?.hasAttribute('data-prepared-library-chunk')) { prepared = box; break; }
+				}
 				if (membership.has(image) && (membership.get(image)?.box ?? null) === prepared) continue;
 				unwatch(image);
 				detachGroup(image);

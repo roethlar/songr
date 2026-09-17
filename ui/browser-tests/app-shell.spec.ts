@@ -26,23 +26,25 @@ async function expectLibraryShell(page: Page) {
   await expect(page.locator('[data-workspace-presentation]')).toHaveAttribute('data-workspace-presentation', 'full-bleed');
   const footer = page.getByRole('contentinfo', { name: 'Playback controls' });
   await expect(footer).toBeVisible();
-  const geometry = await shellGeometry(page);
-  expect(geometry.padding).toEqual(['0px', '0px', '0px', '0px']);
-  expect(geometry.workspace.x).toBe(0);
-  expect(geometry.workspace.width).toBe(geometry.viewport.width);
-  expect(geometry.child.x).toBe(0);
-  expect(geometry.child.width).toBe(geometry.viewport.width);
-  expect(geometry.child.y).toBe(geometry.workspace.y);
-  expect(geometry.footer!.bottom).toBe(geometry.viewport.height);
-  expect(geometry.workspace.bottom).toBe(geometry.footer!.top);
-  expect(geometry.documentWidth).toBe(geometry.viewport.width);
-  for (const control of geometry.controls) {
-    expect(control.rect.left, control.label).toBeGreaterThanOrEqual(0);
-    expect(control.rect.right, control.label).toBeLessThanOrEqual(geometry.viewport.width);
-    expect(control.rect.top, control.label).toBeGreaterThanOrEqual(geometry.footer!.top);
-    expect(control.rect.bottom, control.label).toBeLessThanOrEqual(geometry.viewport.height);
-  }
-  if (geometry.viewport.width >= 800) expect(geometry.footer!.height).toBe(59);
+  await expect(async () => {
+    const geometry = await shellGeometry(page);
+    expect(geometry.padding).toEqual(['0px', '0px', '0px', '0px']);
+    expect(geometry.workspace.x).toBe(0);
+    expect(geometry.workspace.width).toBe(geometry.viewport.width);
+    expect(geometry.child.x).toBe(0);
+    expect(geometry.child.width).toBe(geometry.viewport.width);
+    expect(geometry.child.y).toBe(geometry.workspace.y);
+    expect(geometry.footer!.bottom).toBe(geometry.viewport.height);
+    expect(geometry.workspace.bottom).toBe(geometry.footer!.top);
+    expect(geometry.documentWidth).toBe(geometry.viewport.width);
+    for (const control of geometry.controls) {
+      expect(control.rect.left, control.label).toBeGreaterThanOrEqual(0);
+      expect(control.rect.right, control.label).toBeLessThanOrEqual(geometry.viewport.width);
+      expect(control.rect.top, control.label).toBeGreaterThanOrEqual(geometry.footer!.top);
+      expect(control.rect.bottom, control.label).toBeLessThanOrEqual(geometry.viewport.height);
+    }
+    if (geometry.viewport.width >= 800) expect(geometry.footer!.height).toBe(59);
+  }).toPass({ timeout: 5000 });
 }
 
 test('full outer layout keeps deep Library routes edge-to-window with playback across navigation and reload', async ({ page }, testInfo) => {

@@ -1,6 +1,6 @@
 {
   "name": "roon-controller-desktop",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "private": true,
   "description": "Electron shell that runs the Roon controller engine as a desktop app",
   "main": "dist/main.js",

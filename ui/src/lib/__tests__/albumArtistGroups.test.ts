@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	albumCreditKey, albumCreditMatches, albumCreditSelector,
-	groupAlbumArtists, normalizeAlbumCreditSelector, sortAlbumArtistGroups
+	groupAlbumArtists, normalizeAlbumCreditSelector, sortAlbumArtistGroups, prepareAlbumArtistSections
 } from '../albumArtistGroups';
 import type { LibraryAlbumEntry } from '../libraryEntries';
 
@@ -11,6 +11,41 @@ function album(artist: string, id: string): LibraryAlbumEntry {
 }
 
 describe('exact public album-credit groups', () => {
+	it('prepares alphabetical artist sections and title order without merging equal sort keys or replacing rows', () => {
+		const titled = (credit: string, title: string, id: string): LibraryAlbumEntry =>
+			Object.freeze({ ...album(credit, id), title, searchKey: title.toLowerCase() });
+		const rows = Object.freeze([
+			titled('The Beatles', 'Revolver', 'r'), titled('alpha', 'Zebra', 'z'),
+			titled('The Beatles', 'Abbey Road', 'a'), titled('Alpha', 'Beta', 'b'),
+			titled('A / B', 'One', '1'), titled('A / B', 'Two', '2')
+		]);
+		const prepared = prepareAlbumArtistSections(rows);
+		expect(prepared.groups.map(group => group.label)).toEqual(['A / B', 'Alpha', 'alpha', 'The Beatles']);
+		expect(prepared.groups.map(group => group.albums.map(row => row.title)))
+			.toEqual([['One', 'Two'], ['Beta'], ['Zebra'], ['Abbey Road', 'Revolver']]);
+		expect(prepared.albums.map(row => row.id)).toEqual(['1', '2', 'b', 'z', 'a', 'r']);
+		expect(new Set(prepared.albums).size).toBe(rows.length);
+		for (const row of prepared.albums) expect(row).toBe(rows.find(original => original.id === row.id));
+		expect(prepared.buckets).toEqual([{ letter: '#', start: 0, count: 2 },
+			{ letter: 'A', start: 2, count: 2 }, { letter: 'B', start: 4, count: 2 }]);
+	});
+
+	it('keeps unknown credits separate from their literal label and aligns every rail bucket with displayed headings', () => {
+		const rows = ['', ' ', 'Unknown album artist', 'Élan', '123', 'The Beatles', 'Zulu']
+			.map((credit, index) => album(credit, `${index}`));
+		const { groups, albums, buckets } = prepareAlbumArtistSections(rows);
+		const unknown = groups.filter(group => group.label === 'Unknown album artist');
+		expect(unknown).toHaveLength(2);
+		expect(new Set(unknown.map(group => group.key)).size).toBe(2);
+		expect(unknown.find(group => group.selector.kind === 'uncredited')?.albums.map(row => row.artist)).toEqual(['', ' ']);
+		expect(buckets.map(bucket => bucket.letter)).toEqual(['#', 'B', 'U', 'Z']);
+		for (const bucket of buckets) {
+			const members = groups.filter(group => group.letter === bucket.letter).flatMap(group => [...group.albums]);
+			expect(albums.slice(bucket.start, bucket.start + bucket.count)).toEqual(members);
+		}
+		expect(prepareAlbumArtistSections([])).toEqual({ groups: [], albums: [], buckets: [] });
+	});
+
 	it('retains single releases, combined credits, exact variants, and every edition/ref', () => {
 		const credits = ['Single Release', 'Shared', 'Shared', 'A / B', 'AC/DC', 'Earth, Wind & Fire',
 			'Björk', 'Björk', 'Björk', 'BJÖRK', 'Björk ', '’Til Tuesday', "'Til Tuesday"];

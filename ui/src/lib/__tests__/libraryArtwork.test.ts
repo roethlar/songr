@@ -116,16 +116,18 @@ describe('library artwork image lifecycle', () => {
 	});
 });
 
-function tileGrid() {
+function tileGrid(section = false) {
 	const grid = document.createElement('div');
 	const tile = document.createElement('a');
 	tile.className = 'tile';
 	node.replaceWith(grid);
 	tile.append(node);
-	grid.append(tile);
+	const owner = section ? document.createElement('section') : tile;
+	if (section) owner.append(tile);
+	grid.append(owner);
 	const shadow = grid.attachShadow({ mode: 'open' });
 	let assigned: HTMLSlotElement | null = null;
-	Object.defineProperty(tile, 'assignedSlot', { configurable: true, get: () => assigned });
+	Object.defineProperty(owner, 'assignedSlot', { configurable: true, get: () => assigned });
 	return {
 		grid,
 		prepare() {
@@ -148,6 +150,20 @@ function groupIntersection(box: HTMLElement, visible: boolean) {
 }
 
 describe('artwork observation of prepared chunks', () => {
+	it('uses the enclosing artist section chunk when a small album grid has no tile slots', async () => {
+		const grid = tileGrid(true);
+		const box = grid.prepare();
+		cleanup = libraryArtwork(node, '/grouped-cover').destroy;
+		await vi.advanceTimersByTimeAsync(0);
+		expect(observers).toHaveLength(2);
+		expect(observers[1].observe).toHaveBeenCalledWith(box);
+		expect(observers[0].observe).not.toHaveBeenCalled();
+		groupIntersection(box, true); intersects(true);
+		expect(calls.map(call => call.url)).toEqual(['/grouped-cover']);
+		groupIntersection(box, false);
+		expect(calls[0].dispose).toHaveBeenCalledOnce();
+	});
+
 	it('fine-observes images only while their already prepared chunk is nearby', async () => {
 		const grid = tileGrid();
 		const box = grid.prepare();

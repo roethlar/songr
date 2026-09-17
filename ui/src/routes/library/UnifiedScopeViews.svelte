@@ -3,6 +3,8 @@
 	import { createTrackSelection, type TrackSelection } from '$lib/trackSelection';
 	import RetainedLibraryPanel from './RetainedLibraryPanel.svelte';
 	import { prepareLibraryGrid } from '$lib/preparedLibraryGrid';
+	import type { PreparedAlbumArtistSections } from '$lib/albumArtistGroups';
+	import { scrollingArtistHeadings } from '$lib/scrollingArtistHeadings';
 	import { libraryArtwork } from '$lib/actions/libraryArtwork';
 	import type { UnifiedLibraryDrillTarget, UnifiedLibraryScope } from '$lib/libraryPageState';
 	import { imageUrl } from '$lib/imageUrl';
@@ -51,6 +53,8 @@
 		randomSeed?: number;
 		surpriseSeed?: number;
 		groupByLetter?: boolean;
+		rootLetterGrouping?: { readonly artists: boolean; readonly albums: boolean; readonly genres: boolean };
+		albumArtistSections?: PreparedAlbumArtistSections | null;
 		retainScopes?: boolean;
 		layoutRevision?: unknown;
 		railTarget: LetterBucket | null;
@@ -84,6 +88,8 @@
 		randomSeed = 1,
 		surpriseSeed = randomSeed,
 		groupByLetter = false,
+		rootLetterGrouping,
+		albumArtistSections = null,
 		retainScopes = false,
 		layoutRevision,
 		railTarget,
@@ -165,9 +171,13 @@
 			.map((letter) => ({ letter, items: buckets.get(letter)! }));
 	}
 
+	// Retained roots keep their own preferences when another scope becomes active.
+	const groupArtistsByLetter = $derived(rootLetterGrouping?.artists ?? groupByLetter);
+	const groupAlbumsByLetter = $derived(rootLetterGrouping?.albums ?? groupByLetter);
+	const groupGenresByLetter = $derived(rootLetterGrouping?.genres ?? groupByLetter);
 	const artistsSorted = $derived(sortArtists(artists, sorts.artists));
 	const artistGroups = $derived(
-		groupByLetter && (sorts.artists === 'az' || sorts.artists === 'za')
+		groupArtistsByLetter && (sorts.artists === 'az' || sorts.artists === 'za')
 			? groupBy(artistsSorted, (a) => letterOf(a.searchKey), sorts.artists)
 			: null
 	);
@@ -185,7 +195,7 @@
 
 	const albumsSorted = $derived(sortAlbums(albums, sorts.albums, sorts.albums === 'shuffle' ? randomSeed : 0));
 	const albumGroups = $derived.by((): Group<TileItem>[] | null => {
-		if (!groupByLetter) return null;
+		if (!groupAlbumsByLetter) return null;
 		if (sorts.albums === 'az' || sorts.albums === 'za')
 			return groupBy(albumsSorted, (b) => letterOf(b.searchKey), sorts.albums).map((g) => ({
 				letter: g.letter,
@@ -198,6 +208,9 @@
 		return null;
 	});
 	const albumsFlat = $derived(albumsSorted.map(albumTile));
+	const artistAlbumTiles = $derived(albumArtistSections?.groups.map(group => ({
+		key: group.key, label: group.label, letter: group.letter, items: group.albums.map(albumTile)
+	})) ?? null);
 
 	const surpriseTiles = $derived(
 		seededShuffle(albums, surpriseSeed).slice(0, SURPRISE_SAMPLE).map(albumTile)
@@ -234,7 +247,7 @@
 	const genreCards = $derived(namedCards(genres, sorts.genres));
 	const cardGroups = $derived.by((): Group<CardItem>[] | null => {
 		const sort = sorts.genres;
-		if (!groupByLetter || (sort !== 'az' && sort !== 'za')) return null;
+		if (!groupGenresByLetter || (sort !== 'az' && sort !== 'za')) return null;
 		return groupBy(
 			genreCards,
 			(card) => letterOf(stripArticle(card.label).toLowerCase()),
@@ -396,7 +409,20 @@
 			{@render artistRows(artistsSorted)}
 		{/if}
 	{:else if selectedScope === 'albums'}
-		{#if albumGroups}
+		{#if artistAlbumTiles}
+			<div class="album-artist-sections" use:prepareLibraryGrid={[artistAlbumTiles, layoutRevision]}>
+				{#each artistAlbumTiles as group (group.key)}
+					<section class="grp album-artist-group" data-grp={group.letter} data-testid="album-artist-section">
+						<h2 class="gl album-artist-heading">
+							<button type="button" class="album-artist-name" data-artist-name aria-pressed="false">
+								<span data-artist-name-text>{group.label}</span>
+							</button>
+						</h2>
+						{@render albumTiles(group.items)}
+					</section>
+				{/each}
+			</div>
+		{:else if albumGroups}
 			{@render grouped(albumGroups as never, albumTiles)}
 		{:else}
 			{@render albumTiles(albumsFlat)}
@@ -438,13 +464,14 @@
 	{/if}
 {/snippet}
 
-<div class="scope-view" data-testid="unified-scope-view" data-scope={scope} bind:this={scroller}>
+<div class="scope-view" data-testid="unified-scope-view" data-scope={scope} bind:this={scroller}
+	use:scrollingArtistHeadings={{ enabled: scope === 'albums' && albumArtistSections !== null, revision: albumArtistSections, layoutRevision }}>
 	{#if retainScopes}
 		{#each ['artists', 'albums', 'genres', 'recently-played', 'surprise'] as heldScope (heldScope)}
 			<RetainedLibraryPanel active={scope === heldScope}
-				revision={heldScope === 'artists' ? [artists, sorts.artists, groupByLetter, layoutRevision] :
-					heldScope === 'albums' ? [albums, sorts.albums, groupByLetter, layoutRevision, sorts.albums === 'shuffle' ? randomSeed : 0] :
-					heldScope === 'genres' ? [genres, sorts.genres, groupByLetter, layoutRevision] :
+				revision={heldScope === 'artists' ? [artists, sorts.artists, groupArtistsByLetter, layoutRevision] :
+					heldScope === 'albums' ? [albums, sorts.albums, groupAlbumsByLetter, albumArtistSections, layoutRevision, sorts.albums === 'shuffle' ? randomSeed : 0] :
+					heldScope === 'genres' ? [genres, sorts.genres, groupGenresByLetter, layoutRevision] :
 					heldScope === 'surprise' ? [albums, surpriseSeed, layoutRevision] : [recent, layoutRevision]}>
 				<div data-scope-panel={heldScope}>{@render scopeContent(heldScope as UnifiedLibraryScope)}</div>
 			</RetainedLibraryPanel>

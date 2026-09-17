@@ -8,7 +8,7 @@ import UnifiedScopeViews from '../UnifiedScopeViews.svelte';
 import { fakeRecentStore, harnessLibrary, mountMode } from './unifiedLibraryModeHarness';
 
 describe('Recently played navigation', () => {
-	it('finds the recorded title and opens the selected current song without starting playback', async () => {
+	it('finds the recorded title and selects the current song without starting playback', async () => {
 		const paletteSearchStore = writable<PaletteSearchState>({ phase: 'idle', query: '', groups: [], error: null });
 		const search = vi.fn(async (_claim, query: string) => {
 			paletteSearchStore.set({ phase: 'ready', query, groups: [{ title: 'Tracks', rows: [{
@@ -23,13 +23,16 @@ describe('Recently played navigation', () => {
 		const card = activeLibraryScreen.getByText('A Recent Track').closest('button')!;
 		expect(card).toBeEnabled();
 		await fireEvent.click(card);
+		await fireEvent.click(screen.getByRole('button',{ name: 'More actions' }));
+		await fireEvent.click(screen.getByRole('menuitem',{ name: 'Find in Library' }));
 		expect(screen.getByTestId('unified-palette-input')).toHaveValue('A Recent Track');
 		await waitFor(() => expect(search).toHaveBeenCalledWith(expect.anything(), 'A Recent Track'));
 		expect(action).not.toHaveBeenCalled();
 		expect(harness.openLiveRef).not.toHaveBeenCalled();
 		const result = within(screen.getByTestId('unified-palette')).getByText('A Recent Track').closest('a,button')!;
 		await fireEvent.click(result);
-		await waitFor(() => expect(screen.getByTestId('unified-song-title')).toHaveTextContent('A Recent Track'));
+		expect(within(screen.getByTestId('unified-palette')).getByRole('button',{ name: 'Select A Recent Track' })).toHaveAttribute('aria-pressed', 'true');
+		expect(screen.getByTestId('unified-palette-input')).toHaveValue('A Recent Track');
 		expect(action).not.toHaveBeenCalled();
 		expect(harness.openLiveRef).not.toHaveBeenCalled();
 	});
@@ -40,9 +43,11 @@ describe('Recently played navigation', () => {
 		const search = vi.fn(async () => {});
 		mountMode({ liveLibrary: harnessLibrary(), recentStore, searchPaletteData: search });
 		await fireEvent.click(screen.getByTestId('unified-scope-recently-played'));
-		const card = activeLibraryScreen.getByText('Reference Artist').closest('button')!;
+		const card = screen.getByRole('button',{ name: 'Select Unknown track' });
 		expect(card).toBeEnabled();
 		await fireEvent.click(card);
+		await fireEvent.click(screen.getByRole('button',{ name: 'More actions' }));
+		await fireEvent.click(screen.getByRole('menuitem',{ name: 'Find in Library' }));
 		expect(screen.getByTestId('unified-palette-input')).toHaveValue('Reference Artist');
 		await waitFor(() => expect(search).toHaveBeenCalledWith(expect.anything(), 'Reference Artist'));
 	});
@@ -54,8 +59,10 @@ describe('Recently played navigation', () => {
 		mountMode({ liveLibrary: harnessLibrary(), recentStore, searchPaletteData: search });
 		await fireEvent.click(screen.getByTestId('unified-scope-recently-played'));
 		const card = activeLibraryScreen.getByText('Unknown track').closest('button')!;
-		expect(card).toBeDisabled();
+		expect(card).toBeEnabled();
 		await fireEvent.click(card);
+		await fireEvent.click(screen.getByRole('button',{ name: 'More actions' }));
+		expect(screen.getByRole('menuitem',{ name: 'Find in Library' })).toBeDisabled();
 		expect(screen.queryByTestId('unified-palette')).toBeNull();
 		expect(search).not.toHaveBeenCalled();
 	});

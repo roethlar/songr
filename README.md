@@ -26,6 +26,7 @@ Songr 1.4.3 with a real Roon library, in light and dark themes.
 - Transport controls: play/pause, previous/next, seek, volume
 - Queue: per-zone subscription, track listing with artwork, play-from-here, shuffle/loop/auto-radio
 - Global zone switching, persistent play bar with track/artist deep-links
+- Device-specific Dark, Light, Laser, Miami and Pop Art themes under Settings → Appearance
 - System media controls and hardware media keys via the Media Session API (see below)
 
 ## Updates

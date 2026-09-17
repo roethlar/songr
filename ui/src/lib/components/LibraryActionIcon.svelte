@@ -21,6 +21,8 @@
 		<circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5 5" />
 	{:else if name === 'open'}
 		<path d="M4 12h16m-6-6 6 6-6 6" />
+	{:else if name === 'retry'}
+		<path d="M4 10a8 8 0 1 1 1 7M4 4v6h6" />
 	{:else if name === 'remove'}
 		<path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7" />
 	{:else}

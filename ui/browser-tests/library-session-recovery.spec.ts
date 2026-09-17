@@ -38,6 +38,41 @@ test.afterEach(async ({ page }) => {
 	await expectNoPlayback(page);
 });
 
+test.describe('artwork failure recovery', () => {
+	for (const input of ['mouse', 'touch'] as const) {
+	 test.describe(input, () => {
+		test.use({ hasTouch: input === 'touch' });
+		test(`keeps the failed Play intent through More and explicit ${input} Retry`, async ({ page }) => {
+			await openAlbum(page);
+			await setActionScript(page, ['begin-session-lost', 'begin-session-lost', 'begin-session-lost', 'hold-resolution']);
+			const play = page.getByRole('button', { name: /^Play album / });
+			if (input === 'touch') {
+				await page.locator('.artwork-play').tap();
+				await play.tap();
+			} else await play.click();
+			const status = page.getByRole('alert', { name: 'Album status' });
+			const retry = status.getByRole('button', { name: 'Retry action' });
+			await expect(retry).toBeVisible();
+			const before = await page.evaluate(() => window.libraryScrollFixture.actionBegins);
+			expect(before.map(entry => entry.generation)).toEqual([1, 2]);
+			expect(before.every(entry => entry.input.desiredSemantic === 'play-now')).toBe(true);
+			await page.getByRole('button', { name: /^More actions for album / }).click();
+			await expect(page.getByRole('menuitem', { name: 'Retry action' })).toBeVisible();
+			expect(await page.evaluate(() => window.libraryScrollFixture.actionBegins)).toEqual(before);
+			await page.keyboard.press('Escape');
+			if (input === 'touch') await retry.tap(); else await retry.click();
+			await expect.poll(() => page.evaluate(() => window.libraryScrollFixture.actionBegins.length)).toBe(4);
+			const after = await page.evaluate(() => window.libraryScrollFixture.actionBegins);
+			expect(after.map(entry => entry.generation)).toEqual([1, 2, 3, 4]);
+			for (const entry of after) {
+				expect(entry.input).toEqual({ ...before[0].input, generation: entry.generation });
+			}
+			await expect(retry).toHaveCount(0);
+		});
+	 });
+	}
+});
+
 test('passive mode retirement stays lazy until the next action gesture', async ({ page }) => {
 	await openAlbum(page);
 	const retired = await page.evaluate(() => window.libraryScrollFixture.sendModeRetired());
@@ -48,13 +83,13 @@ test('passive mode retirement stays lazy until the next action gesture', async (
 	expect(await page.evaluate(() => window.libraryScrollFixture.classicReleaseCount)).toBe(0);
 
 	await setActionScript(page, ['choose']);
-	await page.getByTestId('unified-album-play').click();
-	await expect(page.getByTestId('unified-album-action-choices')).toBeVisible();
+	await page.getByRole('button', { name: /^More actions for album / }).click();
+	await expect(page.getByRole('menu', { name: /^More actions for album / })).toBeVisible();
 	expect(
 		await page.evaluate(() => window.libraryScrollFixture.actionBegins.map((entry) => entry.generation))
 	).toEqual([2]);
 	expect(await page.evaluate(() => window.libraryScrollFixture.classicAcquisitionCount)).toBe(2);
-	await page.getByTestId('unified-album-action-choices').getByRole('button', { name: 'Cancel' }).click();
+	await page.keyboard.press('Escape');
 });
 
 test('a first begin refusal invalidates exactly once and reissues on generation 2', async ({
@@ -63,30 +98,30 @@ test('a first begin refusal invalidates exactly once and reissues on generation 
 	await openAlbum(page);
 	await setActionScript(page, ['begin-session-lost', 'choose']);
 
-	await page.getByTestId('unified-album-play').click();
-	await expect(page.getByTestId('unified-album-action-choices')).toBeVisible();
+	await page.getByRole('button', { name: /^More actions for album / }).click();
+	await expect(page.getByRole('menu', { name: /^More actions for album / })).toBeVisible();
 	expect(
 		await page.evaluate(() => window.libraryScrollFixture.actionBegins.map((entry) => entry.generation))
 	).toEqual([1, 2]);
 	expect(await page.evaluate(() => window.libraryScrollFixture.classicAcquisitionCount)).toBe(2);
 	expect(await page.evaluate(() => window.libraryScrollFixture.classicReleaseCount)).toBe(0);
-	await page.getByTestId('unified-album-action-choices').getByRole('button', { name: 'Cancel' }).click();
+	await page.keyboard.press('Escape');
 });
 
 test('a first resolution refusal gets the same single correlated reissue', async ({ page }) => {
 	await openAlbum(page);
 	await setActionScript(page, ['hold-resolution', 'choose']);
 
-	await page.getByTestId('unified-album-play').click();
-	await expect(page.getByTestId('unified-album-action-busy')).toBeVisible();
+	await page.getByRole('button', { name: /^More actions for album / }).click();
+	await expect(page.getByRole('status').filter({ hasText: 'Working' })).toBeVisible();
 	expect(await page.evaluate(() => window.libraryScrollFixture.actionBegins.length)).toBe(1);
 	await page.evaluate(() => window.libraryScrollFixture.failCurrentResolution());
 
-	await expect(page.getByTestId('unified-album-action-choices')).toBeVisible();
+	await expect(page.getByRole('menu', { name: /^More actions for album / })).toBeVisible();
 	expect(
 		await page.evaluate(() => window.libraryScrollFixture.actionBegins.map((entry) => entry.generation))
 	).toEqual([1, 2]);
-	await page.getByTestId('unified-album-action-choices').getByRole('button', { name: 'Cancel' }).click();
+	await page.keyboard.press('Escape');
 });
 
 test('the second refusal waits for manual Retry and grants its new one-reissue budget', async ({
@@ -100,8 +135,8 @@ test('the second refusal waits for manual Retry and grants its new one-reissue b
 		'choose'
 	]);
 
-	await page.getByTestId('unified-album-play').click();
-	const retry = page.getByTestId('unified-album-action-retry');
+	await page.getByRole('button', { name: /^More actions for album / }).click();
+	const retry = page.getByRole('menuitem', { name: 'Retry action' });
 	await expect(retry).toBeVisible();
 	expect(
 		await page.evaluate(() => window.libraryScrollFixture.actionBegins.map((entry) => entry.generation))
@@ -110,21 +145,21 @@ test('the second refusal waits for manual Retry and grants its new one-reissue b
 	expect(await page.evaluate(() => window.libraryScrollFixture.currentClassicSession)).toBeNull();
 
 	await retry.click();
-	await expect(page.getByTestId('unified-album-action-choices')).toBeVisible();
+	await expect(page.getByRole('menu', { name: /^More actions for album / })).toBeVisible();
 	expect(
 		await page.evaluate(() => window.libraryScrollFixture.actionBegins.map((entry) => entry.generation))
 	).toEqual([1, 2, 3, 4]);
 	expect(await page.evaluate(() => window.libraryScrollFixture.classicAcquisitionCount)).toBe(4);
-	await page.getByTestId('unified-album-action-choices').getByRole('button', { name: 'Cancel' }).click();
+	await page.keyboard.press('Escape');
 });
 
 test('a late retirement for the old exact handle cannot retire its replacement', async ({ page }) => {
 	await openAlbum(page);
 	const oldSession = await page.evaluate(() => window.libraryScrollFixture.sendModeRetired());
 	await setActionScript(page, ['choose']);
-	await page.getByTestId('unified-album-play').click();
-	await expect(page.getByTestId('unified-album-action-choices')).toBeVisible();
-	await page.getByTestId('unified-album-action-choices').getByRole('button', { name: 'Cancel' }).click();
+	await page.getByRole('button', { name: /^More actions for album / }).click();
+	await expect(page.getByRole('menu', { name: /^More actions for album / })).toBeVisible();
+	await page.keyboard.press('Escape');
 
 	await page.evaluate(
 		(session) => window.libraryScrollFixture.sendModeRetired(session),
@@ -137,12 +172,12 @@ test('a late retirement for the old exact handle cannot retire its replacement',
 	expect(await page.evaluate(() => window.libraryScrollFixture.classicAcquisitionCount)).toBe(2);
 
 	await setActionScript(page, ['choose']);
-	await page.getByTestId('unified-album-play').click();
-	await expect(page.getByTestId('unified-album-action-choices')).toBeVisible();
+	await page.getByRole('button', { name: /^More actions for album / }).click();
+	await expect(page.getByRole('menu', { name: /^More actions for album / })).toBeVisible();
 	expect(
 		await page.evaluate(() => window.libraryScrollFixture.actionBegins.map((entry) => entry.generation))
 	).toEqual([2, 2]);
-	await page.getByTestId('unified-album-action-choices').getByRole('button', { name: 'Cancel' }).click();
+	await page.keyboard.press('Escape');
 });
 
 test('library-generation retirement re-resolves the open address on its replacement', async ({
@@ -169,11 +204,11 @@ test('outcome unknown never reacquires or exposes Retry', async ({ page }) => {
 	await openAlbum(page);
 	await setActionScript(page, ['outcome-unknown']);
 
-	await page.getByTestId('unified-album-play').click();
-	await expect(page.getByTestId('unified-album-action-error')).toContainText(
+	await page.getByRole('button', { name: /^More actions for album / }).click();
+	await expect(page.getByRole('alert', { name: 'Album status' })).toContainText(
 		'The action may already have executed'
 	);
-	await expect(page.getByTestId('unified-album-action-retry')).toHaveCount(0);
+	await expect(page.getByRole('menuitem', { name: 'Retry action' })).toHaveCount(0);
 	await page.waitForTimeout(100);
 	expect(await page.evaluate(() => window.libraryScrollFixture.actionBegins.length)).toBe(1);
 	expect(await page.evaluate(() => window.libraryScrollFixture.classicAcquisitionCount)).toBe(1);

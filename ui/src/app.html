@@ -11,7 +11,7 @@
 				try {
 					var stored = localStorage.getItem('roon-controller-theme');
 					var theme =
-						stored === 'dark' || stored === 'light'
+						['dark', 'light', 'laser', 'miami', 'pop'].indexOf(stored) !== -1
 							? stored
 							: window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
 								? 'light'

@@ -102,6 +102,7 @@ function mountPalette(options: {
 	composers?: NamedCountsState;
 	search?: PaletteSearchState;
 	seed?: string;
+	withBrowseActions?: boolean;
 } = {}) {
 	const searchStore = writable<PaletteSearchState>(options.search ?? idleSearch());
 	const onClose = vi.fn();
@@ -110,6 +111,7 @@ function mountPalette(options: {
 	const onOpenLiveAlbum = vi.fn();
 	const onBrowseResult = vi.fn();
 	const onBrowseCategory = vi.fn();
+	const onMore = vi.fn();
 	const onApplyFilter = vi.fn();
 	const onSearch = vi.fn();
 	const result = render(UnifiedPalette, {
@@ -126,6 +128,7 @@ function mountPalette(options: {
 			onOpenLiveAlbum,
 			onBrowseResult,
 			onBrowseCategory,
+			browseActions: options.withBrowseActions ? {enabled:true,busy:false,status:null,error:false,onMore,onAction:vi.fn(),onCloseMore:vi.fn()} : undefined,
 			onApplyFilter,
 			onSearch
 		}
@@ -139,6 +142,7 @@ function mountPalette(options: {
 		onOpenLiveAlbum,
 		onBrowseResult,
 		onBrowseCategory,
+		onMore,
 		onApplyFilter,
 		onSearch
 	};
@@ -164,7 +168,7 @@ describe('UnifiedPalette — instant sections', () => {
 		expect(firstRow.querySelector('.p1')).toHaveTextContent('Bowie Prime');
 		expect(firstRow.querySelector('.p2')).toHaveTextContent('40 albums');
 		expect(palette.querySelector('.palhint')).toHaveTextContent(
-			'↑↓ SELECT · ⏎ OPEN · ESC CLOSE'
+			'↑↓ MOVE · ⏎ OPEN · ESC CLOSE'
 		);
 	});
 
@@ -176,8 +180,7 @@ describe('UnifiedPalette — instant sections', () => {
 			'bowie',
 			'>30 albums',
 			'one album',
-			'jazz',
-			'1984-1989'
+			'jazz'
 		]);
 
 		await fireEvent.click(seeds[0]);
@@ -192,7 +195,7 @@ describe('UnifiedPalette — instant sections', () => {
 
 		const groups = screen.getAllByTestId('unified-palette-group');
 		const artistGroup = groups.find((el) => el.textContent?.startsWith('ARTISTS'));
-		expect(artistGroup?.textContent).toBe('ARTISTS — FIRST 8 OF 12');
+		expect(artistGroup?.querySelector('.palette-group-label')?.textContent).toBe('ARTISTS — FIRST 8 OF 12');
 
 		const rows = screen.getAllByTestId('unified-palette-row');
 		const bowieRow = rows.find((el) => el.textContent?.includes('Bowie Prime'));
@@ -243,9 +246,9 @@ describe('UnifiedPalette — instant sections', () => {
 		});
 
 		const groups = screen.getAllByTestId('unified-palette-group');
-		expect(groups.map((el) => el.textContent)).toContain('GENRES');
+		expect(groups.map((el) => el.querySelector('.palette-group-label')?.textContent)).toContain('GENRES');
 		expect(groups.some((el) => el.textContent?.startsWith('GENRES —'))).toBe(false);
-		expect(groups.map((el) => el.textContent)).toContain('COMPOSERS');
+		expect(groups.map((el) => el.querySelector('.palette-group-label')?.textContent)).toContain('COMPOSERS');
 		const rows = screen.getAllByTestId('unified-palette-row');
 		const genreRow = rows.find((el) => el.textContent?.includes('Jazz Fusion'));
 		expect(genreRow?.querySelector('.p1')).toHaveTextContent('Genre: Jazz Fusion');
@@ -274,7 +277,7 @@ describe('UnifiedPalette — instant sections', () => {
 
 		const groups = screen.getAllByTestId('unified-palette-group');
 		const albumGroup = groups.find((el) => el.textContent?.startsWith('ALBUMS'));
-		expect(albumGroup?.textContent).toBe('ALBUMS — FIRST 8 OF 1001');
+		expect(albumGroup?.querySelector('.palette-group-label')?.textContent).toBe('ALBUMS — FIRST 8 OF 1001');
 	});
 
 	it('opens an album drill from an album row', async () => {
@@ -387,7 +390,7 @@ describe('UnifiedPalette — async coordinated section', () => {
 
 		const groups = screen.getAllByTestId('unified-palette-group');
 		const asyncGroup = groups.find((el) => el.textContent?.startsWith('SONGS'));
-		expect(asyncGroup?.textContent).toBe('SONGS');
+		expect(asyncGroup?.querySelector('.palette-group-label')?.textContent).toBe('SONGS');
 		const rows = screen.getAllByTestId('unified-palette-row');
 		const trackRow = rows.find((el) => el.textContent?.includes('Ashes to Ashes'));
 		expect(trackRow).toBeEnabled();
@@ -406,6 +409,7 @@ describe('UnifiedPalette — async coordinated section', () => {
 
 	it('adds keyless Roon categories without duplicating authoritative songs', async () => {
 		const harness = mountPalette({
+			withBrowseActions: true,
 			seed: 'bowie',
 			search: {
 				phase: 'ready',
@@ -468,10 +472,8 @@ describe('UnifiedPalette — async coordinated section', () => {
 		expect(screen.getAllByText('Heroes')).toHaveLength(1);
 		expect(screen.getByText('ROON ALBUMS')).toBeInTheDocument();
 		await fireEvent.click(screen.getByRole('button', { name: /Low/ }));
-		expect(harness.onBrowseResult).toHaveBeenCalledWith(
-			'bowie',
-			expect.objectContaining({ title: 'Low', resultType: 'album' })
-		);
+		expect(harness.onMore).toHaveBeenCalledWith(expect.objectContaining({ title: 'Low', resultType: 'album' }));
+		expect(harness.onBrowseResult).not.toHaveBeenCalled();
 		await fireEvent.click(screen.getByRole('button', { name: /See all Albums/ }));
 		expect(harness.onBrowseCategory).toHaveBeenCalledWith('bowie', 'Albums');
 		await fireEvent.click(screen.getByRole('button', { name: /See all Tracks/ }));
@@ -670,7 +672,7 @@ describe('UnifiedPalette — keystroke budget at 40k entries (plan §3.2)', () =
 
 		const groups = screen.getAllByTestId('unified-palette-group');
 		const artistGroup = groups.find((el) => el.textContent?.startsWith('ARTISTS'));
-		expect(artistGroup?.textContent).toBe('ARTISTS — FIRST 8 OF 80');
+		expect(artistGroup?.querySelector('.palette-group-label')?.textContent).toBe('ARTISTS — FIRST 8 OF 80');
 		// Generous CI budget; the point is catching accidental
 		// super-linear work per keystroke, not micro-benchmarks.
 		expect(keystrokeMs).toBeLessThan(1_000);

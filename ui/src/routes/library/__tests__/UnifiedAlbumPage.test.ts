@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { clickSelectionAction, installLibraryLayout } from '../../../test/libraryLayout';
+let layout: ReturnType<typeof installLibraryLayout>;
+beforeEach(() => { layout = installLibraryLayout(); });
+afterEach(() => layout.restore());
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { writable, type Writable } from 'svelte/store';
 
 import UnifiedAlbumPage from '../UnifiedAlbumPage.svelte';
@@ -11,7 +15,7 @@ const VERSION_B = 'version-b';
 
 type ActionState = {
 	readonly phase: string;
-	readonly actions: readonly { actionId: string; label: string }[];
+	readonly actions: readonly { actionId: string; label: string; semantic: 'play-now' | 'queue' | 'add-next' | 'other' }[];
 	readonly error: string | null;
 };
 
@@ -84,7 +88,7 @@ function makeHarness(
 		onBack: vi.fn(),
 		onRetry: vi.fn(),
 		onBeginAction: vi.fn(),
-		onOpenArtist: vi.fn()
+		onBeginBatchAction: vi.fn()
 	};
 	const select = vi.fn((versionId: string) => {
 		sheetStore.update((state) => ({
@@ -145,8 +149,8 @@ describe('UnifiedAlbumPage', () => {
 	it('renders as a page (no modal) and leaves through the back control', async () => {
 		const harness = makeHarness(sheetState());
 		const page = screen.getByTestId('unified-album-page');
-		expect(page.querySelector('.pleft > .art')).not.toBeNull();
-		expect(page.querySelector('.pleft > .pb')).not.toBeNull();
+		expect(page.querySelector('.pleft .art')).not.toBeNull();
+		expect(screen.getByRole('button', { name: 'Play album Album' })).toBeInTheDocument();
 		expect(page.querySelector('.pright')).not.toBeNull();
 		// The entity owns the content pane: no dialog role, no scrim.
 		expect(document.querySelector('[role="dialog"]')).toBeNull();
@@ -427,10 +431,9 @@ describe('UnifiedAlbumPage', () => {
 		expect(screen.getByTestId('unified-album-artist')).toHaveTextContent('Björk');
 		expect(screen.queryByTestId('unified-album-zone-picker')).toBeNull();
 
-		await fireEvent.click(screen.getByTestId('unified-album-artist-link'));
-		expect(harness.onOpenArtist).toHaveBeenCalledTimes(1);
+		expect(screen.getByTestId('unified-album-artist').tagName).toBe('DIV');
 
-		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
 		expect(harness.onBeginAction).toHaveBeenNthCalledWith(
 			1,
 			null,
@@ -438,20 +441,26 @@ describe('UnifiedAlbumPage', () => {
 			'play-now'
 		);
 
-		await fireEvent.click(screen.getByTestId('unified-album-queue'));
-		expect(harness.onBeginAction).toHaveBeenNthCalledWith(2, null, 'zone-1', 'queue');
+		await fireEvent.click(screen.getByRole('button', { name: 'More actions for album Debut' }));
+		expect(harness.onBeginAction).toHaveBeenNthCalledWith(2, null, 'zone-1', null);
+		harness.actionStore.set(actionState({ phase: 'choosing', actions: [{ actionId: 'album-queue', label: 'Queue', semantic: 'queue' }] }));
+		await fireEvent.click(await screen.findByRole('menuitem', { name: 'Queue' }));
+		expect(harness.execute).toHaveBeenCalledWith('album-queue');
+		harness.actionStore.set(actionState());
+		await waitFor(() => expect(screen.getByRole('button', { name: /^Play album / })).toBeEnabled());
 
-		await fireEvent.click(screen.getByTestId('unified-track-action-1'));
-		expect(harness.onBeginAction).toHaveBeenNthCalledWith(
-			3,
-			{ index: 1, title: 'Track 2' },
+		await fireEvent.click(screen.getByRole('button', { name: 'Select Track 2' }));
+		await clickSelectionAction('Play');
+		expect(harness.onBeginBatchAction).toHaveBeenNthCalledWith(
+			1,
+			[{ index: 1, title: 'Track 2' }],
 			'zone-1',
 			'play-now'
 		);
-		await fireEvent.click(screen.getByTestId('unified-track-queue-1'));
-		expect(harness.onBeginAction).toHaveBeenNthCalledWith(
-			4,
-			{ index: 1, title: 'Track 2' },
+		await clickSelectionAction('Queue');
+		expect(harness.onBeginBatchAction).toHaveBeenNthCalledWith(
+			2,
+			[{ index: 1, title: 'Track 2' }],
 			'zone-1',
 			'queue'
 		);
@@ -474,49 +483,54 @@ describe('UnifiedAlbumPage', () => {
 		);
 
 		expect(screen.getByTestId('unified-album-tracks')).toHaveTextContent('Satisfied');
-		expect(screen.getByTestId('unified-album-play')).toBeDisabled();
-		expect(screen.getByTestId('unified-album-queue')).toBeDisabled();
-		expect(screen.getByTestId('unified-track-action-1')).toBeDisabled();
-		expect(screen.getByTestId('unified-track-queue-1')).toBeDisabled();
+		expect(screen.getByRole('button', { name: /^Play album / })).toBeDisabled();
+		expect(screen.queryByRole('button', { name: /^More actions for album / })).toBeNull();
+		await fireEvent.click(screen.getByRole('button', { name: 'Select Satisfied' }));
+		const controls = screen.getByRole('group', { name: 'Selected tracks' });
+		expect(within(controls).getByRole('button', { name: 'Play' })).toBeDisabled();
+		expect(within(controls).getByRole('button', { name: 'Queue' })).toBeDisabled();
 
-		await fireEvent.click(screen.getByTestId('unified-album-play'));
-		await fireEvent.click(screen.getByTestId('unified-track-action-1'));
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
+		await clickSelectionAction('Play');
 		expect(harness.onBeginAction).not.toHaveBeenCalled();
+		expect(harness.onBeginBatchAction).not.toHaveBeenCalled();
 	});
 
 	it('never asks which zone — every action goes to the selected one (issue #12)', async () => {
 		const harness = makeHarness(resolvedState(), actionState(), 'zone-2');
 
-		await fireEvent.click(screen.getByTestId('unified-track-queue-0'));
-		expect(harness.onBeginAction).toHaveBeenNthCalledWith(
+		await fireEvent.click(screen.getByRole('button', { name: 'Select Track 1' }));
+		await clickSelectionAction('Queue');
+		expect(harness.onBeginBatchAction).toHaveBeenNthCalledWith(
 			1,
-			{ index: 0, title: 'Track 1' },
+			[{ index: 0, title: 'Track 1' }],
 			'zone-2',
 			'queue'
 		);
-		await fireEvent.click(screen.getByTestId('unified-album-play'));
-		expect(harness.onBeginAction).toHaveBeenNthCalledWith(2, null, 'zone-2', 'play-now');
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
+		expect(harness.onBeginAction).toHaveBeenCalledExactlyOnceWith(null, 'zone-2', 'play-now');
 		expect(screen.queryByTestId('unified-album-zone-picker')).toBeNull();
 	});
 
 	it('disables every action while no zone is selectable', async () => {
 		const harness = makeHarness(resolvedState(), actionState(), null);
 
-		expect(screen.getByTestId('unified-album-play')).toBeDisabled();
-		expect(screen.getByTestId('unified-album-queue')).toBeDisabled();
-		expect(screen.getByTestId('unified-track-queue-0')).toBeDisabled();
-		await fireEvent.click(screen.getByTestId('unified-album-play'));
+		expect(screen.getByRole('button', { name: /^Play album / })).toBeDisabled();
+		expect(screen.getByRole('button', { name: /^More actions for album / })).toBeDisabled();
+		await fireEvent.click(screen.getByRole('button', { name: 'Select Track 1' }));
+		expect(screen.getByRole('button', { name: 'Queue' })).toBeDisabled();
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
 		expect(harness.onBeginAction).not.toHaveBeenCalled();
 	});
 
 	it('keeps long track lists continuous and replaces them when another album resolves', async () => {
 		const harness = makeHarness(resolvedState(250));
 		expect(screen.queryByTestId('unified-album-pager')).toBeNull();
-		expect(screen.getByTestId('unified-track-action-249')).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Select Track 250' })).toBeInTheDocument();
 		harness.sheetStore.set(resolvedState(1));
 		await screen.findByText('Track 1');
-		expect(screen.queryByTestId('unified-track-action-249')).toBeNull();
-		expect(screen.getByTestId('unified-track-action-0')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Select Track 250' })).toBeNull();
+		expect(screen.getByRole('button', { name: 'Select Track 1' })).toBeInTheDocument();
 	});
 
 	it('opens the containing page and highlights one normalized song-title match', async () => {
@@ -622,36 +636,31 @@ describe('UnifiedAlbumPage', () => {
 	});
 
 	it('delegates action choices to the action controller and blocks re-entry while busy', async () => {
-		const harness = makeHarness(
-			resolvedState(),
-			actionState({
+		const harness = makeHarness(resolvedState());
+		await fireEvent.click(screen.getByRole('button', { name: 'More actions for album Debut' }));
+		harness.actionStore.set(actionState({
 				phase: 'choosing',
 				actions: [
-					{ actionId: 'action-play', label: 'Play Now' },
-					{ actionId: 'action-queue', label: 'Queue' }
+					{ actionId: 'action-play', label: 'Play Now', semantic: 'play-now' },
+					{ actionId: 'action-queue', label: 'Queue', semantic: 'queue' }
 				]
-			})
-		);
+			}));
 
-		await fireEvent.click(
-			screen
-				.getByTestId('unified-album-action-choices')
-				.querySelector('button:nth-of-type(2)')!
-		);
+		await fireEvent.click(await screen.findByRole('menuitem', { name: 'Queue' }));
 		expect(harness.execute).toHaveBeenCalledWith('action-queue');
-		await fireEvent.click(
-			screen.getByTestId('unified-album-action-choices').querySelector('button.ghost')!
-		);
-		expect(harness.cancel).toHaveBeenCalledTimes(1);
 
-		expect(screen.getByTestId('unified-album-play')).toBeDisabled();
-		await fireEvent.click(screen.getByTestId('unified-track-action-0'));
-		expect(harness.onBeginAction).not.toHaveBeenCalled();
+		expect(screen.getByRole('button', { name: /^Play album / })).toBeDisabled();
+		await fireEvent.click(screen.getByRole('button', { name: /^Play album / }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Select Track 1' }));
+		expect(harness.onBeginAction).toHaveBeenCalledExactlyOnceWith(null, 'zone-1', null);
+		expect(harness.onBeginBatchAction).not.toHaveBeenCalled();
+		await fireEvent.keyDown(document, { key: 'Escape' });
+		expect(harness.cancel).toHaveBeenCalledTimes(1);
 
 		harness.actionStore.set(
 			actionState({ phase: 'failed', error: 'The zone rejected the action' })
 		);
-		expect(await screen.findByTestId('unified-album-action-error')).toHaveTextContent(
+		expect(await screen.findByRole('alert', { name: 'Album status' })).toHaveTextContent(
 			'The zone rejected the action'
 		);
 	});
@@ -666,7 +675,10 @@ describe('UnifiedAlbumPage', () => {
 			{ actionRetryAvailable: true, onRetryAction }
 		);
 
-		await fireEvent.click(screen.getByTestId('unified-album-action-retry'));
+		await fireEvent.click(screen.getByRole('button', { name: 'More actions for album Debut' }));
+		expect(permitted.onBeginAction).not.toHaveBeenCalled();
+		expect(screen.getByRole('menuitem', { name: 'Retry action' })).toBeInTheDocument();
+		await fireEvent.click(screen.getByRole('button', { name: 'Retry action' }));
 		expect(onRetryAction).toHaveBeenCalledTimes(1);
 		permitted.unmount();
 
@@ -674,7 +686,7 @@ describe('UnifiedAlbumPage', () => {
 			resolvedState(),
 			actionState({ phase: 'failed', error: 'The zone rejected the action' })
 		);
-		expect(screen.queryByTestId('unified-album-action-retry')).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Retry action' })).toBeNull();
 		ordinaryFailure.unmount();
 
 		makeHarness(
@@ -684,7 +696,7 @@ describe('UnifiedAlbumPage', () => {
 			null,
 			{ actionRetryAvailable: true, onRetryAction }
 		);
-		expect(screen.queryByTestId('unified-album-action-retry')).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Retry action' })).toBeNull();
 	});
 
 	it('preserves public title prefixes without an additional number column', () => {

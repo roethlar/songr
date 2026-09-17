@@ -17,6 +17,7 @@
 	import UnifiedAlbumArtistList from './UnifiedAlbumArtistList.svelte';
 	import {
 		albumCreditKey, albumCreditLabel, albumCreditMatches, groupAlbumArtists, sortAlbumArtistGroups,
+		prepareAlbumArtistSections,
 		type AlbumArtistGroup, type AlbumCreditSelector, type ArtistView
 	} from '$lib/albumArtistGroups';
 	import {
@@ -86,6 +87,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		registerUnifiedLibraryDensityRequestHandler,
 		unifiedLibraryPrefsStore,
 		type SortableUnifiedScope,
+		type UnifiedAlbumGrouping,
 		type UnifiedLibraryDensity
 	} from '$lib/stores/unifiedLibraryPrefsStore';
 	import {
@@ -602,6 +604,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	/** The rows this surface lists, and the buckets and counts that describe them. */
 	const listArtists = $derived(roots.artists);
 	const listAlbums = $derived(roots.albums);
+	const rootAlbumArtistSections = $derived(prefs.albumGrouping === 'artist'
+		? prepareAlbumArtistSections(listAlbums) : null);
 	const listArtistBuckets = $derived(roots.artistBuckets);
 	const listAlbumBuckets = $derived(roots.albumBuckets);
 	const emptyCreditAlbums: readonly LibraryAlbumEntry[] = [];
@@ -739,7 +743,8 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		creditGroupActive ? 'artist' : ['artists', 'albums', 'genres', 'artist', 'genre'].includes(scope)
 			? scope as SortableUnifiedScope : null
 	);
-	const groupByLetter = $derived(groupingScope === null ? false : prefs.groupByLetter[groupingScope]);
+	const groupByLetter = $derived(groupingScope === null ? false : groupingScope === 'albums'
+		? prefs.albumGrouping === 'letter' : prefs.groupByLetter[groupingScope]);
 	const viewSorts = $derived(prefs.sorts);
 	const liveCollectionSorts = $derived({
 		...viewSorts,
@@ -775,6 +780,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			return computeBuckets(orderedCreditGroups.map(group => group.searchKey));
 		}
 		if (scope === 'albums' && sortValue === 'by-artist') {
+			if (rootAlbumArtistSections) return [...rootAlbumArtistSections.buckets];
 			const buckets: LetterBucket[] = [];
 			for (const [position, album] of sortAlbums(listAlbums, 'by-artist', shuffleSeed).entries()) {
 				const letter = bucketLetterFor(librarySortKey(album.artist));
@@ -2889,6 +2895,11 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		drillNotice = prefsStore.setGroupByLetter(target, value) ? null : 'This browser could not save your grouping preference.';
 	}
 
+	function setAlbumGrouping(value: UnifiedAlbumGrouping): void {
+		railTarget = null;
+		drillNotice = prefsStore.setAlbumGrouping(value) ? null : 'This browser could not save your grouping preference.';
+	}
+
 	function setDensity(value: UnifiedLibraryDensity): boolean {
 		return prefsStore.setDensity(value);
 	}
@@ -3688,6 +3699,13 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 											Group by letter
 										</button>
 									{/if}
+									{#if groupingScope === 'albums'}
+										<button type="button" class="so" class:on={prefs.albumGrouping === 'artist'}
+											aria-pressed={prefs.albumGrouping === 'artist'}
+											onclick={() => { setAlbumGrouping(prefs.albumGrouping === 'artist' ? 'none' : 'artist'); sortOpen = false; }}>
+											Group by Artist
+										</button>
+									{/if}
 								</div>
 							</div>
 						{/if}
@@ -3706,7 +3724,9 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 					<RetainedLibraryPanel active={!creditGroupActive && !(scope === 'artists' && artistView === 'album-artists')}
 						revision={roots.generation}>
 						<UnifiedScopeViews {recentSelection} {bookmarkBusy} {scope} artists={listArtists} albums={listAlbums}
-							sorts={viewSorts} {groupByLetter} randomSeed={albumShuffleSeed} {surpriseSeed} {railTarget}
+							sorts={viewSorts} randomSeed={albumShuffleSeed} {surpriseSeed} {railTarget}
+							albumArtistSections={rootAlbumArtistSections}
+							rootLetterGrouping={{ artists: prefs.groupByLetter.artists, albums: prefs.albumGrouping === 'letter', genres: prefs.groupByLetter.genres }}
 							genres={$genresStore} recent={$recentStore}
 							onDrill={(target) => void openDrill(target)} onOpenLiveArtist={openLiveArtist}
 							onOpenLiveAlbum={openLiveAlbum} {hrefForArtist} hrefForAlbum={hrefForRootAlbum} {hrefForDrill}

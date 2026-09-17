@@ -10,7 +10,7 @@ import {
 	type UnifiedLibraryStorageListener
 } from '../unifiedLibraryPrefsStore';
 
-const defaultGrouping = { artists: true, albums: false, genres: false, artist: false, genre: false };
+const defaultGrouping = { artists: true, genres: false, artist: false, genre: false };
 
 function memoryStorage(): {
 	getItem(key: string): string | null;
@@ -44,7 +44,27 @@ function validRaw(over: Record<string, unknown> = {}): string {
 }
 
 describe('parseUnifiedLibraryPrefs', () => {
-	it.each([3, UNIFIED_LIBRARY_PREFS_VERSION])('migrates retired date sorts without resetting v%s preferences', version => {
+	it.each([3, 4])('migrates v%s flat and letter Albums without resetting other preferences', version => {
+		for (const grouped of [false, true]) {
+			const original = validRaw({ version, ...(version === 3 ? { artistView: undefined } : {}),
+				groupByLetter: { ...defaultGrouping, albums: grouped, genre: true } });
+			const parsed = parseUnifiedLibraryPrefs(original);
+			expect(parsed).toEqual({ ...parseUnifiedLibraryPrefs(validRaw()),
+				artistView: version === 3 ? 'album-artists' : 'all-artists',
+				groupByLetter: { ...defaultGrouping, genre: true }, albumGrouping: grouped ? 'letter' : 'none' });
+			expect(parsed.groupByLetter).not.toHaveProperty('albums');
+		}
+	});
+
+	it('clears only incompatible artist grouping in a saved envelope', () => {
+		const original = JSON.parse(validRaw({ albumGrouping: 'artist' }));
+		original.sorts.albums = 'shuffle';
+		expect(parseUnifiedLibraryPrefs(JSON.stringify(original))).toEqual({
+			...parseUnifiedLibraryPrefs(validRaw()), sorts: original.sorts, albumGrouping: 'none'
+		});
+	});
+
+	it.each([3, 4, UNIFIED_LIBRARY_PREFS_VERSION])('migrates retired date sorts without resetting v%s preferences', version => {
 		const original = JSON.parse(validRaw({ version, ...(version === 3 ? { artistView: undefined } : {}) }));
 		original.sorts.albums = 'year-asc';
 		original.sorts.artist = 'year-desc';
@@ -52,7 +72,7 @@ describe('parseUnifiedLibraryPrefs', () => {
 		expect(parseUnifiedLibraryPrefs(JSON.stringify(original))).toEqual({
 			artistView: version === 3 ? 'album-artists' : 'all-artists', density: 'compact',
 			sorts: { artists: 'za', albums: 'az', genres: 'most-albums', artist: 'az', genre: 'az' },
-			groupByLetter: defaultGrouping
+			groupByLetter: defaultGrouping, albumGrouping: 'none'
 		});
 	});
 
@@ -83,11 +103,11 @@ describe('parseUnifiedLibraryPrefs', () => {
 				artist: 'shuffle',
 				genre: 'by-artist'
 			},
-			groupByLetter: defaultGrouping
+			groupByLetter: defaultGrouping, albumGrouping: 'none'
 		});
 	});
 
-	it.each([3, UNIFIED_LIBRARY_PREFS_VERSION])('keeps existing v%s preferences with only artist names grouped by default', version => {
+	it.each([3, 4, UNIFIED_LIBRARY_PREFS_VERSION])('keeps existing v%s preferences with only artist names grouped by default', version => {
 		const parsed = parseUnifiedLibraryPrefs(validRaw({ version,
 			...(version === 3 ? { artistView: undefined } : {}) }));
 		expect(parsed.groupByLetter).toEqual(defaultGrouping);
@@ -114,6 +134,8 @@ describe('parseUnifiedLibraryPrefs', () => {
 		['missing letter grouping scope', validRaw({ groupByLetter: { albums: true } })],
 		['unknown letter grouping scope', validRaw({ groupByLetter: { ...defaultGrouping, tracks: true } })],
 		['nonboolean letter grouping', validRaw({ groupByLetter: { ...defaultGrouping, albums: 'true' } })],
+		['null album grouping', validRaw({ albumGrouping: null })],
+		['unknown album grouping', validRaw({ albumGrouping: 'year' })],
 		['missing sort scope', validRaw({ sorts: { artists: 'az' } })],
 		[
 			'sort value from another scope',
@@ -146,6 +168,54 @@ describe('parseUnifiedLibraryPrefs', () => {
 });
 
 describe('unifiedLibraryPrefsStore', () => {
+	it('saves artist grouping and ordering atomically, restores it, and excludes letter grouping', () => {
+		const storage = memoryStorage();
+		const write = vi.fn(storage.setItem);
+		const options = { isBrowser: true, getStorage: () => ({ ...storage, setItem: write }), addStorageListener: () => () => {} };
+		const store = createUnifiedLibraryPrefsStore(options);
+		expect(store.setGroupByLetter('albums', true)).toBe(true);
+		write.mockClear();
+		const published: string[] = [];
+		const unsubscribe = store.subscribe(prefs => {
+			published.push(`${prefs.albumGrouping}/${prefs.sorts.albums}`);
+			expect(parseUnifiedLibraryPrefs(storage.getItem(UNIFIED_LIBRARY_PREFS_STORAGE_KEY))).toEqual(prefs);
+		});
+		expect(store.setAlbumGrouping('artist')).toBe(true);
+		expect(write).toHaveBeenCalledTimes(1);
+		expect(published).toEqual(['letter/az', 'artist/by-artist']);
+		expect(get(createUnifiedLibraryPrefsStore(options))).toEqual(get(store));
+		expect(JSON.parse(storage.getItem(UNIFIED_LIBRARY_PREFS_STORAGE_KEY)!).groupByLetter).not.toHaveProperty('albums');
+		expect(store.setGroupByLetter('albums', true)).toBe(true);
+		expect(get(store).albumGrouping).toBe('letter');
+		expect(get(store).sorts.albums).toBe('by-artist');
+		expect(store.setAlbumGrouping('none')).toBe(true);
+		expect(get(store).albumGrouping).toBe('none');
+		expect(get(store).sorts.albums).toBe('by-artist');
+		unsubscribe();
+	});
+
+	it.each(['az', 'za', 'shuffle'])('clears artist grouping when Albums sort changes to %s', sort => {
+		const storage = memoryStorage();
+		const store = createUnifiedLibraryPrefsStore({ isBrowser: true, getStorage: () => storage, addStorageListener: () => () => {} });
+		store.setAlbumGrouping('artist');
+		store.setSort('genre', 'za');
+		expect(get(store).albumGrouping).toBe('artist');
+		store.setSort('albums', sort);
+		expect(get(store).albumGrouping).toBe('none');
+		expect(get(store).sorts.albums).toBe(sort);
+	});
+
+	it('rejects malformed album grouping and preserves sort/grouping when saving fails', () => {
+		const storage = memoryStorage();
+		const write = vi.fn(() => { throw new Error('quota'); });
+		const store = createUnifiedLibraryPrefsStore({ isBrowser: true,
+			getStorage: () => ({ ...storage, setItem: write }), addStorageListener: () => () => {} });
+		for (const value of [true, null, undefined, 'artists', {}, 1]) expect(store.setAlbumGrouping(value)).toBe(false);
+		expect(write).not.toHaveBeenCalled();
+		expect(store.setAlbumGrouping('artist')).toBe(false);
+		expect(get(store)).toEqual(DEFAULT_UNIFIED_LIBRARY_PREFS);
+	});
+
 	it('groups artist names by default while album sorting keeps album lists flat', () => {
 		const storage = memoryStorage();
 		const store = createUnifiedLibraryPrefsStore({
@@ -288,8 +358,9 @@ describe('unifiedLibraryPrefsStore', () => {
 		expect(get(store).sorts.genres).toBe('most-albums');
 		expect(get(store).artistView).toBe('all-artists');
 		listener!(UNIFIED_LIBRARY_PREFS_STORAGE_KEY,
-			validRaw({ groupByLetter: { ...defaultGrouping, albums: true } }));
-		expect(get(store).groupByLetter).toEqual({ ...defaultGrouping, albums: true });
+			validRaw({ albumGrouping: 'artist' }));
+		expect(get(store).albumGrouping).toBe('artist');
+		expect(get(store).groupByLetter).toEqual(defaultGrouping);
 
 		const oldSorts = JSON.parse(validRaw());
 		oldSorts.sorts.albums = 'year-desc';

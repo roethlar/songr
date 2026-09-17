@@ -10,7 +10,7 @@ import type { ArtistView } from '$lib/albumArtistGroups';
  * restore an explicit size change without forfeiting persistence.
  */
 
-export const UNIFIED_LIBRARY_PREFS_VERSION = 4;
+export const UNIFIED_LIBRARY_PREFS_VERSION = 5;
 export const UNIFIED_LIBRARY_PREFS_STORAGE_KEY = 'roon-controller-unified-library-prefs';
 
 export type UnifiedLibraryDensity = 'compact' | 'normal' | 'pi';
@@ -37,12 +37,15 @@ export interface UnifiedLibrarySorts {
 }
 
 export type SortableUnifiedScope = keyof UnifiedLibrarySorts;
+export type LetterGroupingScope = Exclude<SortableUnifiedScope, 'albums'>;
+export type UnifiedAlbumGrouping = 'none' | 'letter' | 'artist';
 
 export interface UnifiedLibraryPrefs {
 	readonly artistView: ArtistView;
 	readonly density: UnifiedLibraryDensity;
 	readonly sorts: UnifiedLibrarySorts;
-	readonly groupByLetter: Readonly<Record<SortableUnifiedScope, boolean>>;
+	readonly groupByLetter: Readonly<Record<LetterGroupingScope, boolean>>;
+	readonly albumGrouping: UnifiedAlbumGrouping;
 }
 
 const DENSITIES: readonly string[] = UNIFIED_LIBRARY_DENSITY_OPTIONS.map(({ id }) => id);
@@ -54,6 +57,7 @@ const SORT_VALUES: Readonly<Record<SortableUnifiedScope, readonly string[]>> = O
 	genre: ['az', 'za', 'by-artist', 'shuffle']
 });
 const SORTABLE_SCOPES = Object.keys(SORT_VALUES) as readonly SortableUnifiedScope[];
+const LETTER_GROUPING_SCOPES = SORTABLE_SCOPES.filter((scope): scope is LetterGroupingScope => scope !== 'albums');
 
 export const DEFAULT_UNIFIED_LIBRARY_PREFS: UnifiedLibraryPrefs = Object.freeze({
 	artistView: 'album-artists',
@@ -67,11 +71,11 @@ export const DEFAULT_UNIFIED_LIBRARY_PREFS: UnifiedLibraryPrefs = Object.freeze(
 	}) as UnifiedLibrarySorts,
 	groupByLetter: Object.freeze({
 		artists: true,
-		albums: false,
 		genres: false,
 		artist: false,
 		genre: false
-	})
+	}),
+	albumGrouping: 'none'
 });
 
 interface UnifiedLibraryPrefsStorage {
@@ -89,6 +93,7 @@ export interface UnifiedLibraryPrefsStore extends Readable<UnifiedLibraryPrefs> 
 	setDensity(value: unknown): boolean;
 	setSort(scope: SortableUnifiedScope, value: unknown): boolean;
 	setGroupByLetter(scope: SortableUnifiedScope, value: unknown): boolean;
+	setAlbumGrouping(value: unknown): boolean;
 	/** Detach the cross-tab storage listener (tests and teardown). */
 	destroy(): void;
 }
@@ -109,12 +114,14 @@ export function parseUnifiedLibraryPrefs(raw: string | null): UnifiedLibraryPref
 		const value = JSON.parse(raw) as unknown;
 		if (!isRecord(value)) return DEFAULT_UNIFIED_LIBRARY_PREFS;
 		const legacy = value.version === 3;
-		const keys = Object.keys(value).filter(key => key !== 'groupByLetter').sort().join(',');
+		const legacyGrouping = legacy || value.version === 4;
+		const keys = Object.keys(value).filter(key => key !== 'groupByLetter' &&
+			(key !== 'albumGrouping' || legacyGrouping)).sort().join(',');
 		if (keys !== (legacy ? 'density,sorts,version' : 'artistView,density,sorts,version') &&
-			!(value.version === UNIFIED_LIBRARY_PREFS_VERSION && keys === 'density,sorts,version')) {
+			!((value.version === 4 || value.version === UNIFIED_LIBRARY_PREFS_VERSION) && keys === 'density,sorts,version')) {
 			return DEFAULT_UNIFIED_LIBRARY_PREFS;
 		}
-		if (!legacy && value.version !== UNIFIED_LIBRARY_PREFS_VERSION) {
+		if (!legacyGrouping && value.version !== UNIFIED_LIBRARY_PREFS_VERSION) {
 			return DEFAULT_UNIFIED_LIBRARY_PREFS;
 		}
 		if (typeof value.density !== 'string' || !DENSITIES.includes(value.density)) {
@@ -137,10 +144,16 @@ export function parseUnifiedLibraryPrefs(raw: string | null): UnifiedLibraryPref
 			}
 		}
 		const groupByLetter = value.groupByLetter === undefined
-			? DEFAULT_UNIFIED_LIBRARY_PREFS.groupByLetter : value.groupByLetter;
+			? { ...DEFAULT_UNIFIED_LIBRARY_PREFS.groupByLetter, ...(legacyGrouping ? { albums: false } : {}) }
+			: value.groupByLetter;
 		if (!isRecord(groupByLetter) ||
-			Object.keys(groupByLetter).sort().join(',') !== 'albums,artist,artists,genre,genres' ||
-			SORTABLE_SCOPES.some(scope => typeof groupByLetter[scope] !== 'boolean')) {
+			Object.keys(groupByLetter).sort().join(',') !== (legacyGrouping ? 'albums,artist,artists,genre,genres' : 'artist,artists,genre,genres') ||
+			(legacyGrouping ? SORTABLE_SCOPES : LETTER_GROUPING_SCOPES).some(scope => typeof groupByLetter[scope] !== 'boolean')) {
+			return DEFAULT_UNIFIED_LIBRARY_PREFS;
+		}
+		const albumGrouping = legacyGrouping ? (groupByLetter.albums ? 'letter' : 'none')
+			: value.albumGrouping === undefined ? 'none' : value.albumGrouping;
+		if (albumGrouping !== 'none' && albumGrouping !== 'letter' && albumGrouping !== 'artist') {
 			return DEFAULT_UNIFIED_LIBRARY_PREFS;
 		}
 		return {
@@ -153,7 +166,11 @@ export function parseUnifiedLibraryPrefs(raw: string | null): UnifiedLibraryPref
 				artist: sorts.artist as UnifiedArtistDrillSort,
 				genre: sorts.genre as UnifiedGenreDrillSort
 			},
-			groupByLetter: { ...groupByLetter } as Readonly<Record<SortableUnifiedScope, boolean>>
+			groupByLetter: {
+				artists: groupByLetter.artists as boolean, genres: groupByLetter.genres as boolean,
+				artist: groupByLetter.artist as boolean, genre: groupByLetter.genre as boolean
+			},
+			albumGrouping: albumGrouping === 'artist' && sorts.albums !== 'by-artist' ? 'none' : albumGrouping
 		};
 	} catch {
 		return DEFAULT_UNIFIED_LIBRARY_PREFS;
@@ -166,7 +183,8 @@ function serializePrefs(prefs: UnifiedLibraryPrefs): string {
 		artistView: prefs.artistView,
 		density: prefs.density,
 		sorts: prefs.sorts,
-		groupByLetter: prefs.groupByLetter
+		groupByLetter: prefs.groupByLetter,
+		albumGrouping: prefs.albumGrouping
 	});
 }
 
@@ -213,6 +231,15 @@ export function createUnifiedLibraryPrefsStore({
 		return true;
 	}
 
+	function setAlbumGrouping(value: unknown): boolean {
+		if (value !== 'none' && value !== 'letter' && value !== 'artist') return false;
+		return commit({
+			...current,
+			albumGrouping: value,
+			sorts: value === 'artist' ? { ...current.sorts, albums: 'by-artist' } : current.sorts
+		});
+	}
+
 	return {
 		subscribe: internal.subscribe,
 		setArtistView(value: unknown): boolean {
@@ -228,16 +255,20 @@ export function createUnifiedLibraryPrefsStore({
 			if (typeof value !== 'string' || !SORT_VALUES[scope].includes(value)) return false;
 			return commit({
 				...current,
-				sorts: { ...current.sorts, [scope]: value }
+				sorts: { ...current.sorts, [scope]: value },
+				albumGrouping: scope === 'albums' && value !== 'by-artist' && current.albumGrouping === 'artist'
+					? 'none' : current.albumGrouping
 			});
 		},
 		setGroupByLetter(scope: SortableUnifiedScope, value: unknown): boolean {
 			if (!SORTABLE_SCOPES.includes(scope) || typeof value !== 'boolean') return false;
+			if (scope === 'albums') return setAlbumGrouping(value ? 'letter' : 'none');
 			return commit({
 				...current,
 				groupByLetter: { ...current.groupByLetter, [scope]: value }
 			});
 		},
+		setAlbumGrouping,
 		destroy(): void {
 			detach?.();
 		}

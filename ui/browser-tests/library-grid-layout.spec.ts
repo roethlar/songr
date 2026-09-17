@@ -95,16 +95,21 @@ async function expectOrdinaryGridGeometry(page: Page) {
 				if (error > worst.error) worst = { index, error };
 			});
 			const chunks = [...grid.shadowRoot!.querySelectorAll<HTMLElement>('[data-prepared-library-chunk]')];
+			let lastItemShortfall = 0;
 			const intrinsicErrors = chunks.map(chunk => {
 				const assigned = chunk.querySelector('slot')!.assignedElements();
 				const first = expected[actual.indexOf(assigned[0] as HTMLElement)].getBoundingClientRect();
+				const bottom = Math.max(...assigned.map(node => expected[actual.indexOf(node as HTMLElement)].getBoundingClientRect().bottom));
+				// Long-title fixture rows deliberately have unequal tile heights.
 				const last = expected[actual.indexOf(assigned.at(-1) as HTMLElement)].getBoundingClientRect();
-				return Math.abs(parseFloat(chunk.style.containIntrinsicBlockSize) - (last.bottom - first.top));
+				lastItemShortfall = Math.max(lastItemShortfall, bottom - last.bottom);
+				return Math.abs(parseFloat(chunk.style.containIntrinsicBlockSize) - (bottom - first.top));
 			});
 			return { actualHeight: bounds.height, expectedHeight: expectedBounds.height, worst,
-				intrinsicError: Math.max(...intrinsicErrors) };
+				intrinsicError: Math.max(...intrinsicErrors), lastItemShortfall };
 		} finally { oracle.remove(); }
 	});
+	expect(result.lastItemShortfall, 'fixture includes an unequal final row that defeats a last-tile-bottom oracle').toBeGreaterThan(0);
 	expect(result.actualHeight).toBeCloseTo(result.expectedHeight, 1);
 	expect(result.intrinsicError, 'prepared chunk sizes equal independently laid-out ordinary rows').toBeLessThan(0.1);
 	expect(result.worst.error, `largest geometry difference at tile ${result.worst.index}`).toBeLessThan(0.1);

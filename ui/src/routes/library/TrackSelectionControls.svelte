@@ -281,9 +281,9 @@
  :global(button[data-track-select-target]) { appearance:none; -webkit-appearance:none; background:transparent; border:0; padding:0; margin:0; font:inherit; color:inherit; text-align:left; min-width:0; cursor:pointer; }
  :global(button[data-track-select-target]:disabled) { cursor:default; }
  :global(button[data-track-select-target]:focus-visible) { outline:2px solid var(--songr-accent); outline-offset:3px; }
- :global([data-track-select-row].is-track-selected button[data-track-select-target]) { color:var(--songr-accent); }
+ :global([data-track-select-row].is-track-selected button[data-track-select-target]) { color:var(--songr-selection, var(--songr-accent)); }
  :global([data-track-select-row].is-track-selected [data-track-select-target] .tnm),
- :global([data-track-select-row].is-track-selected [data-track-select-target] [data-track-select-title]) { color:var(--songr-accent); }
+ :global([data-track-select-row].is-track-selected [data-track-select-target] [data-track-select-title]) { color:var(--songr-selection, var(--songr-accent)); }
  :global([data-track-select-row].is-track-selected [data-track-select-target] .browse-secondary) { color:var(--songr-soft); }
  @media (hover:none), (any-pointer:coarse) {
   .track-selection-controls,

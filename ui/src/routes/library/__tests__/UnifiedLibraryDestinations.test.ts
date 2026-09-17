@@ -1,4 +1,9 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/svelte';
+import { beforeEach, afterEach } from 'vitest';
+import { installLibraryLayout, readyBrowseRows as readyRows, clickSelectionAction } from '../../../test/libraryLayout';
+let layout: ReturnType<typeof installLibraryLayout>;
+beforeEach(() => {layout = installLibraryLayout();});
+afterEach(() => layout.restore());
 import { get, writable } from 'svelte/store';
 import { describe, expect, it, vi } from 'vitest';
 import { buildUnifiedLibraryPageState, type BrowseHistorySnapshot } from '$lib/libraryPageState';
@@ -71,22 +76,25 @@ describe('Library public destinations integration', () => {
 		await waitFor(() => expect(screen.getByLabelText(`Filter ${label}`)).toBeEnabled());
 		expect(harness.restore).toHaveBeenCalledWith(expect.anything(), harness.targetSnapshot, undefined, { complete: true });
 		await fireEvent.input(screen.getByLabelText(`Filter ${label}`), { target: { value: 'Needle artist' } });
+		await readyRows();
 		expect(screen.getByTestId('unified-browse-list')).toHaveTextContent('Track 274');
+		await readyRows();
 		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(1);
 		await fireEvent.input(screen.getByLabelText(`Filter ${label}`), { target: { value: '' } });
 		await fireEvent.change(screen.getByLabelText(`Sort ${label}`), { target: { value: 'name-desc' } });
+		await readyRows();
 		expect(screen.getAllByTestId('unified-browse-row')[0]).toHaveTextContent('Track 274');
 		const full = get(harness.state);
 		harness.state.set({ ...full, result: { ...full.result!, count: 0, totalCount: 0, items: [] } });
 		await waitFor(() => expect(screen.getByLabelText(`Filter ${label}`)).toBeEnabled());
-		expect(screen.getByTestId('unified-browse-empty')).toHaveTextContent('Nothing is available here.');
+		await waitFor(() => expect(screen.getByTestId('unified-browse-empty')).toHaveTextContent('Nothing is available here.'));
 		harness.state.set({ ...full, phase: 'error', result: null, error: 'Core disconnected' });
 		await waitFor(() => expect(screen.getByLabelText(`Filter ${label}`)).toBeDisabled());
 		expect(screen.getByRole('button', { name: `Retry ${label}` })).toBeVisible();
 		expect(screen.getByTestId(`unified-scope-${id}`)).toHaveAttribute('aria-pressed', 'true');
 	});
 
-	it.each([['queue', 'Queue', 'Queued'], ['play-now', 'Play', 'Playing'], ['add-next', 'Add Next', 'Added next']] as const)('executes %s for the exact second duplicate without a row-click popup', async (semantic, button, status) => {
+	it.each([['queue', 'Queue', 'Queued'], ['play-now', 'Play', 'Started selection'], ['add-next', 'Add Next', 'Added next']] as const)('executes %s for the exact second duplicate without a row-click popup', async (semantic, button, status) => {
 		const openedRows: string[] = [];
 		const executedLeaves: string[] = [];
 		let liveRows: BrowseItem[] = [];
@@ -135,6 +143,7 @@ describe('Library public destinations integration', () => {
 			await waitFor(() => expect(screen.getByLabelText('Sort Tracks')).toBeEnabled());
 			await fireEvent.change(screen.getByLabelText('Sort Tracks'), { target: { value: 'artist-desc' } });
 			await fireEvent.input(screen.getByLabelText('Filter Tracks'), { target: { value: 'All-4-One' } });
+			await readyRows();
 			expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(2);
 			expect(screen.getByTestId('unified-browse-summary')).toHaveTextContent('2 OF 275');
 			const selectedRow = screen.getAllByTestId('unified-browse-row')[1];
@@ -142,14 +151,14 @@ describe('Library public destinations integration', () => {
 			expect(screen.queryByTestId('unified-browse-action-sheet')).toBeNull();
 			expect(openedRows).toEqual([]);
 			expect(executedLeaves).toEqual([]);
-			if (semantic === 'add-next') await fireEvent.click(within(selectedRow).getByLabelText('More actions for I Swear'));
-			expect(within(selectedRow).getByRole('button', { name: button })).toBeEnabled();
-			await fireEvent.click(within(selectedRow).getByRole('button', { name: button }));
+			const label = semantic === 'add-next' ? 'Add next' : button;
+			expect(screen.getByRole('button', { name: label })).toBeEnabled();
+			await clickSelectionAction(label);
 			await waitFor(() => expect(executedLeaves).toEqual([`track-key-274:${semantic === 'play-now' ? 'Play Now' : button}`]));
 			expect(openedRows).toEqual(['track-key-274']);
 			expect(screen.queryByTestId('unified-browse-action-sheet')).toBeNull();
-			expect(screen.getByTestId('unified-track-status')).toHaveTextContent('I Swear');
-			await waitFor(() => expect(screen.getByTestId('unified-track-status')).toHaveTextContent(status));
+			expect(within(selectedRow).getByRole('button', { name: 'Select I Swear' })).toHaveAttribute('aria-pressed', 'true');
+			await waitFor(() => expect(screen.getByTestId('unified-browse-view').querySelector('.track-selection-controls [role=status]')).toHaveTextContent(status));
 			expect(harness.restore).toHaveBeenCalledTimes(1);
 
 		} finally {
@@ -167,17 +176,23 @@ describe('Library public destinations integration', () => {
 		expect(screen.getByRole('option', { name: 'Artist A–Z' })).toHaveValue('artist-asc');
 		expect(screen.getByRole('option', { name: 'Artist Z–A' })).toHaveValue('artist-desc');
 		await fireEvent.change(screen.getByLabelText('Sort Tracks'), { target: { value: 'artist-asc' } });
+		await readyRows();
 		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(275);
+		await readyRows();
 		expect(screen.getAllByTestId('unified-browse-row')[0]).toHaveTextContent('Track 274');
+		await readyRows();
 		expect(screen.getAllByTestId('unified-browse-row')[0]).toHaveTextContent('AAA Artist');
 		expect(screen.getByTestId('unified-browse-summary')).toHaveTextContent('275');
 		await fireEvent.change(screen.getByLabelText('Sort Tracks'), { target: { value: 'artist-desc' } });
+		await readyRows();
 		expect(screen.getAllByTestId('unified-browse-row')[0]).toHaveTextContent('Track 000');
+		await readyRows();
 		expect(screen.getAllByTestId('unified-browse-row')[0]).toHaveTextContent('ZZZ Artist');
 		expect(harness.restore).toHaveBeenCalledTimes(1);
 		await fireEvent.click(screen.getByTestId('unified-scope-artists'));
 		await fireEvent.click(screen.getByTestId('unified-scope-tracks'));
 		await waitFor(() => expect(screen.getByLabelText('Sort Tracks')).toHaveValue('artist-desc'));
+		await readyRows();
 		expect(screen.getAllByTestId('unified-browse-row')[0]).toHaveTextContent('Track 000');
 	});
 
@@ -197,20 +212,26 @@ describe('Library public destinations integration', () => {
 		await fireEvent.click(screen.getByTestId('unified-scope-tracks'));
 		await waitFor(() => expect(screen.getByLabelText('Filter Tracks')).toBeEnabled());
 		expect(harness.restore).toHaveBeenCalledWith(expect.anything(), snapshot, undefined, { complete: true });
+		await readyRows();
 		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(275);
 		await fireEvent.input(screen.getByLabelText('Filter Tracks'), { target: { value: 'Needle artist' } });
+		await readyRows();
 		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(1);
+		await readyRows();
 		expect(screen.getByTestId('unified-browse-list')).toHaveTextContent('Track 274');
 		expect(screen.getByTestId('unified-browse-summary')).toHaveTextContent('1 OF 275');
 		await fireEvent.input(screen.getByLabelText('Filter Tracks'), { target: { value: '' } });
 		await fireEvent.change(screen.getByLabelText('Sort Tracks'), { target: { value: 'name-desc' } });
+		await readyRows();
 		expect(screen.getAllByTestId('unified-browse-row')[0]).toHaveTextContent('Track 274');
 		expect(screen.queryByRole('button', { name: /Show next/ })).toBeNull();
+		await readyRows();
 		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(275);
 		expect(harness.restore).toHaveBeenCalledTimes(1);
 		await fireEvent.click(screen.getByTestId('unified-scope-artists'));
 		await fireEvent.click(screen.getByTestId('unified-scope-tracks'));
 		await waitFor(() => expect(screen.getByLabelText('Sort Tracks')).toHaveValue('name-desc'));
+		await readyRows();
 		expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(275);
 		expect(get(harness.navigationPrefsStore).availableDestinations).toContain('tracks');
 		expect(get(harness.navigationPrefsStore).availableDestinations).not.toContain('playlists');
@@ -259,7 +280,9 @@ describe('inline track action cancellation', () => {
 			Object.assign(harness.items[0], { itemKey: 'selected-track', hint: 'action_list', isLoadable: false });
 			await fireEvent.click(screen.getByTestId('unified-scope-tracks'));
 			await waitFor(() => expect(screen.getByLabelText('Filter Tracks')).toBeEnabled());
-			await fireEvent.click(within(screen.getAllByTestId('unified-browse-row')[0]).getByRole('button', { name: 'Queue' }));
+			await readyRows();
+			await fireEvent.click(within(screen.getAllByTestId('unified-browse-row')[0]).getByRole('button'));
+			await fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
 			await waitFor(() => expect(browse).toHaveBeenCalledTimes(1));
 			if (change === 'zone') setSelectedZone('zone-b');
 			else if (change === 'navigation') await fireEvent.click(screen.getByTestId('unified-scope-artists'));
@@ -286,9 +309,12 @@ describe('inline track action cancellation', () => {
 			Object.assign(harness.items[0], { itemKey: 'expired-track', hint: 'action_list', isLoadable: false });
 			await fireEvent.click(screen.getByTestId('unified-scope-tracks'));
 			await waitFor(() => expect(screen.getByLabelText('Filter Tracks')).toBeEnabled());
-			await fireEvent.click(within(screen.getAllByTestId('unified-browse-row')[0]).getByRole('button', { name: 'Queue' }));
-			await waitFor(() => expect(screen.getByTestId('unified-track-status')).toHaveTextContent('expired'));
-			expect(screen.getByTestId('unified-track-status')).toHaveAttribute('role', 'alert');
+			await readyRows();
+			await fireEvent.click(within(screen.getAllByTestId('unified-browse-row')[0]).getByRole('button'));
+			await fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
+			await waitFor(() => expect(screen.getByTestId('unified-browse-view').querySelector('.track-selection-controls [role=status]')).toHaveTextContent('expired'));
+			// Quiet shared feedback still announces the failure through its live status region.
+			expect(screen.getByTestId('unified-browse-view').querySelector('.track-selection-controls [role=status]')).toHaveAttribute('role', 'status');
 			expect(browse).toHaveBeenCalledTimes(1);
 			expect(browse).toHaveBeenCalledWith(expect.objectContaining({ itemKey: 'expired-track' }));
 			expect(harness.restore).toHaveBeenCalledTimes(1);

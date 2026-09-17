@@ -27,8 +27,13 @@ async function rawClick(page: Page, testId: string) {
 	const before = await page.locator(PANE).evaluate(node => node.scrollTop);
 	const box = await page.getByTestId(testId).boundingBox();
 	expect(box).not.toBeNull();
-	await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+	// Assert that focusing the pinned control does not scroll it into view.
+	// Releasing a sort choice then reorders the content; Chromium may preserve
+	// its visible anchor at a different pixel offset in that new ordering.
+	await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+	await page.mouse.down();
 	expect(await page.locator(PANE).evaluate(node => node.scrollTop)).toBe(before);
+	await page.mouse.up();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -103,6 +108,11 @@ test('live collection toolbar takes over from the hidden root toolbar', async ({
 	await page.getByTestId('unified-card').first().click();
 	await page.getByRole('link', { name: 'More albums' }).click();
 	await expect(page.getByTestId('unified-live-album').first()).toBeVisible();
+	await expect.poll(() => page.getByTestId('unified-live-album').first().evaluate(tile => {
+	 const grid = tile.closest('.tiles');
+	 const chunks = [...(grid?.shadowRoot?.querySelectorAll<HTMLElement>('[data-prepared-library-chunk]') ?? [])];
+	 return chunks.length > 0 && chunks.every(chunk => chunk.style.contentVisibility === 'auto' && parseFloat(chunk.style.containIntrinsicBlockSize) > 0);
+	})).toBe(true);
 	await deepScroll(page);
 	await rawClick(page, 'unified-live-collection-sort');
 	await rawClick(page, 'unified-live-collection-sort-option-shuffle');

@@ -54,6 +54,7 @@
  const title = $derived(collection?.label ?? result?.title ?? browseState.snapshot.history.at(-1)?.breadcrumb.title ?? 'Library');
  let renderState = $state<PreparedTrackListState>({ phase: 'preparing', prepared: 0, total: 0 });
  const actionBusy = $derived(Boolean(trackActions?.busy) || preparing || renderState.phase !== 'ready');
+ const rowMoreDisabled = $derived(browseState.phase !== 'ready' || actionBusy || !trackActions?.enabled || !trackActions.onMore);
  const sharedActions = $derived([
   { id: 'play', label: 'Play', run: (rows: BrowseItem[]) => act(rows, 'play-now'), disabled: !trackActions?.enabled || (selected.length > 1 && !trackActions.onBatchAction) },
   { id: 'next', label: 'Add next', run: (rows: BrowseItem[]) => act(rows, 'add-next'), disabled: !trackActions?.enabled || (selected.length > 1 && !trackActions.onBatchAction) },
@@ -114,7 +115,8 @@
   if (kind === 'actions') {
    const control = mount(LibraryActionButton, { target: row, props: {
     icon: 'more', label: 'More', 'aria-label': `More actions for ${item.title}`,
-    onclick: () => { if (browseState.phase === 'ready' && !preparing) trackActions?.onMore(item); }
+    get disabled() { return rowMoreDisabled; },
+    onclick: () => { if (!rowMoreDisabled) trackActions?.onMore(item); }
    } });
    cleanup.push(() => { void unmount(control); });
   }

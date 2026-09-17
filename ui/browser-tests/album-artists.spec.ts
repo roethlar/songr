@@ -81,7 +81,7 @@ test('default, remembered and explicit views coexist; the pinned switch keeps se
 	await page.goto('/library');
 	await expect(page).toHaveURL(/\/library\/album-artists$/);
 	const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('roon-controller-unified-library-prefs')!));
-	expect(Object.keys(saved).sort()).toEqual(['artistView', 'density', 'sorts', 'version']);
+	expect(Object.keys(saved).sort()).toEqual(['albumGrouping', 'artistView', 'density', 'groupByLetter', 'sorts', 'version']);
 	await other.close();
 });
 
@@ -204,9 +204,9 @@ test.describe('exact credit pages', () => {
 
 		await albumLink.click();
 		await expect(page.getByTestId('unified-album-tracks')).toBeVisible();
-		await page.getByTestId('unified-album-play').click();
-		await expect(page.getByTestId('unified-album-action-choices')).toBeVisible();
-		await page.getByTestId('unified-album-action-choices').getByRole('button', { name: 'Cancel' }).click();
+		await page.getByRole('button', { name: /^More actions for album / }).click();
+		await expect(page.getByRole('menu', { name: /^More actions for album / })).toBeVisible();
+		await page.keyboard.press('Escape');
 		await expect.poll(() => new URL(page.url()).pathname).toBe(albumHref);
 		await page.goBack();
 		await expect(page.getByTestId('unified-list-heading')).toHaveText('AC/DC / Björk; 100%');

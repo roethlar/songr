@@ -1,5 +1,10 @@
 import { fireEvent, render, screen, within } from '@testing-library/svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installLibraryLayout, readyBrowseRows } from '../../../test/libraryLayout';
+
+let layout: ReturnType<typeof installLibraryLayout>;
+beforeEach(() => { layout = installLibraryLayout(); });
+afterEach(() => layout.restore());
 
 import type { UnifiedBrowseState } from '$lib/library/UnifiedBrowseController';
 import UnifiedBrowseView from '../UnifiedBrowseView.svelte';
@@ -63,7 +68,7 @@ describe('UnifiedBrowseView', () => {
    state, displayItems: [match], onItem, onBack: vi.fn(), onForward: vi.fn(), onSearchPrompt: vi.fn(),
    collection: { label: 'Tracks', filter: 'rock', sort: 'name-desc', matchCount: 51, onFilter, onSort, onRetry: vi.fn() }
   } });
-  expect(screen.getAllByTestId('unified-browse-row')).toHaveLength(1);
+  await readyBrowseRows(1);
   expect(screen.getByTestId('unified-browse-summary')).toHaveTextContent('51 OF 102');
   expect(screen.queryByTestId('unified-browse-path')).toBeNull();
   expect(screen.queryByTestId('unified-browse-more')).toBeNull();
@@ -102,8 +107,9 @@ describe('UnifiedBrowseView', () => {
 		expect(screen.queryByTestId('unified-browse-empty')).toBeNull();
 	});
 
-	it('renders library rows with named navigation controls', () => {
+	it('renders library rows with named navigation controls', async () => {
 		mount();
+		await readyBrowseRows(2);
 
 		expect(screen.getByTestId('unified-browse-title')).toHaveTextContent('Library');
 		expect(screen.getByTestId('unified-browse-summary')).toHaveTextContent('2 OF 102');
@@ -117,6 +123,7 @@ describe('UnifiedBrowseView', () => {
 
 	it('routes hierarchy, input-prompt, and history clicks explicitly', async () => {
 		const harness = mount();
+		await readyBrowseRows(2);
 		const rows = screen.getAllByTestId('unified-browse-row');
 
 		await fireEvent.click(screen.getByRole('button', { name: 'Open Tracks' }));
@@ -147,6 +154,7 @@ describe('UnifiedBrowseView', () => {
 			}
 		};
 		const harness = mount(playable);
+		await readyBrowseRows(1);
 
 		expect(harness.onItem).not.toHaveBeenCalled();
 		const row = screen.getByTestId('unified-browse-row');
@@ -165,14 +173,53 @@ describe('UnifiedBrowseView', () => {
 		const style = (value: string) => value.match(/<style\b[^>]*>[\s\S]*?<\/style>/)?.[0];
 
 		expect(style(source)).toBeDefined();
-		expect(style(source)).toContain('var(--unified-bg)');
-		expect(style(source)).toContain('var(--unified-accent)');
+		expect(style(source)).toContain('var(--control)');
+		expect(style(source)).toContain('var(--accent)');
 		expect(style('<style lang="postcss">.x{color:var(--text)}</style>')).toContain('var(--');
 	});
 });
 
 
 describe('explicit track controls', () => {
+	it('updates an unknown row More capability without replacing its prepared row', async () => {
+		const item = { title: 'Unknown action', itemKey: 'exact', hint: 'action_list' as const, isLoadable: false, isPlayable: false };
+		const state = readyState({ result: { ...readyState().result!, items: [item], count: 1, totalCount: 1 } });
+		const onMore = vi.fn();
+		const actions = { enabled: false, busy: false, status: null, error: false, onMore, onAction: vi.fn(), onCloseMore: vi.fn() };
+		const rendered = render(UnifiedBrowseView, { props: { state, trackActions: actions, onItem: vi.fn(), onBack: vi.fn(), onForward: vi.fn(), onSearchPrompt: vi.fn() } });
+		const [row] = await readyBrowseRows(1);
+		const more = screen.getByRole('button', { name: 'More actions for Unknown action' });
+		expect(more).toBeDisabled();
+		await fireEvent.click(more);
+		expect(onMore).not.toHaveBeenCalled();
+		await rendered.rerender({ trackActions: { ...actions, enabled: true } });
+		await readyBrowseRows(1);
+		expect(screen.getByTestId('unified-browse-row')).toBe(row);
+		expect(more).toBeEnabled();
+		await fireEvent.click(more);
+		expect(onMore).toHaveBeenCalledExactlyOnceWith(item);
+		for (const props of [
+			{ trackActions: { ...actions, enabled: true, busy: true } },
+			{ trackActions: { ...actions, enabled: true }, state: { ...state, phase: 'loading' as const } },
+			{ state, trackActions: undefined }
+		]) {
+			await rendered.rerender(props);
+			await readyBrowseRows(1);
+			expect(screen.getByTestId('unified-browse-row')).toBe(row);
+			expect(more).toBeDisabled();
+			await fireEvent.click(more);
+			expect(onMore).toHaveBeenCalledTimes(1);
+		}
+		await rendered.rerender({ state, trackActions: { ...actions, enabled: true }, preparing: true });
+		expect(more).toBeDisabled();
+		await fireEvent.click(more);
+		expect(onMore).toHaveBeenCalledTimes(1);
+		await rendered.rerender({ preparing: false });
+		await readyBrowseRows(1);
+		expect(screen.getByTestId('unified-browse-row')).toBe(row);
+		expect(more).toBeEnabled();
+	});
+
 	it.each(['library', 'search'] as const)('uses explicit album-style controls in %s Tracks with missing itemType', async (context) => {
 		const item = { title: 'Same title', subtitle: 'Same artist', itemKey: 'selected-copy', hint: 'action_list', isLoadable: false, isPlayable: false };
 		let state = readyState({ result: { title: 'Tracks', level: 2, offset: 0, count: 1, totalCount: 1, items: [item] } });
@@ -184,19 +231,19 @@ describe('explicit track controls', () => {
 				onFilter: vi.fn(), onSort: vi.fn(), onRetry: vi.fn() } : undefined,
 			trackActions: { enabled: true, busy: false, status: null, error: false, onAction, onFavorite, onMore: vi.fn(), onCloseMore: vi.fn() }
 		} });
-		const row = screen.getByTestId('unified-browse-row');
+		const [row] = await readyBrowseRows(1);
 		await fireEvent.click(row);
 		expect(onItem).not.toHaveBeenCalled();
 		expect(onAction).not.toHaveBeenCalled();
 		expect(row.classList.contains('tr')).toBe(true);
-		await fireEvent.click(within(row).getByRole('button', { name: 'Play' }));
+		const controls = screen.getByRole('group', { name: 'Selected tracks' });
+		await fireEvent.click(within(controls).getByRole('button', { name: 'Play' }));
 		expect(onAction).toHaveBeenLastCalledWith(item, 'play-now');
-		await fireEvent.click(within(row).getByRole('button', { name: 'Queue' }));
+		await fireEvent.click(within(controls).getByRole('button', { name: 'Queue' }));
 		expect(onAction).toHaveBeenLastCalledWith(item, 'queue');
-		await fireEvent.click(within(row).getByLabelText('More actions for Same title'));
-		await fireEvent.click(within(row).getByRole('button', { name: 'Add Next' }));
+		await fireEvent.click(within(controls).getByRole('button', { name: 'Add next' }));
 		expect(onAction).toHaveBeenLastCalledWith(item, 'add-next');
-		await fireEvent.click(screen.getByRole('button', { name: 'Bookmark' }));
+		await fireEvent.click(within(controls).getByRole('button', { name: 'Bookmark selected items' }));
 		expect(onFavorite).toHaveBeenCalledWith(item);
 		expect(onItem).not.toHaveBeenCalled();
 	});

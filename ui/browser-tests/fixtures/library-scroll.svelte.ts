@@ -61,7 +61,9 @@ import type { LibraryDestinationsState } from '../../src/lib/stores/libraryDesti
 import type { ClassicBrowseApiTransaction } from '../../src/lib/api/client';
 import type { BrowseItem, BrowseResult } from '@shared/types';
 import { setCoreStatus } from '../../src/lib/stores/coreStore';
-import { setTheme } from '../../src/lib/stores/themeStore';
+import { initializeTheme, setTheme, type ThemeMode } from '../../src/lib/stores/themeStore';
+import { presentationSettingsStore } from '../../src/lib/stores/presentationSettingsStore';
+import { DEFAULT_PRESENTATION_SETTINGS } from '@shared/presentationSettings';
 
 // Scroll restoration is a LAYOUT behaviour: the browser clamps `scrollTop` to
 // the container's current scrollHeight, so a restore that runs before the list
@@ -70,6 +72,8 @@ import { setTheme } from '../../src/lib/stores/themeStore';
 // mounts the whole mode against a library big enough to actually scroll.
 
 const fixtureParams = new URLSearchParams(window.location.search);
+// Match the outer shell's preference initialization, including after route reloads.
+initializeTheme();
 const publicVariant = fixtureParams.get('public') === '1';
 const recentVariant = fixtureParams.get('recent') === '1';
 
@@ -646,6 +650,9 @@ const prefsStore = createUnifiedLibraryPrefsStore({
 // entry tests use a fresh preference, just like the production host.
 if (window.location.pathname === '/fixtures/library-scroll.html') prefsStore.setArtistView('all-artists');
 if (presentation?.albumsSort) prefsStore.setSort('albums', presentation.albumsSort);
+if (presentation?.albumGrouping) prefsStore.setAlbumGrouping(presentation.albumGrouping);
+if (presentation?.interfaceMotion !== undefined)
+	presentationSettingsStore.applySnapshot({ ...DEFAULT_PRESENTATION_SETTINGS, interfaceMotion: presentation.interfaceMotion });
 
 function fixtureActionState(overrides: Partial<AlbumActionState> = {}): AlbumActionState {
 	return {
@@ -858,7 +865,6 @@ mount(UnifiedLibraryMode, {
 });
 
 if (publicVariant) {
-	setTheme('dark');
 	setCoreStatus({ status: 'paired', core: { id: 'browser-fixture-core', displayName: 'Fixture', displayVersion: '1' } });
 	mount(AppSettingsMenu, { target: document.body, props: { navigationStore: navigationPrefsStore, fetchFn: fixtureFetch,
 		resolveAdvancedSettings: () => fixtureParams.get('desktop') === '1' ? () => {} : null } });
@@ -1006,9 +1012,13 @@ const fixture = {
 		for (const album of albums) if (album.artist === credit) album.artist = replacement;
 		return replaceRetiredLibraryGeneration();
 	},
-	setPresentation(theme: 'dark' | 'light', density: UnifiedLibraryDensity) {
+	setPresentation(theme: ThemeMode, density: UnifiedLibraryDensity) {
 		document.documentElement.dataset.theme = theme;
 		prefsStore.setDensity(density);
+	},
+	setInterfaceMotion(value: boolean) {
+		const revision = (get(presentationSettingsStore).snapshot?.revision ?? 0) + 1;
+		presentationSettingsStore.applySnapshot({ ...DEFAULT_PRESENTATION_SETTINGS, revision, interfaceMotion: value });
 	},
 	setActionScript(steps: FixtureActionStep[]) {
 		actionScript = [...steps];
@@ -1077,7 +1087,7 @@ declare global {
 	interface Window {
 		libraryScrollFixtureSize?: { artists: number; albums: number };
 		libraryScrollFixtureVariant?: 'album-credits';
-		libraryScrollFixturePresentation?: { artwork?: boolean; singleLetter?: boolean; longTitles?: boolean; albumsSort?: 'az' | 'shuffle' };
+		libraryScrollFixturePresentation?: { artwork?: boolean; singleLetter?: boolean; longTitles?: boolean; albumsSort?: 'az' | 'shuffle'; albumGrouping?: 'artist'; interfaceMotion?: boolean };
 		libraryScrollFixtureColdStart?: boolean;
 		libraryScrollFixture: typeof fixture;
 	}

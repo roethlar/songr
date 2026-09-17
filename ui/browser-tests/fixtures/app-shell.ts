@@ -13,6 +13,7 @@ const groupedZone: Zone = {
   zone_id: 'fixture-zone', display_name: 'Living Room and Kitchen', state: 'stopped', seek_position: 0,
   is_play_allowed: true, is_pause_allowed: false, is_previous_allowed: true,
   is_next_allowed: true, is_seek_allowed: false,
+  settings: { shuffle: true, auto_radio: false, loop: 'disabled' },
   outputs: [
     { output_id: 'fixture-living-room', display_name: 'Living Room', volume: { type: 'number', min: 0, max: 100, value: 35, step: 1, is_muted: false } },
     { output_id: 'fixture-kitchen', display_name: 'Kitchen' }

@@ -39,24 +39,40 @@ describe('themeStore', () => {
 		}
 	});
 
-	it('applies and persists an explicit theme', async () => {
+	it.each(['dark', 'light', 'laser', 'miami', 'pop'] as const)('applies and persists %s', async theme => {
 		const { setTheme, themeStore } = await import('../themeStore');
 
-		setTheme('light');
+		setTheme(theme);
 
-		expect(get(themeStore)).toBe('light');
-		expect(document.documentElement.dataset.theme).toBe('light');
-		expect(storage.getItem('roon-controller-theme')).toBe('light');
+		expect(get(themeStore)).toBe(theme);
+		expect(document.documentElement.dataset.theme).toBe(theme);
+		expect(storage.getItem('roon-controller-theme')).toBe(theme);
 	});
 
-	it('initializes from persisted preference before the OS preference', async () => {
-		storage.setItem('roon-controller-theme', 'light');
+	it.each(['dark', 'light', 'laser', 'miami', 'pop'] as const)('prepaints and restores %s before the OS preference', async theme => {
+		storage.setItem('roon-controller-theme', theme);
+		vi.mocked(window.matchMedia).mockReturnValue({ matches: theme !== 'light' } as MediaQueryList);
+		const appHtml = readFileSync(resolve(process.cwd(), 'src/app.html'), 'utf8');
+		const bootstrap = appHtml.match(/<script>([\s\S]*?)<\/script>/)![1];
+		new Function('window', 'document', 'localStorage', bootstrap)(window, document, storage);
+		expect(document.documentElement.dataset.theme).toBe(theme);
 		const { initializeTheme, themeStore } = await import('../themeStore');
 
 		initializeTheme();
 
-		expect(get(themeStore)).toBe('light');
-		expect(document.documentElement.dataset.theme).toBe('light');
+		expect(get(themeStore)).toBe(theme);
+		expect(document.documentElement.dataset.theme).toBe(theme);
+	});
+
+	it.each([false, true])('falls back from an unknown saved theme with OS light=%s', async light => {
+		storage.setItem('roon-controller-theme', 'ultraviolet');
+		vi.mocked(window.matchMedia).mockReturnValue({ matches: light } as MediaQueryList);
+		const appHtml = readFileSync(resolve(process.cwd(), 'src/app.html'), 'utf8');
+		new Function('window', 'document', 'localStorage', appHtml.match(/<script>([\s\S]*?)<\/script>/)![1])(window, document, storage);
+		expect(document.documentElement.dataset.theme).toBe(light ? 'light' : 'dark');
+		const { initializeTheme, themeStore } = await import('../themeStore');
+		initializeTheme();
+		expect(get(themeStore)).toBe(light ? 'light' : 'dark');
 	});
 
 	it('honors the OS light preference when no preference is stored', async () => {

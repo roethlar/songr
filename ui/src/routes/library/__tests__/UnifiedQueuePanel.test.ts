@@ -1,3 +1,4 @@
+import { clickSelectionAction } from '../../../test/libraryLayout';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -99,7 +100,8 @@ describe('UnifiedQueuePanel', () => {
 
 	it('plays from the selected queue row through the existing socket command', async () => {
 		render(UnifiedQueuePanel, { props: { onclose: vi.fn(), onlibraryintent: vi.fn() } });
-		await fireEvent.click(await screen.findByRole('button', { name: 'Play from Bad' }));
+		await fireEvent.click(await screen.findByRole('button', { name: 'Select Bad' }));
+		await clickSelectionAction('Play from here');
 
 		await waitFor(() => expect(callsFor('queue:play-from-here')).toHaveLength(1));
 		expect(callsFor('queue:play-from-here')[0][2]).toEqual({
@@ -140,7 +142,7 @@ describe('UnifiedQueuePanel', () => {
 			await screen.findByRole('button', { name: 'Select A Sort of Homecoming' })
 		);
 		expect(onlibraryintent).not.toHaveBeenCalled();
-		await fireEvent.click(screen.getByRole('button', { name: 'Find in Library' }));
+		await clickSelectionAction('Find in Library');
 		expect(onlibraryintent).toHaveBeenLastCalledWith({
 			kind: 'track',
 			destination: 'search',
@@ -188,13 +190,16 @@ describe('UnifiedQueuePanel — songr theme', () => {
 	}
 
 	function ruleBody(source: string, selector: string): string {
-		const selectorStart = source.indexOf(selector);
-		expect(selectorStart).toBeGreaterThan(-1);
-		const bodyStart = source.indexOf('{', selectorStart);
-		const bodyEnd = source.indexOf('}', bodyStart);
-		expect(bodyStart).toBeGreaterThan(selectorStart);
-		expect(bodyEnd).toBeGreaterThan(bodyStart);
-		return source.slice(bodyStart + 1, bodyEnd);
+		const style = document.createElement('style');
+		style.textContent = styleBlock(source).replace(/<\/?style[^>]*>/g, '');
+		document.head.append(style);
+		try {
+			const rule = [...style.sheet!.cssRules].find(rule =>
+				'selectorText' in rule && (rule as CSSStyleRule).selectorText.split(',').some(value => value.trim() === selector)
+			) as CSSStyleRule | undefined;
+			expect(rule, `Missing focus rule for ${selector}`).toBeDefined();
+			return rule!.style.cssText;
+		} finally { style.remove(); }
 	}
 
 	function styleBlock(source: string): string {
@@ -210,7 +215,7 @@ describe('UnifiedQueuePanel — songr theme', () => {
 	it('keeps a distinct outline on focused active playback settings', async () => {
 		const source = await componentSource();
 
-		expect(ruleBody(source, '.queue-controls button:focus-visible,')).toContain(
+		expect(ruleBody(source, '.queue-controls button:focus-visible')).toContain(
 			'outline: 1px solid var(--songr-accent)'
 		);
 		expect(ruleBody(source, '.queue-controls button.active:focus-visible')).toContain(

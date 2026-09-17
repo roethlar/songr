@@ -196,7 +196,7 @@ test('genre live hierarchy keeps one renderer through sections, subgenre, artist
 	await expect(page.getByTestId('unified-artist-name')).toHaveText(artistName);
 });
 
-test('palette composer keeps live composition and recording addresses and cancels actions read-only', async ({
+test('palette composer keeps composition addresses and selects recordings without playback', async ({
 	page,
 	context
 }) => {
@@ -220,15 +220,19 @@ test('palette composer keeps live composition and recording addresses and cancel
 	await expectLiveCollection(freshPage, 'composer', 'Philip Glass');
 	await freshPage.close();
 
-	await page.getByTestId('unified-live-actions').click();
-	const choices = page.getByTestId('unified-live-action-choices');
+	await page.getByRole('button', { name: 'More actions for Play Composer' }).click();
+	const choices = page.getByRole('menu', { name: 'Actions for Play Composer' });
 	await expect(choices).toBeVisible();
-	await choices.getByRole('button', { name: 'Cancel' }).click();
+	await page.keyboard.press('Escape');
 	await expect(choices).toHaveCount(0);
 	await expect
 		.poll(() => page.evaluate(() => window.libraryScrollFixture.actionExecutions))
 		.toBe(0);
 
+	// Search drills retain their query. Start durable route/history checks from the
+	// independently reloadable composer address.
+	await page.goto(composerUrl);
+	await expectLiveCollection(page, 'composer', 'Philip Glass');
 	const compositionLink = page.getByTestId('unified-live-composition-0');
 	const compositionPagePromise = context.waitForEvent('page');
 	await compositionLink.click({ modifiers: [NEW_TAB_MODIFIER] });
@@ -241,22 +245,21 @@ test('palette composer keeps live composition and recording addresses and cancel
 	await expectLiveCollection(page, 'composition', 'Glassworks');
 	await page.reload();
 	await expectLiveCollection(page, 'composition', 'Glassworks');
-	const recordingLink = page.getByTestId('unified-live-recording-0');
-	const recordingHref = await recordingLink.getAttribute('href');
-	expect(recordingHref).not.toBeNull();
-	await recordingLink.click();
-	await expect.poll(() => new URL(page.url()).pathname).toBe(
-		new URL(recordingHref!, page.url()).pathname
-	);
-	await expectLiveCollection(page, 'track', 'Opening');
-	await page.reload();
-	await expectLiveCollection(page, 'track', 'Opening');
+	const recording = page.getByTestId('unified-live-recording-0');
+	await expect(recording).not.toHaveAttribute('href');
+	const compositionUrl = page.url();
+	await recording.getByRole('button', { name: 'Select Opening' }).click();
+	await expect(recording.getByRole('button', { name: 'Select Opening' })).toHaveAttribute('aria-pressed', 'true');
+	expect(page.url()).toBe(compositionUrl);
+	await expectNoRecordingPlayback();
 	await page.goBack();
-	await expectLiveCollection(page, 'composition', 'Glassworks');
+	await expectLiveCollection(page, 'composer', 'Philip Glass');
 	await page.goForward();
-	await expectLiveCollection(page, 'track', 'Opening');
-	await page.goBack();
 	await expectLiveCollection(page, 'composition', 'Glassworks');
+	async function expectNoRecordingPlayback() {
+		expect(await page.evaluate(() => window.libraryScrollFixture.actionExecutions)).toBe(0);
+	}
+
 	await page
 		.getByTestId('unified-live-collection-page')
 		.getByRole('button', { name: /^←/u })

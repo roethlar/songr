@@ -429,6 +429,7 @@ export interface Harness {
 	artistViewPreference?: ArtistView | null;
 	sessionClient?: SessionClient;
 	withContext?: boolean;
+	fetchFn?: typeof fetch;
 	/** The Core's own identity, which is what the live roots load asks for. */
 	fetchCoreStatus?: () => Promise<CoreStatusResponse>;
 	/**
@@ -585,7 +586,7 @@ export function mountMode(options: Harness = {}) {
 		favoritesDataStore: favoritesStore as never,
 		loadFavoritesData: (options.loadFavoritesData ?? vi.fn(async () => {})) as never,
 		removeFavoriteData: (options.removeFavoriteData ?? vi.fn(async () => {})) as never,
-		fetchFn: (() => {
+		fetchFn: options.fetchFn ?? (() => {
 			throw new Error('modes must not fetch directly');
 		}) as unknown as typeof fetch,
 		...(options.albumController ? { albumController: options.albumController } : {}),

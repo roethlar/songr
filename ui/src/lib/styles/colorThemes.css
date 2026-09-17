@@ -1,0 +1,266 @@
+/* Optional color themes. Defaults remain in app.css. */
+
+html[data-theme='laser'] {
+	color-scheme: dark;
+	--songr-theme-bg: #000000;
+	--songr-theme-panel: #0c050e;
+	--songr-theme-control: #190b1d;
+	--songr-theme-line: #762463;
+	--songr-theme-text: #fff7fd;
+	--songr-theme-soft: #d8bace;
+	--songr-theme-dim: #bea4b6;
+	--songr-theme-accent: #ff35ce;
+	--songr-theme-selection: #f4ff45;
+	--songr-theme-play: #50ff76;
+	--songr-theme-on: #170010;
+	--songr-theme-hover: #29162a;
+	--songr-theme-extra: #48ecff;
+	--songr-theme-canvas: radial-gradient(ellipse at 95% 0%, #00bf701b, transparent 45%), radial-gradient(ellipse at 0% 5%, #ff00a828, transparent 45%);
+}
+
+html[data-theme='miami'] {
+	color-scheme: dark;
+	--songr-theme-bg: #160521;
+	--songr-theme-panel: #310b39;
+	--songr-theme-control: #34113f;
+	--songr-theme-line: #a03889;
+	--songr-theme-text: #fff5fb;
+	--songr-theme-soft: #e0c3dd;
+	--songr-theme-dim: #c8a9c4;
+	--songr-theme-accent: #ff68bd;
+	--songr-theme-selection: #ffe991;
+	--songr-theme-play: #5bfff2;
+	--songr-theme-on: #24081c;
+	--songr-theme-hover: #55214b;
+	--songr-theme-extra: #bd9aff;
+	--songr-theme-canvas: radial-gradient(ellipse at 95% 0%, #006e9d55, transparent 60%), radial-gradient(ellipse at 0% 50%, #c5006638, transparent 60%);
+}
+
+html[data-theme='pop'] {
+	color-scheme: light;
+	--songr-theme-bg: #fff2b0;
+	--songr-theme-panel: #ffdf39;
+	--songr-theme-control: #ffdfe6;
+	--songr-theme-line: #202334;
+	--songr-theme-text: #202334;
+	--songr-theme-soft: #514436;
+	--songr-theme-dim: #625142;
+	--songr-theme-accent: #263bb8;
+	--songr-theme-selection: #a01c52;
+	--songr-theme-play: #086243;
+	--songr-theme-on: #ffffff;
+	--songr-theme-hover: #ffd0de;
+	--songr-theme-extra: #7ff0bf;
+	--songr-theme-canvas: none;
+}
+
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) {
+	--songr-app-bg: var(--songr-theme-bg);
+	--songr-bg: var(--songr-theme-bg);
+	--songr-rail: var(--songr-theme-bg);
+	--songr-header: var(--songr-theme-panel);
+	--songr-panel: var(--songr-theme-panel);
+	--songr-palette: var(--songr-theme-panel);
+	--songr-queue-bg: var(--songr-theme-panel);
+	--songr-inset: var(--songr-theme-control);
+	--songr-surface-11: var(--songr-theme-control);
+	--songr-control: var(--songr-theme-control);
+	--songr-raise: var(--songr-theme-control);
+	--songr-surface-16: var(--songr-theme-control);
+	--songr-hover: var(--songr-theme-hover);
+	--songr-hover-subtle: var(--songr-theme-hover);
+	--songr-surface-19: var(--songr-theme-hover);
+	--songr-surface-1b: var(--songr-theme-hover);
+	--songr-surface-1d: var(--songr-theme-hover);
+	--songr-surface-20: var(--songr-theme-hover);
+	--songr-browse-hover: var(--songr-theme-hover);
+	--songr-line: var(--songr-theme-line);
+	--songr-line-subtle: var(--songr-theme-line);
+	--songr-line-07: var(--songr-theme-line);
+	--songr-line-10: var(--songr-theme-line);
+	--songr-line-12: var(--songr-theme-line);
+	--songr-line-13: var(--songr-theme-line);
+	--songr-line-15: var(--songr-theme-line);
+	--songr-line-16: var(--songr-theme-line);
+	--songr-line-strong: var(--songr-theme-line);
+	--songr-line-20: var(--songr-theme-line);
+	--songr-line-22: var(--songr-theme-line);
+	--songr-keyline: var(--songr-theme-line);
+	--songr-scrollbar: var(--songr-theme-line);
+	--songr-scrollbar-rail: var(--songr-theme-line);
+	--songr-queue-scrollbar: var(--songr-theme-line);
+	--songr-disabled: var(--songr-theme-line);
+	--songr-text: var(--songr-theme-text);
+	--songr-text-high: var(--songr-theme-text);
+	--songr-text-90: var(--songr-theme-text);
+	--songr-list-text: var(--songr-theme-text);
+	--songr-result-text: var(--songr-theme-text);
+	--songr-queue-text: var(--songr-theme-text);
+	--songr-text-mid: var(--songr-theme-text);
+	--songr-chip-text: var(--songr-theme-text);
+	--songr-control-text: var(--songr-theme-text);
+	--songr-copy: var(--songr-theme-text);
+	--songr-settings-copy: var(--songr-theme-text);
+	--songr-text-70: var(--songr-theme-text);
+	--songr-soft: var(--songr-theme-soft);
+	--songr-text-64: var(--songr-theme-soft);
+	--songr-text-60: var(--songr-theme-soft);
+	--songr-text-58: var(--songr-theme-soft);
+	--songr-text-56: var(--songr-theme-soft);
+	--songr-subtle: var(--songr-theme-dim);
+	--songr-dim: var(--songr-theme-dim);
+	--songr-text-54: var(--songr-theme-dim);
+	--songr-text-52: var(--songr-theme-dim);
+	--songr-text-48: var(--songr-theme-dim);
+	--songr-text-42: var(--songr-theme-dim);
+	--songr-kbd: var(--songr-theme-dim);
+	--songr-hint: var(--songr-theme-dim);
+	--songr-accent: var(--songr-theme-accent);
+	--songr-accent-bright: var(--songr-theme-accent);
+	--songr-unified-accent: var(--songr-theme-accent);
+	--songr-on-accent: var(--songr-theme-on);
+	--songr-selection: var(--songr-theme-selection);
+	--songr-playback: var(--songr-theme-play);
+}
+
+html[data-theme='pop'] {
+	--songr-success: #13725a;
+	--songr-success-strong: #13725a;
+	--songr-success-muted: #13725a;
+	--songr-error: #b0243c;
+	--songr-error-soft: #b0243c;
+	--songr-error-strong: #b0243c;
+	--songr-error-border: #b0243c;
+	--songr-scrim: rgba(32,35,52,.48);
+	--songr-scrim-soft: rgba(32,35,52,.34);
+	--songr-scrim-72: rgba(32,35,52,.49);
+	--songr-scrim-74: rgba(32,35,52,.50);
+	--songr-scrim-75: rgba(32,35,52,.51);
+	--songr-scrim-78: rgba(32,35,52,.53);
+	--songr-scrim-88: rgba(32,35,52,.60);
+	--songr-notice-bg: #ffdf39;
+	--songr-shadow: rgba(28,45,68,.14);
+	--songr-shadow-soft: rgba(28,45,68,.10);
+}
+
+/* Accepted color and surface treatments; no layout or automatic motion changes. */
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-surface .u-main { background-image:var(--songr-theme-canvas); background-attachment:local; }
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-surface .sc:nth-child(4n+1),
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-surface .tile:nth-child(4n+1) { --songr-frame:var(--songr-accent); }
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-surface .sc:nth-child(4n+2),
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-surface .tile:nth-child(4n+2) { --songr-frame:var(--songr-selection); }
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-surface .sc:nth-child(4n+3),
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-surface .tile:nth-child(4n+3) { --songr-frame:var(--songr-playback); }
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-surface .sc:nth-child(4n),
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-surface .tile:nth-child(4n) { --songr-frame:var(--songr-theme-extra); }
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-surface [data-track-select-row].is-track-selected {
+ background:linear-gradient(90deg,color-mix(in srgb,var(--songr-selection) 17%,var(--songr-bg)),color-mix(in srgb,var(--songr-selection) 5%,var(--songr-bg)) 80%);
+ box-shadow:inset 3px 0 var(--songr-selection); border-radius:3px;
+}
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-surface .sc { font-weight:600; }
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-title { color:var(--songr-selection); }
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-transport-controls button.big { background:var(--songr-playback); color:var(--songr-bg); border-color:var(--songr-playback); }
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .seek-transport .seek-fill { background:linear-gradient(90deg,var(--songr-theme-accent),var(--songr-selection),var(--songr-playback)); }
+
+/* Colored light is visible on every core interaction surface. No automatic motion. */
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .bar {
+ border-bottom-color:var(--songr-accent);
+ box-shadow:0 1px 12px color-mix(in srgb,var(--songr-accent) 38%,transparent);
+ background:linear-gradient(95deg,color-mix(in srgb,var(--songr-accent) 9%,var(--songr-header)),var(--songr-header) 55%,color-mix(in srgb,var(--songr-playback) 8%,var(--songr-header)));
+}
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .brand { filter:drop-shadow(0 0 3px var(--songr-accent)) drop-shadow(0 0 8px var(--songr-accent)); }
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .sc {
+ color:var(--songr-frame); border-color:var(--songr-frame);
+ background:color-mix(in srgb,var(--songr-frame) 7%,var(--songr-bg));
+ box-shadow:0 0 9px color-mix(in srgb,var(--songr-frame) 32%,transparent),inset 0 0 8px color-mix(in srgb,var(--songr-frame) 9%,transparent);
+ text-shadow:0 0 8px color-mix(in srgb,var(--songr-frame) 55%,transparent);
+}
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .sc.on {
+ background:var(--songr-accent); border-color:var(--songr-accent); color:var(--songr-on-accent);
+ box-shadow:0 0 11px color-mix(in srgb,var(--songr-accent) 75%,transparent),0 0 24px color-mix(in srgb,var(--songr-accent) 28%,transparent); text-shadow:none;
+}
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .sc:hover { box-shadow:0 0 18px color-mix(in srgb,var(--songr-frame) 65%,transparent); }
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface h2 { color:var(--songr-selection); text-shadow:0 0 14px color-mix(in srgb,var(--songr-selection) 45%,transparent); }
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .tile .art {
+ outline:1px solid color-mix(in srgb,var(--songr-frame) 85%,transparent);
+ box-shadow:0 0 8px color-mix(in srgb,var(--songr-frame) 38%,transparent),0 0 18px color-mix(in srgb,var(--songr-frame) 10%,transparent);
+}
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .item-page-body .pleft .art {
+ outline:2px solid var(--songr-accent);
+ box-shadow:0 0 12px color-mix(in srgb,var(--songr-accent) 80%,transparent),0 0 34px color-mix(in srgb,var(--songr-playback) 18%,transparent);
+}
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .library-action-button {
+ background:color-mix(in srgb,var(--songr-accent) 9%,var(--songr-bg));
+ box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--songr-accent) 50%,transparent),0 0 7px color-mix(in srgb,var(--songr-accent) 17%,transparent);
+}
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .library-action-button[aria-label="Play"] {
+ background:var(--songr-playback); color:var(--songr-bg); box-shadow:0 0 12px color-mix(in srgb,var(--songr-playback) 50%,transparent);
+}
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .is-track-selected [data-track-select-target] { text-shadow:0 0 9px color-mix(in srgb,var(--songr-selection) 40%,transparent); }
+html:is([data-theme='laser'], [data-theme='miami']) .play-bar.unified {
+ background:linear-gradient(100deg,color-mix(in srgb,var(--songr-theme-accent) 12%,var(--songr-bg)),var(--songr-bg) 50%,color-mix(in srgb,var(--songr-playback) 10%,var(--songr-bg)));
+ border-top-color:var(--songr-playback); box-shadow:0 -1px 13px color-mix(in srgb,var(--songr-playback) 22%,transparent);
+}
+html:is([data-theme='laser'], [data-theme='miami']) .unified-transport-controls button.big { box-shadow:0 0 12px color-mix(in srgb,var(--songr-playback) 65%,transparent),0 0 26px color-mix(in srgb,var(--songr-playback) 18%,transparent); }
+html:is([data-theme='laser'], [data-theme='miami']) .unified-queue { color:var(--songr-accent); border-color:var(--songr-accent); box-shadow:0 0 9px color-mix(in srgb,var(--songr-accent) 32%,transparent); }
+html:is([data-theme='laser'], [data-theme='miami']) .seek-transport .seek-track { box-shadow:0 -1px 11px color-mix(in srgb,var(--songr-selection) 26%,transparent); }
+
+/* Graphic, bright and deliberately flat. */
+html[data-theme='pop'] .unified-surface .bar { border-bottom:2px solid #202334; }
+html[data-theme='pop'] .unified-surface .scopes { background:var(--songr-bg); }
+html[data-theme='pop'] .unified-surface .sc { border-color:#202334; color:#202334; box-shadow:3px 3px 0 #202334; background:#ffd9e9; }
+html[data-theme='pop'] .unified-surface .sc:nth-child(3n+1) { background:#a5efcf; }
+html[data-theme='pop'] .unified-surface .sc:nth-child(3n+2) { background:#e0d0ff; }
+html[data-theme='pop'] .unified-surface .sc.on { color:#fff; background:#263bb8; }
+html[data-theme='pop'] .unified-surface h2 { color:#263bb8; }
+html[data-theme='pop'] .unified-surface .art { outline:1px solid #202334; box-shadow:5px 5px 0 #202334; }
+html[data-theme='pop'] .unified-surface .library-action-button { background:#ffd9e9; box-shadow:inset 0 0 0 1px #202334; color:#263bb8; }
+html[data-theme='pop'] .unified-surface .library-action-button[aria-label="Play"] { color:#fff; background:#086243; }
+html[data-theme='pop'] .unified-surface [data-track-select-row].is-track-selected { background:#ffd8e8; box-shadow:inset 4px 0 #a01c52; }
+html[data-theme='pop'] .play-bar.unified { --songr-soft:#e1e4ff; --songr-dim:#cdd3ff; --songr-text:#fff; --songr-selection:#fff088; --songr-playback:#a5efcf; color:#fff; background:#263bb8; border-top:2px solid #202334; }
+html[data-theme='pop'] .unified-transport-controls button.big { color:#202334; box-shadow:3px 3px 0 #202334; }
+html[data-theme='pop'] .unified-queue { color:#202334; background:#ffb2d2; border-color:#202334; box-shadow:3px 3px 0 #202334; }
+html[data-theme='pop'] .seek-transport .seek-fill { background:#ffb2d2; }
+
+/* Default Artists view: preserve the production rows, counts and alphabet rail. */
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .gl {
+ color:var(--songr-accent);
+ background:linear-gradient(90deg,color-mix(in srgb,var(--songr-accent) 11%,transparent),transparent 75%);
+ border-bottom-color:color-mix(in srgb,var(--songr-accent) 45%,transparent);
+ text-shadow:0 0 10px color-mix(in srgb,var(--songr-accent) 65%,transparent);
+ box-shadow:0 1px 6px color-mix(in srgb,var(--songr-accent) 13%,transparent);
+}
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .ac { color:var(--songr-selection); }
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .ad { border-color:color-mix(in srgb,var(--songr-accent) 25%,var(--songr-bg)); }
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .arow:hover,
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .arow:focus-visible {
+ background:color-mix(in srgb,var(--songr-accent) 13%,var(--songr-bg));
+ box-shadow:inset 2px 0 var(--songr-accent),0 0 12px color-mix(in srgb,var(--songr-accent) 13%,transparent);
+}
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .arow:hover .an,
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .arow:focus-visible .an { color:var(--songr-accent); text-shadow:0 0 8px color-mix(in srgb,var(--songr-accent) 45%,transparent); }
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .artist-view-switch { border-color:var(--songr-accent); box-shadow:0 0 8px color-mix(in srgb,var(--songr-accent) 25%,transparent); }
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .rail { border-right-color:var(--songr-accent); box-shadow:1px 0 8px color-mix(in srgb,var(--songr-accent) 22%,transparent); }
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .rail button:not(.off) { color:var(--songr-accent); text-shadow:0 0 6px color-mix(in srgb,var(--songr-accent) 40%,transparent); }
+html:is([data-theme='laser'], [data-theme='miami']) .unified-surface .rail button.on { color:var(--songr-on-accent); text-shadow:none; }
+html[data-theme='pop'] .unified-surface .gl { color:#263bb8; background:#ffdf39; border-bottom:1px solid #202334; }
+html[data-theme='pop'] .unified-surface .ac { color:#a01c52; }
+html[data-theme='pop'] .unified-surface .ad { border-color:#b2a25d; }
+html[data-theme='pop'] .unified-surface .arow:hover,
+html[data-theme='pop'] .unified-surface .arow:focus-visible { background:#ffd8e8; box-shadow:inset 2px 0 #263bb8; }
+html[data-theme='pop'] .unified-surface .artist-view-switch { border-color:#202334; box-shadow:2px 2px 0 #202334; }
+html[data-theme='pop'] .unified-surface .rail { background:#ffdf39; border-right:1px solid #202334; }
+html[data-theme='pop'] .unified-surface .rail button:not(.off) { color:#263bb8; }
+html[data-theme='pop'] .unified-surface .rail button.on { color:#fff; }
+
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-surface .is-track-selected [data-track-select-target],
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-surface .tr .tnm:hover { color:var(--songr-selection); }
+
+/* Playback descendants inherit the local playback accent, including volume. */
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .play-bar.unified { --songr-accent:var(--songr-playback); }
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .play-bar.unified .unified-queue { --songr-accent:var(--songr-theme-accent); }
+html[data-theme='pop'] .play-bar.unified { --songr-text-mid:#fff; --songr-control-text:#fff; --songr-inset:#263bb8; --songr-panel:#263bb8; --songr-hover-subtle:#344acd; --songr-accent-bright:#fff088; }
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .unified-transport-controls button.big:hover:not(:disabled) { background:var(--songr-playback); filter:brightness(1.1); }
+
+/* Some selectable rows nest their visible title inside the activation button. */
+html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) .is-track-selected [data-track-select-target] :is(.tnm, [data-track-select-title]) { color:var(--songr-selection); }

@@ -619,6 +619,57 @@
   border-bottom: 1px solid var(--line-subtle);
   margin-bottom: 10px;
 }
+.unified-surface .album-artist-sections {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.unified-surface .album-artist-heading {
+  margin-top: 0;
+  font-size: 14px;
+  letter-spacing: normal;
+  line-height: 1.5;
+  color: var(--text);
+}
+.unified-surface .album-artist-name {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+.unified-surface .album-artist-name [data-artist-name-text] {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.unified-surface .album-artist-name[data-reading] [data-artist-name-text] {
+  width: max-content;
+  overflow: visible;
+  text-overflow: clip;
+}
+.unified-surface .album-artist-name:focus-visible { outline: 1px solid var(--gold); outline-offset: -1px; }
+.unified-surface .album-artist-name-popup {
+  position: fixed;
+  z-index: 100;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--gold);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+}
 
 .unified-surface .alist {
   column-count: var(--col);

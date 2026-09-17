@@ -1,5 +1,8 @@
 <script lang="ts">
- let { message = null, error = false, label = 'Library status' }: { message?: string | null; error?: boolean; label?: string } = $props();
+ import LibraryActionButton from './LibraryActionButton.svelte';
+ let { message = null, error = false, label = 'Library status', onRetry }: {
+  message?: string | null; error?: boolean; label?: string; onRetry?: () => void;
+ } = $props();
  let node: HTMLDivElement | null = $state(null);
  let bottom = $state(94);
  $effect(() => {
@@ -11,11 +14,15 @@
  });
 </script>
 <div class="entity-feedback" class:error role={error ? 'alert' : 'status'} aria-label={label} aria-live={error ? 'assertive' : 'polite'} aria-atomic="true"
- bind:this={node} style:bottom="{bottom}px" class:visible={Boolean(message)}>{message ?? ''}</div>
+ bind:this={node} style:bottom="{bottom}px" class:visible={Boolean(message)}>
+ <span>{message ?? ''}</span>
+ {#if message && onRetry}<span class="feedback-action"><LibraryActionButton icon="retry" label="Retry action" onclick={onRetry} /></span>{/if}
+</div>
 <style>
  .entity-feedback { position: fixed; right: 22px; z-index: 45; max-width: min(420px, calc(100vw - 44px));
   pointer-events: none; padding: 8px 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--songr-control);
   color: var(--songr-text); font-size: 12px; visibility: hidden; }
  .entity-feedback.visible { visibility: visible; }
  .entity-feedback.error { color: var(--songr-error); }
+ .feedback-action { display:inline-flex; vertical-align:middle; margin-left:8px; pointer-events:auto; }
 </style>

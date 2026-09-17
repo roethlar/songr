@@ -272,7 +272,7 @@
 	{#if publicPage?.entityMore || (!publicPage && sheet.albumActionsAvailable)}
 		<EntityActionMenu label="More actions for album {displayTitle}" disabled={publicPage ? !publicPage.entityActionsEnabled || actionBusy : albumActionsDisabled} generation={sheet.orderedTracks}
 			remoteActive={publicPage ? publicPage.entityMenuActive : !['idle', 'executed', 'canceled'].includes(action.phase)}
-			onOpen={() => { if (publicPage) publicPage.onOpenEntityMore?.(); else pickTarget(null, null); }}
+			onOpen={() => { if (publicPage) publicPage.onOpenEntityMore?.(); else if (!(action.phase === 'failed' && actionRetryAvailable)) pickTarget(null, null); }}
 			onClose={() => { if (publicPage) publicPage.onCloseMore?.(); else if (action.phase === 'choosing' || action.phase === 'resolving') actionController?.cancel(); }}>
 			{#snippet children(close)}
 				{#if publicPage?.entityMore}{@render publicPage.entityMore(close)}{:else}
@@ -341,7 +341,8 @@
 					onOpenMore={publicPage?.onOpenSelectionMore} onCloseMore={publicPage?.onCloseMore} remoteMenuActive={publicPage?.selectionMenuActive} />
 				</div>
 			</div>
-			<EntityFeedback label="Album status" error={action.phase === 'failed' || action.phase === 'outcome-unknown'} message={bookmarkStatus ?? (action.phase === 'failed' || action.phase === 'outcome-unknown' ? action.error ?? 'The action failed.' : action.phase === 'executing' ? 'Working…' : null)} />
+			<EntityFeedback label="Album status" error={action.phase === 'failed' || action.phase === 'outcome-unknown'} message={bookmarkStatus ?? (action.phase === 'failed' || action.phase === 'outcome-unknown' ? action.error ?? 'The action failed.' : action.phase === 'executing' ? 'Working…' : null)}
+				onRetry={action.phase === 'failed' && actionRetryAvailable ? onRetryAction : undefined} />
 
 
 			{#if sheet.versions.length > 1}

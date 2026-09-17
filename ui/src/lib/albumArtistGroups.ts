@@ -2,7 +2,8 @@ import {
 	bucketLetterFor,
 	compareLibrarySearchKeys,
 	librarySortKey,
-	type LibraryAlbumEntry
+	type LibraryAlbumEntry,
+	type LetterBucket
 } from '$lib/libraryEntries';
 
 export type ArtistView = 'album-artists' | 'all-artists';
@@ -96,4 +97,27 @@ export function sortAlbumArtistGroups(
 		if (sort === 'fewest-albums') return left.albumCount - right.albumCount || alpha;
 		return sort === 'za' ? -alpha : alpha;
 	});
+}
+
+export interface PreparedAlbumArtistSections {
+	readonly groups: readonly AlbumArtistGroup[];
+	readonly albums: readonly LibraryAlbumEntry[];
+	readonly buckets: readonly LetterBucket[];
+}
+
+/** One display order for the Albums sections and their alphabet rail. */
+export function prepareAlbumArtistSections(albums: readonly LibraryAlbumEntry[]): PreparedAlbumArtistSections {
+	const groups = sortAlbumArtistGroups(groupAlbumArtists(albums), 'az').map(group => ({
+		...group,
+		albums: [...group.albums].sort((left, right) => compareLibrarySearchKeys(left.searchKey, right.searchKey))
+	}));
+	const ordered: LibraryAlbumEntry[] = [];
+	const buckets: LetterBucket[] = [];
+	for (const group of groups) {
+		const previous = buckets[buckets.length - 1];
+		if (previous?.letter === group.letter) previous.count += group.albums.length;
+		else buckets.push({ letter: group.letter, start: ordered.length, count: group.albums.length });
+		for (const album of group.albums) ordered.push(album);
+	}
+	return { groups, albums: ordered, buckets };
 }
