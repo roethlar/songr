@@ -48,7 +48,7 @@ import type {
 	AlbumActionController,
 	AlbumActionState
 } from '$lib/library/AlbumActionController';
-import { clearPendingLibraryPageStateWrite } from '$lib/libraryPageNavigation';
+import { clearShownLibraryAddress } from '$lib/libraryPageNavigation';
 import {
 	__back,
 	__forward,

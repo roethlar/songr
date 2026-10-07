@@ -63,6 +63,32 @@ test('library addresses survive a fresh tab, reload, Back, and Forward', async (
 
 });
 
+test('Back from an album returns to its artist every time, not only the first (#22)', async ({ page }) => {
+	const artistLink = page.getByTestId('unified-row').filter({ visible: true }).nth(7);
+	const artistName = (await artistLink.locator('.an').innerText()).trim();
+	await artistLink.click();
+	await expect(page.getByTestId('unified-artist-name')).toHaveText(artistName);
+	const artistPath = new URL(page.url()).pathname;
+
+	const album = page.getByTestId('unified-tile').filter({ visible: true }).first();
+	const albumTitle = (await album.locator('.tt').innerText()).trim();
+	for (let round = 1; round <= 3; round++) {
+		await page.getByTestId('unified-tile').filter({ visible: true }).first().click();
+		await expect(page.getByTestId('unified-album-title'), `album, round ${round}`).toHaveText(albumTitle);
+		await page.goBack();
+		await expect.poll(() => new URL(page.url()).pathname, `address, round ${round}`).toBe(artistPath);
+		await expect(page.getByTestId('unified-artist-name'), `artist view, round ${round}`).toHaveText(artistName);
+	}
+	// The album page's own Back button takes the same history step.
+	for (let round = 1; round <= 2; round++) {
+		await page.getByTestId('unified-tile').filter({ visible: true }).first().click();
+		await expect(page.getByTestId('unified-album-title'), `album, in-app round ${round}`).toHaveText(albumTitle);
+		await page.getByTestId('unified-album-back').click();
+		await expect.poll(() => new URL(page.url()).pathname, `address, in-app round ${round}`).toBe(artistPath);
+		await expect(page.getByTestId('unified-artist-name'), `artist view, in-app round ${round}`).toHaveText(artistName);
+	}
+});
+
 test('Albums-root links survive a modified-click fresh tab and reload', async ({ page, context }) => {
 	await page.getByTestId('unified-scope-albums').click();
 	const albumLink = page.getByTestId('unified-tile').filter({ visible: true }).nth(9);

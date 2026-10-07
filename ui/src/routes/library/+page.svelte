@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, setContext } from 'svelte';
+	import { onMount, setContext, untrack } from 'svelte';
 	import { get } from 'svelte/store';
 	import { unifiedLibraryPrefsStore } from '$lib/stores/unifiedLibraryPrefsStore';
 	import { afterNavigate } from '$app/navigation';
@@ -10,8 +10,9 @@
 	import { decodeLibraryRoute, encodeLibraryRoute } from '$lib/libraryRoute';
 	import { libraryEntryPageState } from '$lib/libraryRouteState';
 	import {
-		clearPendingLibraryPageStateWrite,
-		consumeSelfAuthoredLibraryPageState,
+		clearShownLibraryAddress,
+		libraryAddressNeedsRestore,
+		recordShownLibraryAddress,
 		replaceLibraryPageState
 	} from '$lib/libraryPageNavigation';
 	import {
@@ -35,7 +36,6 @@
 			: page.url;
 	}
 
-	let observedPageUrl = page.url.href;
 	let committedActivation: CommittedLibraryModeActivation = {
 		cause: 'initial',
 		pageState: pageStateFromUrl()
@@ -76,28 +76,29 @@
 	});
 
 	$effect(() => {
-		// SvelteKit republishes `page` for shallow traversal, but its URL can
-		// still describe the route that mounted this static fallback. The
-		// address bar is authoritative for these same-document Library pages.
-		void page.url.href;
-		const currentUrl = mounted ? currentLibraryUrl() : page.url;
-		const currentPageUrl = currentUrl.href;
-		if (!mounted || currentPageUrl === observedPageUrl) return;
-		observedPageUrl = currentPageUrl;
-		if (consumeSelfAuthoredLibraryPageState(currentUrl)) return;
-		commitActivation('history-pop', currentUrl);
+		// SvelteKit republishes page.url on every history traversal and never on
+		// the app's own shallow writes, and the republished URL can still name
+		// the route that mounted this static fallback. So page.url is only the
+		// signal; the address bar says where history went, and the shown-address
+		// record says whether the view is already there.
+		void page.url;
+		if (!mounted) return;
+		const currentUrl = currentLibraryUrl();
+		if (!libraryAddressNeedsRestore(currentUrl)) return;
+		untrack(() => commitActivation('history-pop', currentUrl));
 	});
 
 	onMount(() => {
 		const host = claimLibraryViewHost();
 		mounted = true;
+		recordShownLibraryAddress(currentLibraryUrl());
 		host.publishActiveMode('unified');
 
 		return () => {
 			mounted = false;
 			registeredLifecycle?.suspend();
 			registeredLifecycle = null;
-			clearPendingLibraryPageStateWrite();
+			clearShownLibraryAddress();
 			host.release();
 		};
 	});

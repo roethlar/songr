@@ -25,6 +25,11 @@ export function __setTestPage(url: string | URL, state: App.PageState): void {
 	page.state = clonePageState(state);
 }
 
+/** A shallow write: page.state changes, page.url does not. */
+export function __setTestPageState(state: App.PageState): void {
+	page.state = clonePageState(state);
+}
+
 export function __resetTestPage(
 	url: string | URL = 'http://localhost/',
 	state: App.PageState = {}

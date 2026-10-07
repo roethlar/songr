@@ -42,8 +42,8 @@ import {
 } from '../../src/lib/stores/unifiedLibraryPrefsStore';
 import { setSelectedZone } from '../../src/lib/stores/selectedZoneStore';
 import { setZonesSnapshot } from '../../src/lib/stores/zonesStore';
-import { __getNavigationLog, __resetNavigation } from '../../src/test/app-stubs/navigation';
-import { page as navigationPage } from '../../src/test/app-stubs/state.svelte';
+import { __resetNavigation } from '../../src/test/app-stubs/navigation';
+import { libraryAddressNeedsRestore, recordShownLibraryAddress } from '../../src/lib/libraryPageNavigation';
 import { encodeLibraryRoute } from '../../src/lib/libraryRoute';
 import { libraryEntryPageState, libraryRouteFromPageState } from '../../src/lib/libraryRouteState';
 import {
@@ -62,7 +62,7 @@ import type { ClassicBrowseApiTransaction } from '../../src/lib/api/client';
 import type { BrowseItem, BrowseResult } from '@shared/types';
 import { setCoreStatus } from '../../src/lib/stores/coreStore';
 import { initializeTheme, setTheme, type ThemeMode } from '../../src/lib/stores/themeStore';
-import { presentationSettingsStore } from '../../src/lib/stores/presentationSettingsStore';
+import { bindDocumentPresentation, presentationSettingsStore } from '../../src/lib/stores/presentationSettingsStore';
 import { DEFAULT_PRESENTATION_SETTINGS } from '@shared/presentationSettings';
 
 // Scroll restoration is a LAYOUT behaviour: the browser clamps `scrollTop` to
@@ -79,6 +79,8 @@ const recentVariant = fixtureParams.get('recent') === '1';
 
 const ARTIST_COUNT = window.libraryScrollFixtureSize?.artists ?? 400;
 const ALBUM_COUNT = window.libraryScrollFixtureSize?.albums ?? 400;
+// Long enough to span several prepared row chunks when a test asks for it.
+const ALBUM_TRACK_COUNT = window.libraryScrollFixtureSize?.albumTracks ?? 12;
 
 const presentation = window.libraryScrollFixturePresentation;
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -347,7 +349,7 @@ function openLiveRef(_fetchFn: typeof fetch, ref: LibraryRowReference): Promise<
 	if (album) {
 		const rows = [
 			levelRow(liveRef(`play:${album.title}`), 'Play Album', 'action'),
-			...Array.from({ length: 12 }, (_unused, index) =>
+			...Array.from({ length: ALBUM_TRACK_COUNT }, (_unused, index) =>
 				levelRow(
 					liveRef(`track:${album.title}:${index}`),
 					`Track ${String(index + 1).padStart(2, '0')}`,
@@ -653,6 +655,7 @@ if (presentation?.albumsSort) prefsStore.setSort('albums', presentation.albumsSo
 if (presentation?.albumGrouping) prefsStore.setAlbumGrouping(presentation.albumGrouping);
 if (presentation?.interfaceMotion !== undefined)
 	presentationSettingsStore.applySnapshot({ ...DEFAULT_PRESENTATION_SETTINGS, interfaceMotion: presentation.interfaceMotion });
+bindDocumentPresentation(document.documentElement);
 
 function fixtureActionState(overrides: Partial<AlbumActionState> = {}): AlbumActionState {
 	return {
@@ -885,49 +888,14 @@ function restoreLocation(cause: LibraryViewActivationCause): void {
 
 restoreLocation('initial');
 
-// The SvelteKit navigation stub intentionally keeps an in-memory history for
-// unit tests. This browser-only fixture mirrors every handled Library write
-// into the real History API so Chromium can prove buttons (scope/palette) and
-// anchors with the same reload/popstate behavior.
-let mirroredNavigationCount = __getNavigationLog().length;
-document.addEventListener('click', (event) => {
-	if (
-		event.button !== 0 ||
-		event.metaKey ||
-		event.ctrlKey ||
-		event.shiftKey ||
-		event.altKey
-	) {
-		return;
-	}
-	queueMicrotask(() => {
-		const navigation = __getNavigationLog();
-		for (const entry of navigation.slice(mirroredNavigationCount)) {
-			if (entry.operation === 'pushState') window.history.pushState({}, '', entry.url);
-			else if (entry.operation === 'replaceState') window.history.replaceState({}, '', entry.url);
-		}
-		mirroredNavigationCount = navigation.length;
-	});
-});
-
-// Public collections commit their route only after the complete asynchronous
-// read. Observe the real stub URL so reload sees that committed address rather
-// than the preceding page sampled by the legacy click-microtask mirror.
-if (publicVariant) {
-	$effect.root(() => {
-		$effect(() => {
-			void navigationPage.url.href;
-			const navigation = __getNavigationLog();
-			for (const entry of navigation.slice(mirroredNavigationCount)) {
-				if (entry.operation === 'pushState' || entry.operation === 'goto') window.history.pushState({}, '', entry.url);
-				else if (entry.operation === 'replaceState') window.history.replaceState({}, '', entry.url);
-			}
-			mirroredNavigationCount = navigation.length;
-		});
-	});
-}
-
+// The SvelteKit navigation stub writes the real address bar the way
+// SvelteKit's pushState/replaceState do, so Chromium and WebKit keep real
+// history entries for every handled Library write. A Back/Forward is detected
+// exactly as the production host detects it (`+page.svelte`): restore only
+// when the address is not what the view already shows.
+recordShownLibraryAddress(new URL(window.location.href));
 window.addEventListener('popstate', () => {
+	if (!libraryAddressNeedsRestore(new URL(window.location.href))) return;
 	lifecycle.suspend();
 	restoreLocation('history-pop');
 });
@@ -1085,7 +1053,7 @@ const fixture = {
 
 declare global {
 	interface Window {
-		libraryScrollFixtureSize?: { artists: number; albums: number };
+		libraryScrollFixtureSize?: { artists: number; albums: number; albumTracks?: number };
 		libraryScrollFixtureVariant?: 'album-credits';
 		libraryScrollFixturePresentation?: { artwork?: boolean; singleLetter?: boolean; longTitles?: boolean; albumsSort?: 'az' | 'shuffle'; albumGrouping?: 'artist'; interfaceMotion?: boolean };
 		libraryScrollFixtureColdStart?: boolean;

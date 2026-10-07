@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { fireEvent, screen } from '@testing-library/svelte';
 import { createFakeSocket } from '../../../test/fixtures/socket';
 import { __resetNavigation } from '../../../test/app-stubs/navigation';
-import { clearPendingLibraryPageStateWrite } from '$lib/libraryPageNavigation';
+import { clearShownLibraryAddress } from '$lib/libraryPageNavigation';
 import { resetLibraryIntentStore } from '$lib/stores/libraryIntentStore';
 import { setZonesSnapshot } from '$lib/stores/zonesStore';
 import { setSelectedZone } from '$lib/stores/selectedZoneStore';
@@ -41,7 +41,7 @@ describe('UnifiedLibraryMode — Space during the palette-open race', () => {
 
 	beforeEach(() => {
 		__resetNavigation('http://localhost/library');
-		clearPendingLibraryPageStateWrite();
+		clearShownLibraryAddress();
 		resetLibraryIntentStore();
 		setZonesSnapshot([]);
 		socket.connected = true;

@@ -238,7 +238,7 @@
 	.browse-crumbs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0 8px; list-style: none; color: var(--dim); font-size: 11px; }
 	.browse-crumbs li:not(:last-child)::after { content: ' /'; }
 	.section-label { margin: 10px 8px 0; font-size: 13px; font-weight: 500; color: var(--soft); }
-	.browse-list { display: grid; grid-template-columns: minmax(0, 1fr); --library-chunk-overflow: 280px; }
+	.browse-list { display: grid; grid-template-columns: minmax(0, 1fr); --library-chunk-overflow: 280px; --library-chunk-paint-room: 0px; }
 	.browse-list :global(.browse-row) { min-width: 0; cursor: default; }
  .browse-list :global([data-track-select-row]) { cursor:pointer; }
 	.browse-list :global(.browse-name) { display: flex; align-items: baseline; flex: 1; gap: 14px; min-width: 0; border: 0; padding: 0; background: transparent; color: inherit; text-align: left; text-decoration: none; font: inherit; }

@@ -144,3 +144,57 @@ test('a transient 503 recovers automatically and remains loaded after returning 
 		recoveredAfterMs: attempts.at(-1)!.finishedAt! - attempts[0].startedAt }));
 	await info.attach('artwork-recovery', { body: JSON.stringify(recovered), contentType: 'application/json' });
 });
+
+async function openDecodedAlbums(page: Page): Promise<Locator> {
+	const configured = await page.request.post('/__fixture-artwork/configure', { data: { delayMs: 0, failOnce: [] } });
+	expect(configured.ok()).toBe(true);
+	await page.addInitScript(albums => {
+		window.libraryScrollFixtureSize = { artists: 1679, albums };
+		window.libraryScrollFixturePresentation = { artwork: true, longTitles: true };
+	}, ALBUMS);
+	await page.goto('/fixtures/library-scroll.html');
+	await expect(page.getByTestId('unified-row').first()).toBeVisible();
+	await page.getByTestId('unified-scope-albums').click();
+	const first = page.locator(ALBUM_TILES).first();
+	await expectDecoded(first);
+	return first;
+}
+
+// Suppressed motion shortens durations to 0.01ms; with the default
+// `transition-property: all` that still starts a transition for every
+// artwork visibility change in skipped grid chunks, slowing large grids.
+for (const motion of ['unconfirmed', 'off', 'reduced'] as const) {
+	test(`suppressed motion starts no artwork visibility transition: ${motion}`, async ({ page }) => {
+		await page.emulateMedia({ reducedMotion: motion === 'reduced' ? 'reduce' : 'no-preference' });
+		const image = (await openDecodedAlbums(page)).locator('img');
+		const transitions = await image.evaluate(async (node, choice) => {
+			if (choice !== 'unconfirmed') document.documentElement.dataset.interfaceMotion = choice === 'reduced' ? 'on' : 'off';
+			getComputedStyle(node).visibility;
+			await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
+			// Capture the actual event as well as pending effects: a 0.01ms
+			// transition can finish before getAnimations returns in Chromium.
+			const properties = new Set<string>();
+			const record = (event: TransitionEvent) => properties.add(event.propertyName);
+			node.addEventListener('transitionrun', record);
+			getComputedStyle(node).visibility;
+			node.style.visibility = 'hidden'; getComputedStyle(node).visibility;
+			for (const animation of node.getAnimations()) properties.add(animation instanceof CSSTransition ? animation.transitionProperty : 'other');
+			await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
+			node.removeEventListener('transitionrun', record);
+			return [...properties];
+		}, motion);
+		expect(transitions).toEqual([]);
+	});
+}
+
+test('enabled interface motion retains declared control transitions', async ({ page }) => {
+	await page.emulateMedia({ reducedMotion: 'no-preference' });
+	await openDecodedAlbums(page);
+	const transitions = await page.getByTestId('unified-scope-albums').evaluate(node => {
+		document.documentElement.dataset.interfaceMotion = 'on';
+		getComputedStyle(node).backgroundColor;
+		node.style.backgroundColor = 'rgb(1, 2, 3)'; getComputedStyle(node).backgroundColor;
+		return node.getAnimations().map(animation => animation instanceof CSSTransition ? animation.transitionProperty : 'other');
+	});
+	expect(transitions).toContain('background-color');
+});

@@ -5,6 +5,10 @@ import { __setTestPageStore } from '../../src/test/app-stubs/stores';
 import { getSocket } from '../../src/lib/socket/client';
 import { DEFAULT_NAVIGATION_SETTINGS } from '@shared/navigationSettings';
 import type { Zone } from '@shared/types';
+import { setSelectedZone } from '../../src/lib/stores/selectedZoneStore';
+import { setNowPlaying } from '../../src/lib/stores/nowPlayingStore';
+import { presentationSettingsStore } from '../../src/lib/stores/presentationSettingsStore';
+import { DEFAULT_PRESENTATION_SETTINGS } from '@shared/presentationSettings';
 
 // Exercise the production outer layout and its real host-claim contract. Only
 // server data and SvelteKit's page store are fixture-owned; no full-bleed CSS,
@@ -20,9 +24,12 @@ const groupedZone: Zone = {
   ]
 };
 const grouped = new URL(window.location.href).searchParams.get('grouped') === '1';
+// `playing=short|long`: the selected zone plays a track with invented names —
+// one artist, or a four-artist credit far wider than the play bar's column.
+const playing = new URL(window.location.href).searchParams.get('playing');
 const fixtureResponses: Record<string, unknown> = {
   '/api/core': { status: 'paired', core: { id: 'shell-fixture', displayName: 'Fixture Core' } },
-  '/api/zones': { zones: grouped ? [groupedZone] : [] },
+  '/api/zones': { zones: grouped || playing ? [groupedZone] : [] },
   '/api/recently-played': { epoch: 1, revision: 0, entries: [] },
   '/api/favorites': { entries: [] },
   '/api/health': { ready: true, subsystems: {} },
@@ -58,6 +65,20 @@ const children = createRawSnippet(() => ({
   render: () => '<section data-testid="shell-route-child" style="display:flex;flex-direction:column;background:var(--songr-bg)"><div data-testid="shell-route-heading">Library route content</div></section>'
 }));
 mount(Layout, { target: document.getElementById('app')!, props: { children } });
+if (playing) {
+  // A confirmed server snapshot with interface animations on, as on a paired
+  // install; the OS reduced-motion preference still applies on top.
+  presentationSettingsStore.applySnapshot({ ...DEFAULT_PRESENTATION_SETTINGS, interfaceMotion: true });
+  setSelectedZone(groupedZone.zone_id);
+  setNowPlaying(groupedZone.zone_id, {
+    zone_id: groupedZone.zone_id,
+    title: playing === 'long' ? 'An Invented Title Long Enough To Need Reading In Full' : 'Short Title',
+    artist: playing === 'long'
+      ? 'Fixture Ensemble Alpha / Second Invented Performer / Third Fixture Voice / Fourth Imaginary Guest'
+      : 'Fixture Soloist',
+    album: 'Invented Album'
+  });
+}
 
 window.appShellFixture = {
   async navigate(pathname: string) {

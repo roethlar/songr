@@ -37,7 +37,7 @@ function restore(h: ReturnType<typeof mount>, url = genreUrl) {
 async function ready() { await waitFor(() => expect(screen.getAllByTestId('genre-preview-album')).toHaveLength(3)); }
 
 describe('genre preview navigation and host lifecycle', () => {
-	beforeEach(() => { __resetNavigation(genreUrl); navigation.clearPendingLibraryPageStateWrite(); genrePreviewMeasurement(); });
+	beforeEach(() => { __resetNavigation(genreUrl); navigation.clearShownLibraryAddress(); genrePreviewMeasurement(); });
 	afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 	it('reads only measured prefixes, supplies exact section paths, and opens clicked refs without full reads', async () => {
 		const h = mount(); restore(h); await ready();

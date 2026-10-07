@@ -632,7 +632,7 @@
 		margin-bottom: 0;
 		padding-left: 0;
 	}
-	.tracks { display: grid; grid-template-columns: minmax(0, 1fr); --library-chunk-overflow: 280px; }
+	.tracks { display: grid; grid-template-columns: minmax(0, 1fr); --library-chunk-overflow: 280px; --library-chunk-paint-room: 0px; }
 	.tr.song-focus {
 		border-color: color-mix(in srgb, var(--accent) 70%, transparent);
 		background: color-mix(in srgb, var(--accent) 18%, var(--songr-surface-11));

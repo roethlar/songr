@@ -152,8 +152,11 @@ test('hidden album grids prepare their new width and density before returning', 
 	}
 });
 
-test('native Tab crosses prepared chunks and distant album titles remain browser-searchable', async ({ page }) => {
+test('native Tab crosses prepared chunks and distant album titles remain browser-searchable', async ({ page, browserName }) => {
 	test.setTimeout(90_000);
+	// Safari (WebKit on macOS) moves focus to links with Option-Tab; plain Tab
+	// skips them unless the user enables "Press Tab to highlight each item".
+	const tab = browserName === 'webkit' ? 'Alt+Tab' : 'Tab';
 	await openAlbums(page, 'az');
 	const boundary = await page.locator(GRID).evaluate(grid => {
 		const first = grid.shadowRoot!.querySelector('[data-prepared-library-chunk]')!;
@@ -167,13 +170,13 @@ test('native Tab crosses prepared chunks and distant album titles remain browser
 	const after = page.locator(TILES).nth(boundary + 1);
 	await before.focus();
 	await expect(before).toBeFocused();
-	await page.keyboard.press('Tab');
+	await page.keyboard.press(tab);
 	await expect(after).toBeFocused();
 	await expect(after).toBeInViewport();
 	const focusedBounds = (await after.boundingBox())!;
 	const toolbarBounds = (await page.locator('.library-list-toolbar:visible').boundingBox())!;
 	expect(focusedBounds.y).toBeGreaterThanOrEqual(toolbarBounds.y + toolbarBounds.height - 1);
-	await page.keyboard.press('Shift+Tab');
+	await page.keyboard.press(`Shift+${tab}`);
 	await expect(before).toBeFocused();
 
 	const target = (await page.locator(TILES).last().locator('.tt').textContent())!;

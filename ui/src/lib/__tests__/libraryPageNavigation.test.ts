@@ -8,13 +8,16 @@ import {
 import { page } from '../../test/app-stubs/state.svelte';
 import { buildUnifiedLibraryPageState, buildUnifiedRootPageState } from '../libraryPageState';
 import {
-	clearPendingLibraryPageStateWrite,
-	consumeSelfAuthoredLibraryPageState,
+	clearShownLibraryAddress,
+	libraryAddressNeedsRestore,
 	preflightLibraryPageState,
 	pushLibraryPageState,
+	recordShownLibraryAddress,
 	replaceLibraryPageState,
 	shouldHandleLibraryAnchorClick
 } from '../libraryPageNavigation';
+
+const address = () => new URL(window.location.href);
 
 const artists = () => buildUnifiedRootPageState('artists');
 const browse = (filterText = '') =>
@@ -34,7 +37,8 @@ const browse = (filterText = '') =>
 describe('libraryPageNavigation', () => {
 	beforeEach(() => {
 		__resetNavigation('http://localhost/library/albums');
-		clearPendingLibraryPageStateWrite();
+		clearShownLibraryAddress();
+		recordShownLibraryAddress(address());
 	});
 
 	it('writes Unified shallow entries through SvelteKit navigation', () => {
@@ -48,16 +52,18 @@ describe('libraryPageNavigation', () => {
 			'pushState'
 		]);
 		expect(__getHistorySnapshot().entries).toHaveLength(2);
-		expect(page.url.pathname).toBe('/library/browse');
-		expect(page.url.search).toBe('?search=Bowie');
+		// As in SvelteKit: the address bar moves, page.url keeps the mount route.
+		expect(address().pathname).toBe('/library/browse');
+		expect(address().search).toBe('?search=Bowie');
+		expect(page.url.pathname).toBe('/library/albums');
 		expect(page.state).toEqual({});
 	});
 
 	it('replaces in place and does not push an equivalent state', () => {
 		const state = browse('Miles');
 		__resetNavigation('http://localhost/library/artists');
+		recordShownLibraryAddress(address());
 		expect(replaceLibraryPageState(state)).toBe('pushed');
-		clearPendingLibraryPageStateWrite();
 		const before = __getHistorySnapshot();
 
 		expect(pushLibraryPageState(state)).toBe('deduped');
@@ -87,35 +93,38 @@ describe('libraryPageNavigation', () => {
 		expect(pushLibraryPageState(state)).toBe('refused');
 		expect(__getHistorySnapshot()).toEqual(before);
 		expect(__getNavigationLog()).toEqual([]);
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(false);
+		expect(libraryAddressNeedsRestore(address())).toBe(false);
 	});
 
-	it('consumes a self-authored reactive state change exactly once', () => {
+	it('treats its own writes as shown and a history move as needing restore', () => {
 		pushLibraryPageState(browse('Bowie'));
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(true);
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(false);
-	});
-
-	it('does not consume a browser pop after authored writes were observed', () => {
-		replaceLibraryPageState(artists());
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(true);
-		pushLibraryPageState(browse('Bowie'));
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(true);
+		expect(libraryAddressNeedsRestore(address())).toBe(false);
 
 		expect(__back()).toBe(true);
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(false);
+		expect(libraryAddressNeedsRestore(address())).toBe(true);
+		// Restoring records it: the same address is not restored twice.
+		expect(libraryAddressNeedsRestore(address())).toBe(false);
 	});
 
-	it('keeps only the newest rapid authored state pending', () => {
-		const first = browse('First');
-		const second = browse('Second');
-		pushLibraryPageState(first);
-		pushLibraryPageState(second);
+	it('detects the second Back after returning to an entry by Back and pushing again (#22)', () => {
+		pushLibraryPageState(browse('Artist page'));
+		pushLibraryPageState(browse('Album page'));
+		expect(__back()).toBe(true);
+		expect(libraryAddressNeedsRestore(address())).toBe(true);
 
-		expect(
-			consumeSelfAuthoredLibraryPageState(new URL('/library/browse?search=First', page.url))
-		).toBe(false);
-		expect(consumeSelfAuthoredLibraryPageState(page.url)).toBe(false);
+		pushLibraryPageState(browse('Album page'));
+		expect(__back()).toBe(true);
+		expect(address().searchParams.get('search')).toBe('Artist page');
+		expect(libraryAddressNeedsRestore(address())).toBe(true);
+	});
+
+	it('pushes, rather than dedupes, a return to the mount address', () => {
+		expect(pushLibraryPageState(artists())).toBe('pushed');
+		// page.url still names the mounted /library/albums.
+		expect(page.url.pathname).toBe('/library/albums');
+		expect(pushLibraryPageState(buildUnifiedRootPageState('albums'))).toBe('pushed');
+		expect(__getHistorySnapshot().entries).toHaveLength(3);
+		expect(pushLibraryPageState(buildUnifiedRootPageState('albums'))).toBe('deduped');
 	});
 
 	it('handles only an unmodified primary anchor click in-app', () => {

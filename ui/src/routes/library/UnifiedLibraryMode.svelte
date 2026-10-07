@@ -14,6 +14,7 @@
 	import { getContext, onMount, tick, untrack } from 'svelte';
 	import { get } from 'svelte/store';
 	import { measureLibraryChrome } from '$lib/libraryListChrome';
+	import { magnifyingAlphabetRail } from '$lib/magnifyingAlphabetRail';
 	import UnifiedAlbumArtistList from './UnifiedAlbumArtistList.svelte';
 	import {
 		albumCreditKey, albumCreditLabel, albumCreditMatches, groupAlbumArtists, sortAlbumArtistGroups,
@@ -2964,6 +2965,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		if (!activeClaim || !untrack(() => resumed)) return;
 		pairingRetryGeneration = lifecycleGeneration;
 		void loadForClaim(activeClaim);
+		untrack(() => redriveVisibleData(activeClaim));
 	});
 
 	function isCurrentUnifiedClaim(activeClaim: ClassicBrowseSessionClaim): boolean {
@@ -3016,25 +3018,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 					return;
 				}
 				void loadForClaim(activeClaim);
-				// A cold scope load can lose the same socket-connect race as the
-				// roots. Re-drive the visible scope after the recovered session is
-				// current; each loader is idempotent and retries only unloaded data.
-				// An addressed live page owns the pane and restores through its own
-				// hierarchy, so its hidden classic scope has nothing to retry.
-				if (itemTarget?.kind !== 'live') maybeLoadScopeData(scope);
-				if (scope === 'browse') {
-					void restoreBrowsePage(activeClaim, browseState.snapshot)
-						.then((restored) => replaceBrowseStateAfter(restored, activeClaim));
-				}
-				if (paletteOpen) {
-					const genres = $genresStore;
-					if (!genres.loaded && !genres.loading) void genresStore.load(activeClaim);
-					const composers = $composersStore;
-					if (!composers.loaded && !composers.loading) {
-						void composersStore.load(activeClaim);
-					}
-					void searchPaletteData(activeClaim, paletteQuery);
-				}
+				redriveVisibleData(activeClaim);
 			})
 			.catch(() => {
 				// The next real connect event retries. A superseded lifecycle
@@ -3043,6 +3027,32 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 			.finally(() => {
 				if (recoveryGeneration === generation) recoveryGeneration = null;
 			});
+	}
+
+	/**
+	 * A cold scope load can lose the same readiness race as the roots — the
+	 * socket connecting, or the Core pairing, a beat after the page asked.
+	 * Re-drive what the pane shows once the claim is current again; each
+	 * loader is idempotent and retries only unloaded data. An addressed live
+	 * page owns the pane and restores through its own hierarchy, so its hidden
+	 * classic scope has nothing to retry.
+	 */
+	function redriveVisibleData(activeClaim: ClassicBrowseSessionClaim): void {
+		if (!isCurrentUnifiedClaim(activeClaim)) return;
+		if (itemTarget?.kind !== 'live') maybeLoadScopeData(scope);
+		if (scope === 'browse') {
+			void restoreBrowsePage(activeClaim, browseState.snapshot)
+				.then((restored) => replaceBrowseStateAfter(restored, activeClaim));
+		}
+		if (paletteOpen) {
+			const genres = $genresStore;
+			if (!genres.loaded && !genres.loading) void genresStore.load(activeClaim);
+			const composers = $composersStore;
+			if (!composers.loaded && !composers.loading) {
+				void composersStore.load(activeClaim);
+			}
+			void searchPaletteData(activeClaim, paletteQuery);
+		}
 	}
 
 	function attachConnectionListeners(): void {
@@ -3070,8 +3080,12 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 		const becamePaired = coreWasPaired === false && paired;
 		coreWasPaired = paired;
 		if (!becamePaired || !resumed || claim === null) return;
-		if (roots.phase !== 'idle' && roots.phase !== 'error') return;
-		void loadForClaim(claim);
+		const activeClaim = claim;
+		if (roots.phase === 'idle' || roots.phase === 'error') void loadForClaim(activeClaim);
+		// The visible scope's own data can have failed in the same race even
+		// when the roots did not; it reloads here rather than on the next
+		// scope change.
+		untrack(() => redriveVisibleData(activeClaim));
 	});
 
 	function resumeUnified(activation: CommittedLibraryModeActivation | null = null): void {
@@ -3370,7 +3384,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 	<div class="body">
 		<div class="library-index-slot">
 		{#if railVisible}
-			<nav class="rail" aria-label="A to Z index" data-testid="unified-rail">
+			<nav class="rail" aria-label="A to Z index" data-testid="unified-rail" use:magnifyingAlphabetRail={[railBuckets, prefs.density]}>
 				{#each railLetterEntries(railBuckets) as entry (entry.letter)}
 					<button
 						type="button"
@@ -3379,7 +3393,7 @@ import type { ClassicBrowseSessionRef } from '@shared/classicBrowseContracts';
 						disabled={!entry.bucket}
 						onclick={() => entry.bucket && railJump(entry.bucket)}
 					>
-						{entry.letter}
+						<span class="rail-letter">{entry.letter}</span>
 					</button>
 				{/each}
 			</nav>

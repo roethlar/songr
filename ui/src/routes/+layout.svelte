@@ -32,6 +32,7 @@
 	import { getSocket } from '$lib/socket/client';
 	import { emitWithAck } from '$lib/socket/emit';
 	import { splitArtists } from '$lib/artistList';
+	import { overflowMarquee } from '$lib/overflowMarquee';
 	import type { LibraryIntent } from '$lib/libraryIntent';
 	import {
 		cancelLibraryIntent,
@@ -405,19 +406,22 @@
 	>
 		<div class="unified-now-playing">
 			{#if nowPlaying?.title}
-				<button type="button" class="unified-title" onclick={openNowPlayingOverlay}>
-					{nowPlaying.title}
-				</button>
+				<button
+					type="button"
+					class="unified-title"
+					onclick={openNowPlayingOverlay}
+					use:overflowMarquee={{ text: nowPlaying.title, revision: nowPlaying.title }}
+				><span data-marquee-track>{nowPlaying.title}</span></button>
 			{:else}
 				<p class="unified-title">Nothing playing</p>
 			{/if}
 			{#if nowPlaying?.artist}
-				<p class="unified-artists">
-					{#each splitArtists(nowPlaying.artist) as artistName, i (i)}
-						{#if i > 0}<span aria-hidden="true">/</span>{/if}
-						<button type="button" onclick={() => openArtistPage(artistName)}>{artistName}</button>
-					{/each}
-				</p>
+				{@const artists = splitArtists(nowPlaying.artist)}
+				<!-- One line, one trailing ellipsis; hover or focus reveals the whole credit (#23). -->
+				<p
+					class="unified-artists"
+					use:overflowMarquee={{ text: artists.join(' / '), revision: nowPlaying.artist, actionable: true }}
+				><span data-marquee-track>{#each artists as artistName, i (i)}{#if i > 0}<span class="artist-separator" aria-hidden="true">/</span>{/if}<button type="button" onclick={() => openArtistPage(artistName)}>{artistName}</button>{/each}</span></p>
 			{/if}
 			<p class="unified-time mono" style:font-family={unifiedMonoFont}>
 				{formatTime(seekPosition)} / {formatTime(duration)}
@@ -687,6 +691,7 @@
 		max-width: 220px;
 		overflow: hidden;
 		border: 0;
+		padding: 0;
 		background: transparent;
 		color: inherit;
 		font: inherit;
@@ -707,23 +712,70 @@
 	}
 
 	.unified-artists {
-		display: flex;
-		gap: 5px;
 		max-width: 220px;
 		overflow: hidden;
 		color: var(--songr-soft);
 		font-size: 11px;
+		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 
+	/* Whole names: the line, not each name, is cut at the end. */
 	.unified-artists button {
-		overflow: hidden;
+		padding: 0;
 		border: 0;
 		background: transparent;
 		color: inherit;
 		font: inherit;
-		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.unified-artists .artist-separator {
+		margin-inline: 5px;
+	}
+
+	/* Reading (overflowMarquee): the track is laid out whole and scrolls. */
+	.unified-title:global([data-reading]),
+	.unified-artists:global([data-reading]) {
+		text-overflow: clip;
+	}
+
+	.unified-title:global([data-reading]) [data-marquee-track],
+	.unified-artists:global([data-reading]) [data-marquee-track] {
+		display: inline-block;
+	}
+
+	:global(.overflow-marquee-full-text button) {
+		padding: 0;
+		border: 0;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+		cursor: pointer;
+	}
+
+	:global(.overflow-marquee-full-text button:hover) {
+		color: var(--songr-accent-bright);
+	}
+
+	:global(.overflow-marquee-full-text .artist-separator) {
+		margin-inline: 5px;
+	}
+
+	:global(.overflow-marquee-full-text) {
+		position: fixed;
+		inset: auto;
+		margin: 0;
+		padding: 8px 10px;
+		border: 1px solid var(--songr-line-strong);
+		border-radius: 5px;
+		background: var(--songr-panel);
+		color: var(--songr-copy);
+		font-size: 12px;
+		font-weight: 400;
+		line-height: 1.45;
+		white-space: normal;
+		overflow-wrap: anywhere;
 	}
 
 	.unified-time {

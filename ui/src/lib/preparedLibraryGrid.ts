@@ -112,7 +112,9 @@ function schedule(grid: Grid): void {
 	pending.add(grid);
 	if (scheduled) return;
 	scheduled = true;
-	queueMicrotask(preparePendingGrids);
+	// Density/width changes must finish updating inherited styles before the
+	// hidden grids are opened and their exact dimensions are captured.
+	requestAnimationFrame(preparePendingGrids);
 }
 
 function preparePendingGrids(): void {
@@ -191,9 +193,11 @@ function preparePendingGrids(): void {
 			while (grid.chunks.length < count) {
 				const box = grid.node.ownerDocument.createElement('div');
 				box.setAttribute('data-prepared-library-chunk', '');
-				box.style.cssText = 'display:grid;grid-column:1/-1;gap:inherit;overflow-clip-margin:var(--library-chunk-overflow,24px);';
+				// WebKit needs real space inside the paint boundary. Matching
+				// negative margins preserve the original grid geometry.
+				box.style.cssText = 'display:grid;grid-column:1/-1;gap:inherit;box-sizing:content-box;padding:var(--library-chunk-paint-room,24px);margin:calc(-1 * var(--library-chunk-paint-room,24px));overflow-clip-margin:var(--library-chunk-overflow,24px);pointer-events:none;';
 				const slot = grid.node.ownerDocument.createElement('slot');
-				slot.style.display = 'contents';
+				slot.style.cssText = 'display:contents;pointer-events:auto;';
 				box.append(slot);
 				grid.shadow.append(box);
 				grid.chunks.push({ box, slot });
@@ -223,15 +227,15 @@ function preparePendingGrids(): void {
 		const observer = new ResizeObserver(entries => {
 			if (measuring !== batch) return;
 			for (const entry of entries) {
-				heights.set(entry.target, entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
+				heights.set(entry.target, entry.contentBoxSize[0]?.blockSize ?? entry.contentRect.height);
 			}
 			if (heights.size !== boxes.length) return;
 			observer.disconnect();
 			measuring = null;
 			try {
 				for (const box of boxes) {
-					// No padding/border: the observed block size is the intrinsic
-					// content height. Numeric sizes cannot retain stale `auto` memory.
+					// Intrinsic sizes describe content; padding is added by layout.
+					// Numeric sizes cannot retain stale `auto` memory.
 					box.style.containIntrinsicBlockSize = `${heights.get(box)!}px`;
 					box.style.contentVisibility = 'auto';
 				}
@@ -246,7 +250,7 @@ function preparePendingGrids(): void {
 			restorePanels();
 		} };
 		measuring = batch;
-		for (const box of boxes) observer.observe(box, { box: 'border-box' });
+		for (const box of boxes) observer.observe(box, { box: 'content-box' });
 		waitingForSizes = true;
 	} finally {
 		if (!waitingForSizes) restorePanels();
@@ -282,7 +286,7 @@ export function prepareLibraryGrid(node: HTMLElement, revision: unknown): {
 			pending.delete(grid);
 			if (measuring?.grids.includes(grid) && !scheduled) {
 				scheduled = true;
-				queueMicrotask(preparePendingGrids);
+				requestAnimationFrame(preparePendingGrids);
 			}
 			stopObservingWidths();
 			fonts?.removeEventListener('loadingdone', fontChanged);

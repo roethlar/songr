@@ -1,8 +1,12 @@
-// SvelteKit shallow-navigation stub. It deliberately models page.state
-// traversal separately from route navigation: a shallow Back/Forward updates
-// `$app/state.page.state` without invoking afterNavigate callbacks.
+// SvelteKit shallow-navigation stub, modelled on SvelteKit 2's client:
+// - pushState/replaceState change the address bar and page.state but never
+//   page.url, which keeps naming the route that mounted the page;
+// - a Back/Forward moves the address bar and republishes page.url as a fresh
+//   URL of the route that mounted that entry, plus the entry's page.state,
+//   without afterNavigate for shallow entries;
+// - goto is a full navigation: page.url follows it.
 import type { AfterNavigate } from '@sveltejs/kit';
-import { page, __resetTestPage, __setTestPage } from './state.svelte';
+import { page, __resetTestPage, __setTestPage, __setTestPageState } from './state.svelte';
 
 export type TestNavigationOperation = 'goto' | 'pushState' | 'replaceState' | 'popstate';
 
@@ -25,11 +29,13 @@ export interface TestHistorySnapshot {
 
 interface InternalHistoryEntry extends TestHistoryEntry {
 	routeGeneration: number;
+	/** page.url while this entry was current: the route that mounted it. */
+	pageUrl: string;
 }
 
 const afterNavigateCallbacks = new Set<(navigation: AfterNavigate) => void>();
 let history: InternalHistoryEntry[] = [
-	{ url: page.url.href, state: cloneState(page.state), routeGeneration: 0 }
+	{ url: page.url.href, state: cloneState(page.state), routeGeneration: 0, pageUrl: page.url.href }
 ];
 let historyIndex = 0;
 let nextRouteGeneration = 1;
@@ -58,13 +64,24 @@ function cloneEntry(entry: TestHistoryEntry): TestHistoryEntry {
 	return { url: entry.url, state: cloneState(entry.state) };
 }
 
+/** Relative to the current entry's address, as the browser resolves it. */
 function resolveUrl(url: string | URL): URL {
-	if (url === '') return new URL(page.url);
-	return new URL(url, page.url);
+	const base = history[historyIndex]?.url ?? page.url.href;
+	if (url === '') return new URL(base);
+	return new URL(url, base);
 }
 
 function publish(entry: TestHistoryEntry): void {
 	__setTestPage(entry.url, entry.state);
+}
+
+/** The address bar, as SvelteKit's history.pushState/replaceState moves it. */
+function writeAddress(mutation: 'push' | 'replace', url: string): void {
+	if (typeof window === 'undefined' || !window.history) return;
+	const target = new URL(url);
+	const path = `${target.pathname}${target.search}${target.hash}`;
+	if (mutation === 'push') window.history.pushState({}, '', path);
+	else window.history.replaceState({}, '', path);
 }
 
 function buildNavigationTarget(entry: TestHistoryEntry) {
@@ -88,10 +105,12 @@ export async function goto(
 	} = {}
 ): Promise<void> {
 	const from = cloneEntry(history[historyIndex]);
+	const target = resolveUrl(url).href;
 	const entry: InternalHistoryEntry = {
-		url: resolveUrl(url).href,
+		url: target,
 		state: cloneState(options.state ?? {}),
-		routeGeneration: nextRouteGeneration++
+		routeGeneration: nextRouteGeneration++,
+		pageUrl: target
 	};
 
 	if (options.replaceState) {
@@ -102,6 +121,7 @@ export async function goto(
 	}
 
 	navigationLog.push({ operation: 'goto', ...cloneEntry(entry) });
+	writeAddress(options.replaceState ? 'replace' : 'push', entry.url);
 	publish(entry);
 	await Promise.resolve();
 
@@ -142,12 +162,14 @@ export function pushState(url: string | URL, state: App.PageState): void {
 	const entry: InternalHistoryEntry = {
 		url: resolveUrl(url).href,
 		state: cloneState(state),
-		routeGeneration: history[historyIndex].routeGeneration
+		routeGeneration: history[historyIndex].routeGeneration,
+		pageUrl: page.url.href
 	};
 	history = [...history.slice(0, historyIndex + 1), entry];
 	historyIndex = history.length - 1;
 	navigationLog.push({ operation: 'pushState', ...cloneEntry(entry) });
-	publish(entry);
+	writeAddress('push', entry.url);
+	__setTestPageState(entry.state);
 }
 
 export function replaceState(url: string | URL, state: App.PageState): void {
@@ -155,11 +177,13 @@ export function replaceState(url: string | URL, state: App.PageState): void {
 	const entry: InternalHistoryEntry = {
 		url: resolveUrl(url).href,
 		state: cloneState(state),
-		routeGeneration: history[historyIndex].routeGeneration
+		routeGeneration: history[historyIndex].routeGeneration,
+		pageUrl: page.url.href
 	};
 	history[historyIndex] = entry;
 	navigationLog.push({ operation: 'replaceState', ...cloneEntry(entry) });
-	publish(entry);
+	writeAddress('replace', entry.url);
+	__setTestPageState(entry.state);
 }
 
 /** Move through history, distinguishing shallow state from full route entries. */
@@ -171,7 +195,8 @@ export function __go(delta: number): boolean {
 	historyIndex = targetIndex;
 	const entry = history[historyIndex];
 	navigationLog.push({ operation: 'popstate', ...cloneEntry(entry), delta });
-	publish(entry);
+	writeAddress('replace', entry.url);
+	__setTestPage(entry.pageUrl, entry.state);
 
 	if (from.routeGeneration !== entry.routeGeneration) {
 		const navigation = {
@@ -227,7 +252,8 @@ export function __resetNavigation(
 	state: App.PageState = {}
 ): void {
 	__resetTestPage(url, state);
-	history = [{ url: page.url.href, state: cloneState(page.state), routeGeneration: 0 }];
+	history = [{ url: page.url.href, state: cloneState(page.state), routeGeneration: 0, pageUrl: page.url.href }];
+	writeAddress('replace', page.url.href);
 	historyIndex = 0;
 	nextRouteGeneration = 1;
 	navigationLog = [];

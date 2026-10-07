@@ -157,7 +157,7 @@ describe("AlbumDetailResolver.readDetailRows", () => {
 
   it("refuses a track title Roon rendered as control characters", async () => {
     const session = new ScriptedSession();
-    session.browse.mockResolvedValueOnce(detail(["HumanBehaviour"]));
+    session.browse.mockResolvedValueOnce(detail(["Human\x07Behaviour"]));
 
     await expect(
       new AlbumDetailResolver().readDetailRows(session, "genres", "k", "Debut")

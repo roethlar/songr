@@ -1,6 +1,6 @@
 {
   "name": "songr",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "description": "Web-based controller for Roon music playback with real-time UI",
   "main": "dist/index.js",
   "scripts": {
@@ -14,7 +14,7 @@
     "test:browser": "playwright test --config ui/playwright.config.ts",
     "test:library-performance": "playwright test --config ui/playwright.performance.config.ts",
     "test:browser:headed": "playwright test --config ui/playwright.config.ts --headed",
-    "test:browser:install": "playwright install chromium"
+    "test:browser:install": "playwright install chromium webkit"
   },
   "keywords": [
     "roon",

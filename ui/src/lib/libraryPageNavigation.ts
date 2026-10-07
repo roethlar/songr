@@ -8,7 +8,21 @@ import {
 } from '$lib/libraryRoute';
 import { libraryRouteFromPageState } from '$lib/libraryRouteState';
 
-let pendingSelfAuthoredFingerprint: string | null = null;
+/**
+ * The Library address the view currently shows, as a canonical route
+ * fingerprint. SvelteKit's shallow pushState/replaceState change the address
+ * bar and page.state but never page.url, which keeps naming the route that
+ * mounted the host until a Back/Forward republishes it. So page.url cannot say
+ * where the view is; this record does. Every successful write and every
+ * activation the host commits sets it; Back/Forward detection and the push
+ * dedupe compare against it.
+ */
+let shownFingerprint: string | null = null;
+
+function routeFingerprint(url: URL): string | null {
+	const route = decodeLibraryRoute(url);
+	return route ? encodeLibraryRoute(route) : null;
+}
 
 export type LibraryPageStateWriteResult = 'pushed' | 'deduped' | 'refused';
 
@@ -44,21 +58,14 @@ function writeLibraryPageState(
 ): LibraryPageStateWriteResult {
 	const url = preflightLibraryPageState(state, routeOverride);
 	if (url === null) return 'refused';
-	const current = decodeLibraryRoute(page.url);
-	if (mutation === 'push' && current && encodeLibraryRoute(current) === url) {
-		return 'deduped';
+	const shown = shownFingerprint ?? routeFingerprint(page.url);
+	if (mutation === 'push' && shown === url) return 'deduped';
+	if (mutation === 'push') {
+		pushState(url, {});
+	} else {
+		replaceState(url, {});
 	}
-	pendingSelfAuthoredFingerprint = url;
-	try {
-		if (mutation === 'push') {
-			pushState(url, {});
-		} else {
-			replaceState(url, {});
-		}
-	} catch (reason) {
-		pendingSelfAuthoredFingerprint = null;
-		throw reason;
-	}
+	shownFingerprint = url;
 	return 'pushed';
 }
 
@@ -76,23 +83,24 @@ export function replaceLibraryPageState(
 	return writeLibraryPageState('replace', state, routeOverride);
 }
 
-/**
- * SvelteKit shallow writes and shallow browser traversal both surface through
- * reactive page.url. The host calls this once for each observed change so a
- * write it just authored is not mistaken for Back/Forward. Only the newest
- * local write remains pending, which also makes rapid writes followed by Back
- * resolve to the actual popped entry rather than a stale suppression token.
- */
-export function consumeSelfAuthoredLibraryPageState(url: URL): boolean {
-	const route = decodeLibraryRoute(url);
-	const observedFingerprint = route ? encodeLibraryRoute(route) : null;
-	const matched =
-		pendingSelfAuthoredFingerprint !== null &&
-		observedFingerprint === pendingSelfAuthoredFingerprint;
-	pendingSelfAuthoredFingerprint = null;
-	return matched;
+/** The host records the address of every activation it commits. */
+export function recordShownLibraryAddress(url: URL): void {
+	shownFingerprint = routeFingerprint(url);
 }
 
-export function clearPendingLibraryPageStateWrite(): void {
-	pendingSelfAuthoredFingerprint = null;
+/**
+ * Back/Forward detection. Called when SvelteKit republishes page.url (it does
+ * on every history traversal, never on the app's own shallow writes) with the
+ * address bar's URL: true when that address is not what the view shows, in
+ * which case it becomes the shown address and the caller restores it.
+ */
+export function libraryAddressNeedsRestore(url: URL): boolean {
+	const fingerprint = routeFingerprint(url);
+	if (fingerprint === shownFingerprint) return false;
+	shownFingerprint = fingerprint;
+	return true;
+}
+
+export function clearShownLibraryAddress(): void {
+	shownFingerprint = null;
 }

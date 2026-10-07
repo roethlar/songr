@@ -45,7 +45,7 @@ function restore(harness: ReturnType<typeof mountCredit>, route: LibraryRoute) {
 
 beforeEach(() => {
 	__resetNavigation('http://localhost/library/album-artists');
-	pageNavigation.clearPendingLibraryPageStateWrite();
+	pageNavigation.clearShownLibraryAddress();
 });
 afterEach(() => { vi.restoreAllMocks(); });
 

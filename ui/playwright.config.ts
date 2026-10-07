@@ -14,6 +14,11 @@ export default defineConfig({
 	},
 	reporter: 'list',
 	outputDir: 'test-results/playwright',
+	projects: [
+		{ name: 'chromium', use: { browserName: 'chromium' } },
+		{ name: 'webkit', testMatch: /(?:album-frame-clipping|alphabet-rail|prepared-chunk-hit|play-bar-credit)\.spec\.ts/, use: { browserName: 'webkit' } },
+		{ name: 'webkit-grid', testMatch: /library-grid-layout\.spec\.ts/, grep: /preserves exact geometry|native Tab crosses prepared chunks|hidden album grids prepare/, use: { browserName: 'webkit' } }
+	],
 	use: {
 		baseURL,
 		browserName: 'chromium',

@@ -298,12 +298,12 @@
   flex-shrink: 0;
   width: var(--rw);
   border-right: 1px solid var(--line);
-  padding: 10px 5px;
+  padding: 12px 5px;
   display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  justify-content: center;
-  gap: var(--rg);
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0;
   overflow-y: auto;
   transition: width 0.13s;
   background: var(--rail-bg);
@@ -321,12 +321,47 @@
   font-weight: 600;
   color: var(--soft);
   min-width: var(--rs);
-  height: var(--rs);
+  height: calc(var(--rs) + var(--rg));
+  flex: 0 1 calc(var(--rs) + var(--rg));
+  min-height: max(20px, calc(var(--rf) * 1.6));
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 6px;
   cursor: pointer;
+}
+.unified-surface .rail-letter {
+  display: block;
+  line-height: 1;
+  pointer-events: none;
+  transform: scale(var(--rail-scale, 1));
+}
+.unified-surface .rail[data-rail-motion] .rail-letter {
+  transition: transform 120ms ease-out;
+}
+.unified-surface .rail button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+@media (pointer: coarse) {
+  .unified-surface .rail button { min-width: 44px; min-height: 44px; }
+}
+.unified-surface[data-d="pi"] .rail {
+  display: grid;
+  /* Same column position whether or not the rail scrolls. */
+  scrollbar-gutter: stable;
+  grid-template-columns: repeat(2, 44px);
+  grid-auto-rows: 44px;
+  align-content: start;
+  justify-content: center;
+  gap: 6px;
+}
+.unified-surface[data-d="pi"] .rail button { width: 44px; height: 44px; min-height: 44px; }
+.unified-surface :is(.rail, .u-main, .tl, .pres)::-webkit-scrollbar-track {
+  background: transparent;
+}
+.unified-surface :is(.rail, .u-main, .tl, .pres)::-webkit-scrollbar-thumb:hover {
+  background: var(--songr-scrollbar-hover, var(--songr-scrollbar));
 }
 .unified-surface .rail b:hover,
 .unified-surface .rail button:hover {
@@ -371,7 +406,9 @@
   --chip: 36px;
 }
 .unified-surface[data-d="pi"] {
-  --rw: 104px;
+  /* Two 44px columns, the 6px gap, 10px padding, the 1px border and the 5px
+     rail scrollbar. */
+  --rw: 110px;
   --rs: 44px;
   --rf: 19px;
   --rg: 6px;
@@ -379,6 +416,10 @@
   --tile: 128px;
   --col: 2;
   --chip: 46px;
+}
+
+@media (pointer: coarse) {
+  .unified-surface[data-d="compact"] { --rw: 62px; }
 }
 
 .unified-surface .u-main {

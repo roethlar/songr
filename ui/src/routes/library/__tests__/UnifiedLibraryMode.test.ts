@@ -34,7 +34,7 @@ import {
 	resetLibraryRoots,
 	retireLibraryGeneration
 } from '$lib/stores/libraryRootsStore';
-import { clearPendingLibraryPageStateWrite } from '$lib/libraryPageNavigation';
+import { clearShownLibraryAddress } from '$lib/libraryPageNavigation';
 import { decodeLibraryRoute } from '$lib/libraryRoute';
 import { libraryPageStateFromRoute } from '$lib/libraryRouteState';
 import {
@@ -390,6 +390,48 @@ describe('UnifiedLibraryMode — lifecycle', () => {
 		expect(loadOptions.coreId).toBe('core-a');
 	});
 
+	it('retries the visible scope data when the Core pairs after a cold start', async () => {
+		// Observed on the 1.4.5 candidate: the window reopened on Genres before
+		// pairing, the genre read failed with CORE_UNAVAILABLE, and pairing
+		// re-drove only the roots, so Genres stayed failed until a scope change.
+		const corePairedStore = writable(false);
+		const genresStore = fakeNamedCountsStore([
+			{ label: 'Jazz', albumCount: 1, itemKey: 'genre:jazz', imageKey: null }
+		]);
+		const harness = mountMode({
+			withContext: true,
+			corePairedStore,
+			genresStore,
+			fetchCoreStatus: vi.fn(async () => {
+				throw new Error('Roon core not paired');
+			}) as never
+		});
+		harness.registered.lifecycle!.resume({
+			cause: 'initial',
+			pageState: buildUnifiedLibraryPageState({
+				scope: 'genres',
+				collectionDrill: null,
+				itemTarget: null,
+				filterText: '',
+				surpriseSeed: null
+			})
+		} as CommittedLibraryModeActivation);
+		await waitFor(() => expect(harness.fetchCoreStatus).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(genresStore.load).toHaveBeenCalledTimes(1));
+
+		// The unpaired attempt leaves Genres unloaded, as a CORE_UNAVAILABLE
+		// failure does.
+		genresStore.reset();
+		harness.fetchCoreStatus.mockImplementation(async () => ({
+			status: 'paired',
+			core: { id: 'core-a', displayName: 'Core', displayVersion: '1' }
+		}));
+		corePairedStore.set(true);
+
+		await waitFor(() => expect(harness.loadRoots).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(genresStore.load).toHaveBeenCalledTimes(2));
+	});
+
 	it('spends the deferred retry once, so a persistent failure cannot loop', async () => {
 		const corePairedStore = writable(false);
 		const harness = mountMode({
@@ -579,7 +621,7 @@ function restoreLegacyBrowseRoot(harness: ReturnType<typeof mountMode>): void {
 
 describe('UnifiedLibraryMode — P2 Browse and full-category search', () => {
 	beforeEach(() => {
-		clearPendingLibraryPageStateWrite();
+		clearShownLibraryAddress();
 		__resetNavigation();
 		setZonesSnapshot([
 			{
@@ -1007,7 +1049,7 @@ describe('UnifiedLibraryMode — scope views and drills (slice 5)', () => {
 			'http://localhost/library',
 			buildLibraryPageStateEnvelope(buildUnifiedRootPageState())
 		);
-		clearPendingLibraryPageStateWrite();
+		clearShownLibraryAddress();
 	});
 
 	/**
@@ -2349,7 +2391,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 			'http://localhost/library',
 			buildLibraryPageStateEnvelope(buildUnifiedRootPageState())
 		);
-		clearPendingLibraryPageStateWrite();
+		clearShownLibraryAddress();
 		setZonesSnapshot([]);
 	});
 
@@ -2693,7 +2735,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 		__resetNavigation(
 			'http://localhost/library/genres/path/genre;Jazz;;/section;Albums;;'
 		);
-		clearPendingLibraryPageStateWrite();
+		clearShownLibraryAddress();
 		const browserBack = vi.spyOn(window.history, 'back').mockImplementation(() => {});
 		const openLiveRoot = vi.fn(async () =>
 			routedLevel('Genres', [{ token: 'genre:jazz', title: 'Jazz', kind: 'genre' }])
@@ -3150,7 +3192,7 @@ describe('UnifiedLibraryMode — the live view of Roon (Slice 2)', () => {
 describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 	beforeEach(() => {
 		__resetNavigation('http://localhost/library');
-		clearPendingLibraryPageStateWrite();
+		clearShownLibraryAddress();
 		resetLibraryIntentStore();
 		setZonesSnapshot([]);
 	});
@@ -3639,7 +3681,7 @@ describe('UnifiedLibraryMode — palette capture (plan §3.2 slice 7)', () => {
 describe('UnifiedLibraryMode — smart-filter pages (plan §3.2 slice 7)', () => {
 	beforeEach(() => {
 		__resetNavigation('http://localhost/library');
-		clearPendingLibraryPageStateWrite();
+		clearShownLibraryAddress();
 	});
 
 	/**

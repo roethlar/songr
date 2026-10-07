@@ -27,6 +27,29 @@ const stubRoon: any = {
   getImage: () => null,
 };
 
+/**
+ * Issue requests through a small worker pool, reading every body so
+ * connections are reused. The limiters count requests, not sockets; a
+ * single burst of hundreds of simultaneous connections exceeds macOS's
+ * listen backlog (kern.ipc.somaxconn, 128) and fails with ECONNRESET,
+ * which no real client (about six connections per host) can produce.
+ */
+async function pooledStatuses(urls: readonly string[], workers = 16): Promise<number[]> {
+  const statuses = new Array<number>(urls.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: workers }, async () => {
+      while (next < urls.length) {
+        const index = next++;
+        const response = await fetch(urls[index]);
+        await response.arrayBuffer();
+        statuses[index] = response.status;
+      }
+    })
+  );
+  return statuses;
+}
+
 async function startApp() {
   const transport = new TransportService(stubRoon as RoonClient, stubLogger);
   const images = new ImageService(stubRoon as RoonClient, stubLogger, '/tmp/__roon_test_img_cache__');
@@ -369,21 +392,24 @@ describe('HTTP app routing', () => {
       // 700 image requests: above the general cap, far below the
       // image cap. None may 429 (they may 4xx/5xx for other reasons —
       // the stub Roon has no image service — but not 429).
-      const imageResults = await Promise.all(
-        Array.from({ length: 700 }, (_, i) =>
-          fetch(`${isolated.url}/api/image/key-${i}`).then((r) => r.status)
-        )
+      const imageStatuses = await pooledStatuses(
+        Array.from({ length: 700 }, (_, i) => `${isolated.url}/api/image/key-${i}`)
       );
-      expect(imageResults).not.toContain(429);
+      expect(imageStatuses).toHaveLength(700);
+      expect(imageStatuses).not.toContain(429);
 
-      // The general limiter still works: hammer a non-image endpoint
-      // past 600 and expect 429s to appear.
-      const coreResults = await Promise.all(
-        Array.from({ length: 650 }, () =>
-          fetch(`${isolated.url}/api/core`).then((r) => r.status)
-        )
+      // Direct proof the images spent none of the general budget.
+      const first = await fetch(`${isolated.url}/api/core`);
+      await first.arrayBuffer();
+      expect(first.status).not.toBe(429);
+      expect(first.headers.get('ratelimit')).toMatch(/\blimit=600\b.*\bremaining=599\b/);
+
+      // The general limiter still works: the rest of its 600 pass, then
+      // every further request in the window is refused.
+      const coreStatuses = await pooledStatuses(
+        Array.from({ length: 649 }, () => `${isolated.url}/api/core`)
       );
-      expect(coreResults).toContain(429);
+      expect(coreStatuses.filter((status) => status === 429)).toHaveLength(50);
     } finally {
       await isolated.close();
     }

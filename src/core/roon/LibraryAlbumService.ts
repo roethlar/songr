@@ -1012,7 +1012,7 @@ export class LibraryAlbumService {
       locator.collectionExactName,
       locator.rendering.exactTitle,
       locator.rendering.exactCredit,
-    ].join(" ");
+    ].join("\0");
   }
 
   private assertReadAuthority(operation: LibraryAlbumOperation): void {

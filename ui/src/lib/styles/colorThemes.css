@@ -6,6 +6,8 @@ html[data-theme='laser'] {
 	--songr-theme-panel: #0c050e;
 	--songr-theme-control: #190b1d;
 	--songr-theme-line: #762463;
+	--songr-theme-scrollbar: #303030;
+	--songr-theme-scrollbar-hover: #484848;
 	--songr-theme-text: #fff7fd;
 	--songr-theme-soft: #d8bace;
 	--songr-theme-dim: #bea4b6;
@@ -24,6 +26,8 @@ html[data-theme='miami'] {
 	--songr-theme-panel: #310b39;
 	--songr-theme-control: #34113f;
 	--songr-theme-line: #a03889;
+	--songr-theme-scrollbar: #3b3b3b;
+	--songr-theme-scrollbar-hover: #505050;
 	--songr-theme-text: #fff5fb;
 	--songr-theme-soft: #e0c3dd;
 	--songr-theme-dim: #c8a9c4;
@@ -42,6 +46,8 @@ html[data-theme='pop'] {
 	--songr-theme-panel: #ffdf39;
 	--songr-theme-control: #ffdfe6;
 	--songr-theme-line: #202334;
+	--songr-theme-scrollbar: rgba(32, 32, 32, 0.24);
+	--songr-theme-scrollbar-hover: rgba(32, 32, 32, 0.38);
 	--songr-theme-text: #202334;
 	--songr-theme-soft: #514436;
 	--songr-theme-dim: #625142;
@@ -86,9 +92,10 @@ html:is([data-theme='laser'], [data-theme='miami'], [data-theme='pop']) {
 	--songr-line-20: var(--songr-theme-line);
 	--songr-line-22: var(--songr-theme-line);
 	--songr-keyline: var(--songr-theme-line);
-	--songr-scrollbar: var(--songr-theme-line);
-	--songr-scrollbar-rail: var(--songr-theme-line);
-	--songr-queue-scrollbar: var(--songr-theme-line);
+	--songr-scrollbar: var(--songr-theme-scrollbar);
+	--songr-scrollbar-rail: var(--songr-theme-scrollbar);
+	--songr-queue-scrollbar: var(--songr-theme-scrollbar);
+	--songr-scrollbar-hover: var(--songr-theme-scrollbar-hover);
 	--songr-disabled: var(--songr-theme-line);
 	--songr-text: var(--songr-theme-text);
 	--songr-text-high: var(--songr-theme-text);

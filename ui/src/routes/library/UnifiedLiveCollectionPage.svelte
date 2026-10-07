@@ -517,7 +517,7 @@
 	.has-tracks h2 { max-width:40%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 	.has-tracks .row-filter, .has-tracks .row-sort, .has-tracks .bulk-controls { order:2; }
 	.has-tracks .row-filter { margin-left:0; }
-	.prepared-rows { display: grid; grid-template-columns: minmax(0, 1fr); --library-chunk-overflow: 280px; }
+	.prepared-rows { display: grid; grid-template-columns: minmax(0, 1fr); --library-chunk-overflow: 280px; --library-chunk-paint-room: 0px; }
 	.row-filter, .row-sort { font: inherit; font-size: 12px; color: var(--text); background: var(--control); border: 1px solid var(--line); border-radius: 6px; min-height: 32px; padding: 5px 9px; max-width: 100%; }
 	.row-filter { margin-left: auto; width: 180px; min-width: 100px; }
 	.row-filter:focus-visible, .row-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

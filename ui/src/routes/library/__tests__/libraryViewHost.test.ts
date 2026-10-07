@@ -4,11 +4,14 @@ import { get } from 'svelte/store';
 import {
 	__getNavigationLog,
 	__resetNavigation,
+	__back,
 	__setRouterInitialized,
 	pushState
 } from '../../../test/app-stubs/navigation';
 import { __setTestPage } from '../../../test/app-stubs/state.svelte';
 import { libraryViewHostStore } from '$lib/stores/libraryViewHostStore';
+import { pushLibraryPageState } from '$lib/libraryPageNavigation';
+import { buildUnifiedLibraryPageState, buildUnifiedRootPageState } from '$lib/libraryPageState';
 import { unifiedLibraryPrefsStore } from '$lib/stores/unifiedLibraryPrefsStore';
 
 vi.mock('../UnifiedLibraryMode.svelte', async () => ({
@@ -17,6 +20,20 @@ vi.mock('../UnifiedLibraryMode.svelte', async () => ({
 
 import LibraryPage from '../+page.svelte';
 import DeepLibraryPage from '../[...path]/+page.svelte';
+
+/** The app's own write path: what the Library pushes when a user navigates. */
+const pushBrowse = (query: string) =>
+	pushLibraryPageState(
+		buildUnifiedLibraryPageState({
+			scope: 'browse',
+			collectionDrill: null,
+			itemTarget: null,
+			filterText: '',
+			surpriseSeed: null,
+			browseHistory: { context: { hierarchy: 'search', query }, history: [], forward: [] }
+		})
+	);
+const pushAlbums = () => pushLibraryPageState(buildUnifiedRootPageState('albums'));
 
 describe('Unified-only Library host', () => {
 	beforeEach(() => {
@@ -69,15 +86,41 @@ describe('Unified-only Library host', () => {
 		expect(getByTestId('unified-host-probe')).toHaveAttribute('data-scope', 'artists');
 	});
 
-	it('restores a URL-only shallow entry as a history-pop activation', async () => {
+	it('treats its own shallow writes as shown and restores them on Back', async () => {
 		__resetNavigation('http://localhost/library/artists');
 		const { getByTestId } = render(LibraryPage);
 		await waitFor(() => expect(getByTestId('unified-host-probe')).toBeInTheDocument());
 
-		pushState('/library/browse?search=Bowie', {});
+		expect(pushBrowse('Bowie')).toBe('pushed');
+		expect(pushAlbums()).toBe('pushed');
+		await Promise.resolve();
+		expect(getByTestId('unified-host-probe')).toHaveAttribute('data-cause', 'initial');
+
+		expect(__back()).toBe(true);
 		await waitFor(() =>
 			expect(getByTestId('unified-host-probe')).toHaveAttribute('data-cause', 'history-pop')
 		);
+		expect(getByTestId('unified-host-probe')).toHaveAttribute('data-scope', 'browse');
+	});
+
+	it('restores the second Back after returning by Back and navigating again (#22)', async () => {
+		__resetNavigation('http://localhost/library/artists');
+		const { getByTestId } = render(LibraryPage);
+		await waitFor(() => expect(getByTestId('unified-host-probe')).toBeInTheDocument());
+		const resumes = () => Number(getByTestId('unified-host-probe').getAttribute('data-resumes'));
+		const initialResumes = resumes();
+
+		expect(pushBrowse('Bowie')).toBe('pushed');
+		expect(pushAlbums()).toBe('pushed');
+		expect(__back()).toBe(true);
+		await waitFor(() => expect(resumes()).toBe(initialResumes + 1));
+		expect(getByTestId('unified-host-probe')).toHaveAttribute('data-scope', 'browse');
+
+		// The user navigates in again; the view shows albums once more.
+		expect(pushAlbums()).toBe('pushed');
+		expect(__back()).toBe(true);
+		await waitFor(() => expect(resumes()).toBe(initialResumes + 2));
+		expect(getByTestId('unified-host-probe')).toHaveAttribute('data-cause', 'history-pop');
 		expect(getByTestId('unified-host-probe')).toHaveAttribute('data-scope', 'browse');
 	});
 

@@ -13,11 +13,13 @@
 		throw new TypeError('Unified host activation context is required');
 	}
 	let activation = $state<CommittedLibraryModeActivation>(initialActivation);
+	let resumes = $state(0);
 
 	onMount(() =>
 		registerLifecycle('unified', {
 			resume(next) {
 				activation = next;
+				resumes += 1;
 			},
 			suspend() {}
 		})
@@ -29,4 +31,5 @@
 	data-cause={activation.cause}
 	data-scope={activation.pageState.snapshot.scope}
 	data-artist-view={activation.pageState.snapshot.artistView}
+	data-resumes={resumes}
 ></div>
