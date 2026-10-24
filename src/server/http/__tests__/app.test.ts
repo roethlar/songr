@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import { promises as fs } from 'fs';
 import { AddressInfo } from 'net';
+import { brotliCompressSync } from 'zlib';
 import { createHttpApp } from '../app';
 import { RoonClient } from '../../../core/roon/RoonClient';
 import { TransportService } from '../../../core/roon/TransportService';
@@ -116,6 +117,19 @@ describe('HTTP app routing', () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBeTruthy();
+  });
+
+  it('refuses compressed request bodies with 415 instead of inflating them', async () => {
+    const res = await fetch(`${app.url}/api/favorites`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'br' },
+      body: new Uint8Array(
+        brotliCompressSync(JSON.stringify({ type: 'track', title: 'Hey Jude', artist: 'The Beatles' }))
+      ),
+    });
+    expect(res.status).toBe(415);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('content encoding unsupported');
   });
 
   it('returns JSON 404 for unknown /api/* routes (does not fall through to SPA)', async () => {

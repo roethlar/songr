@@ -91,11 +91,18 @@ command -v systemctl &>/dev/null \
 
 # Detect node
 NODE_BIN=$(command -v node 2>/dev/null || true)
-[[ -n "$NODE_BIN" ]] || die "Node.js is not installed.  Install Node 20+ and re-run."
+[[ -n "$NODE_BIN" ]] || die "Node.js is not installed.  Install Node 22.23.4+ and re-run."
 
-NODE_MAJOR=$(node -e 'process.stdout.write(String(process.versions.node.split(".")[0]))')
-[[ "$NODE_MAJOR" -ge 20 ]] \
-  || die "Node.js 20 or newer is required (found $("$NODE_BIN" --version))."
+# Minimum is the patched release of the lowest supported line; compare
+# major.minor.patch, not just the major.
+NODE_MIN_VERSION="22.23.4"
+NODE_VERSION=$(node -e 'process.stdout.write(process.versions.node)')
+IFS=. read -r NODE_MAJOR NODE_MINOR NODE_PATCH <<<"${NODE_VERSION%%-*}"
+IFS=. read -r MIN_MAJOR MIN_MINOR MIN_PATCH <<<"$NODE_MIN_VERSION"
+(( NODE_MAJOR > MIN_MAJOR
+   || (NODE_MAJOR == MIN_MAJOR && (NODE_MINOR > MIN_MINOR
+       || (NODE_MINOR == MIN_MINOR && NODE_PATCH >= MIN_PATCH))) )) \
+  || die "Node.js $NODE_MIN_VERSION or newer is required (found $("$NODE_BIN" --version))."
 
 # Detect npm
 command -v npm &>/dev/null || die "npm is not installed."

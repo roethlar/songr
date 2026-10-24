@@ -77,7 +77,9 @@ export const createHttpApp = (
     })
   );
 
-  app.use(express.json({ limit: "32kb" }));
+  // No client sends compressed bodies; refusing them (415) keeps
+  // attacker-supplied gzip/deflate/br out of the zlib decoders.
+  app.use(express.json({ limit: "32kb", inflate: false }));
 
   // Rate limit /api/* — generous for normal use, low enough to throttle
   // abusive clients on a LAN. Trust proxy not enabled by default; if the

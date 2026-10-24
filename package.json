@@ -1,6 +1,6 @@
 {
   "name": "songr",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "description": "Web-based controller for Roon music playback with real-time UI",
   "main": "dist/index.js",
   "scripts": {
@@ -25,6 +25,9 @@
   "author": "Michael Coelho <mcoelho@gmail.com>",
   "license": "MIT",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.23.4"
+  },
   "dependencies": {
     "dotenv": "^17.2.3",
     "express": "^5.1.0",

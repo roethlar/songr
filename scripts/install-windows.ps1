@@ -46,11 +46,16 @@ if (-not (Test-Path "package.json") -or -not (Test-Path "src") -or -not (Test-Pa
 }
 
 $NodeBin = Get-Command node -ErrorAction SilentlyContinue
-if (-not $NodeBin) { Die "Node.js is not installed. Install Node 20+ and re-run." }
+if (-not $NodeBin) { Die "Node.js is not installed. Install Node 22.23.4+ and re-run." }
 $NodeBin = $NodeBin.Source
 
-$NodeMajor = & $NodeBin -e "process.stdout.write(String(process.versions.node.split('.')[0]))"
-if ([int]$NodeMajor -lt 20) { Die "Node.js 20 or newer is required (found $(& $NodeBin --version))." }
+# Minimum is the patched release of the lowest supported line; [version]
+# compares major.minor.patch, not just the major.
+$NodeMinVersion = [version]"22.23.4"
+$NodeVersion = & $NodeBin -e "process.stdout.write(process.versions.node)"
+if ([version]($NodeVersion -replace '-.*$', '') -lt $NodeMinVersion) {
+    Die "Node.js $NodeMinVersion or newer is required (found $(& $NodeBin --version))."
+}
 
 $NpmBin = Get-Command npm -ErrorAction SilentlyContinue
 if (-not $NpmBin) { Die "npm is not installed." }

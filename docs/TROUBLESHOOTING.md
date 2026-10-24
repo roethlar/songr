@@ -106,6 +106,17 @@ When you first start the Roon Controller, it will show status: `discovering`. Th
 4. For a multi-output zone, use Roon directly if a different output must be
    adjusted
 
+### "Blank or black page in the browser"
+
+**Possible causes**:
+- The browser is below the minimum version listed under Requirements in the
+  README
+
+**Checks**:
+1. Open the same URL from a current desktop browser
+2. On an iPad or iPhone, check the OS version under Settings → General →
+   About against the README minimum
+
 ---
 
 ## Library and playback

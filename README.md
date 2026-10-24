@@ -4,7 +4,7 @@ Web-based controller for a local Roon Core, built with Node.js + SvelteKit.
 
 Published desktop and headless server downloads are on
 [GitHub Releases](https://github.com/roethlar/songr/releases).
-Current release: **1.4.3**. See the [release notes](docs/releases/1.4.3.md).
+Current release: **1.4.6**. See the [release notes](docs/releases/1.4.6.md).
 
 ## Screenshots
 
@@ -206,6 +206,12 @@ Copy `.env.example` to `.env` and adjust as needed.
 - The default `HOST=0.0.0.0` exposes the controller on every interface. There is **no built-in authentication** — anyone reachable on the network can browse, search, and control playback. For a single-purpose home appliance on a trusted LAN this is intentional. For anything broader, bind to `127.0.0.1` and front with a reverse proxy that adds auth, or set `CLIENT_ORIGIN` to your specific frontend origin(s).
 - HTTP responses include Helmet defaults (CSP, `X-Content-Type-Options`, etc.). The `/api/*` surface is rate-limited to 600 requests/minute per IP.
 - The Roon pairing token is written with file mode `0o600` under a directory created with mode `0o700`.
+
+## Requirements
+
+- **Roon Core** on the local network.
+- **Node.js 22.23.4 or newer** for the headless server (on Node 24, use 24.22.1 or newer; on Node 26, 26.12.1 or newer). The Docker image bundles Node 22.
+- **Browser**: Safari 16 (iOS/iPadOS 16), Chrome 107, Edge 107 or Firefox 104, or newer. The desktop app has no browser requirement.
 
 ## Install
 
