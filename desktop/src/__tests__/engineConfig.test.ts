@@ -17,29 +17,30 @@ import {
   SAVE_SETTINGS_CHANNEL,
 } from '../shellChannels';
 import { DEFAULT_NETWORK_PORT } from '../shellSettings';
+import { abs } from './support/platformPaths';
 
-const DEV_LOCATION = { kind: 'dev', appRoot: '/opt/app/desktop' } as const;
+const DEV_LOCATION = { kind: 'dev', appRoot: abs('/opt/app/desktop') } as const;
 const PACKAGED_LOCATION = {
   kind: 'packaged',
-  resourcesPath: '/Applications/Songr.app/Contents/Resources',
+  resourcesPath: abs('/Applications/Songr.app/Contents/Resources'),
 } as const;
 
 describe('resolveEngineEntry', () => {
   it('defaults to the repository build beside the desktop workspace', () => {
-    expect(resolveEngineEntry(DEV_LOCATION, {})).toBe('/opt/app/dist/index.js');
+    expect(resolveEngineEntry(DEV_LOCATION, {})).toBe(abs('/opt/app/dist/index.js'));
   });
 
   it('honours the manual override', () => {
     expect(
       resolveEngineEntry(DEV_LOCATION, {
-        [ENGINE_ENTRY_ENV]: '/Applications/App.app/Contents/Resources/engine/dist/index.js',
+        [ENGINE_ENTRY_ENV]: abs('/Applications/App.app/Contents/Resources/engine/dist/index.js'),
       }),
-    ).toBe('/Applications/App.app/Contents/Resources/engine/dist/index.js');
+    ).toBe(abs('/Applications/App.app/Contents/Resources/engine/dist/index.js'));
   });
 
   it('ignores a blank override rather than resolving it to the cwd', () => {
     expect(resolveEngineEntry(DEV_LOCATION, { [ENGINE_ENTRY_ENV]: '   ' })).toBe(
-      '/opt/app/dist/index.js',
+      abs('/opt/app/dist/index.js'),
     );
   });
 
@@ -48,7 +49,7 @@ describe('resolveEngineEntry', () => {
     // is beside app.asar, not one level up from the app root — that walk lands
     // inside the archive, where the file has never existed.
     expect(resolveEngineEntry(PACKAGED_LOCATION, {})).toBe(
-      '/Applications/Songr.app/Contents/Resources/engine/dist/index.js',
+      abs('/Applications/Songr.app/Contents/Resources/engine/dist/index.js'),
     );
   });
 
@@ -63,31 +64,31 @@ describe('resolveEngineEntry', () => {
 
   it('still honours the override when packaged, so a build can be pointed at a checkout', () => {
     expect(
-      resolveEngineEntry(PACKAGED_LOCATION, { [ENGINE_ENTRY_ENV]: '/checkout/dist/index.js' }),
-    ).toBe('/checkout/dist/index.js');
+      resolveEngineEntry(PACKAGED_LOCATION, { [ENGINE_ENTRY_ENV]: abs('/checkout/dist/index.js') }),
+    ).toBe(abs('/checkout/dist/index.js'));
   });
 });
 
 describe('buildEngineLaunchPlan when packaged', () => {
   const plan = buildEngineLaunchPlan({
     location: PACKAGED_LOCATION,
-    userDataDir: '/Users/someone/Library/Application Support/Songr',
+    userDataDir: abs('/Users/someone/Library/Application Support/Songr'),
     parentEnv: {},
   });
 
   it('forks the staged engine entry', () => {
     expect(plan.entryPath).toBe(
-      '/Applications/Songr.app/Contents/Resources/engine/dist/index.js',
+      abs('/Applications/Songr.app/Contents/Resources/engine/dist/index.js'),
     );
   });
 
   it('runs it from the payload root, where the production node_modules sits', () => {
-    expect(plan.cwd).toBe('/Applications/Songr.app/Contents/Resources/engine');
+    expect(plan.cwd).toBe(abs('/Applications/Songr.app/Contents/Resources/engine'));
   });
 
   it('keeps the per-user data directories, unchanged from the dev run', () => {
     expect(plan.env.CONFIG_DIR).toBe(
-      path.join('/Users/someone/Library/Application Support/Songr', 'config'),
+      path.join(abs('/Users/someone/Library/Application Support/Songr'), 'config'),
     );
     expect(plan.env.PORT).toBe('0');
     expect(plan.env.HOST).toBe(ENGINE_HOST);
@@ -102,7 +103,7 @@ describe('buildEngineLaunchPlan when packaged', () => {
     expect(
       buildEngineLaunchPlan({
         location: PACKAGED_LOCATION,
-        userDataDir: '/userdata',
+        userDataDir: abs('/userdata'),
         parentEnv: { NODE_ENV: 'development' },
       }).env.NODE_ENV,
     ).toBe('production');
@@ -114,7 +115,7 @@ describe('buildEngineLaunchPlan when packaged', () => {
     // assertion that says so — the app would otherwise start, answer the API
     // and show an empty window.
     expect(engineUiBuildPath(plan.entryPath)).toBe(
-      '/Applications/Songr.app/Contents/Resources/engine/ui/build',
+      abs('/Applications/Songr.app/Contents/Resources/engine/ui/build'),
     );
   });
 });
@@ -122,7 +123,7 @@ describe('buildEngineLaunchPlan when packaged', () => {
 describe('buildEngineLaunchPlan', () => {
   const plan = buildEngineLaunchPlan({
     location: DEV_LOCATION,
-    userDataDir: '/home/someone/.config/desktop-app',
+    userDataDir: abs('/home/someone/.config/desktop-app'),
     parentEnv: { PATH: '/usr/bin', PORT: '3000', HOST: '0.0.0.0', DATA_DIR: '/srv/data' },
   });
 
@@ -132,8 +133,8 @@ describe('buildEngineLaunchPlan', () => {
   });
 
   it('overrides inherited appliance settings instead of deferring to them', () => {
-    expect(plan.env.DATA_DIR).toBe(path.join('/home/someone/.config/desktop-app', 'data'));
-    expect(plan.env.CONFIG_DIR).toBe(path.join('/home/someone/.config/desktop-app', 'config'));
+    expect(plan.env.DATA_DIR).toBe(path.join(abs('/home/someone/.config/desktop-app'), 'data'));
+    expect(plan.env.CONFIG_DIR).toBe(path.join(abs('/home/someone/.config/desktop-app'), 'config'));
   });
 
   it('passes the rest of the environment through', () => {
@@ -148,15 +149,15 @@ describe('buildEngineLaunchPlan', () => {
   });
 
   it('runs the engine from its own package root', () => {
-    expect(plan.entryPath).toBe('/opt/app/dist/index.js');
-    expect(plan.cwd).toBe('/opt/app');
+    expect(plan.entryPath).toBe(abs('/opt/app/dist/index.js'));
+    expect(plan.cwd).toBe(abs('/opt/app'));
   });
 });
 
 describe('buildEngineLaunchPlan with "serve on the local network" on', () => {
   const plan = buildEngineLaunchPlan({
     location: DEV_LOCATION,
-    userDataDir: '/home/someone/.config/desktop-app',
+    userDataDir: abs('/home/someone/.config/desktop-app'),
     parentEnv: {},
     settings: { serveOnNetwork: true, networkPort: DEFAULT_NETWORK_PORT },
   });
@@ -169,12 +170,12 @@ describe('buildEngineLaunchPlan with "serve on the local network" on', () => {
   });
 
   it('changes nothing else about the launch', () => {
-    expect(plan.entryPath).toBe('/opt/app/dist/index.js');
+    expect(plan.entryPath).toBe(abs('/opt/app/dist/index.js'));
     expect(plan.env.CONFIG_DIR).toBe(
-      path.join('/home/someone/.config/desktop-app', 'config'),
+      path.join(abs('/home/someone/.config/desktop-app'), 'config'),
     );
     expect(plan.env.DATA_DIR).toBe(
-      path.join('/home/someone/.config/desktop-app', 'data'),
+      path.join(abs('/home/someone/.config/desktop-app'), 'data'),
     );
   });
 
@@ -182,7 +183,7 @@ describe('buildEngineLaunchPlan with "serve on the local network" on', () => {
     expect(
       buildEngineLaunchPlan({
         location: DEV_LOCATION,
-        userDataDir: '/userdata',
+        userDataDir: abs('/userdata'),
         parentEnv: {},
         settings: { serveOnNetwork: true, networkPort: 4444 },
       }).env.PORT,
@@ -192,7 +193,7 @@ describe('buildEngineLaunchPlan with "serve on the local network" on', () => {
   it('stays on loopback while the toggle is off, whatever the port says', () => {
     const off = buildEngineLaunchPlan({
       location: DEV_LOCATION,
-      userDataDir: '/userdata',
+      userDataDir: abs('/userdata'),
       parentEnv: {},
       settings: { serveOnNetwork: false, networkPort: 4444 },
     });

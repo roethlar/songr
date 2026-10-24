@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing signed release tag to publish"
+        description: "Existing release tag to publish"
         required: true
 
 permissions:

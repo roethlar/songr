@@ -1,3 +1,4 @@
+import childProcess, { execFileSync, spawnSync } from "child_process";
 import { promises as fsp } from "fs";
 import fs from "fs";
 import path from "path";
@@ -47,6 +48,134 @@ const stubLogger = {
 async function makeTokenPath(): Promise<string> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "roon-token-"));
   return path.join(dir, "roon-token.json");
+}
+
+// ── Windows ACL read-back ───────────────────────────────────────────────
+// Read independently of the code under test: PowerShell's Get-Acl SDDL and
+// .NET's view of the current user, never windowsPrivateAcl's own whoami.
+
+const SDDL_ALIASES: Record<string, string> = {
+  SY: "S-1-5-18",
+  BA: "S-1-5-32-544",
+  BU: "S-1-5-32-545",
+  WD: "S-1-1-0",
+  AU: "S-1-5-11",
+};
+
+interface DaclEntry { type: string; flags: string; rights: string; sid: string }
+interface Dacl { flags: string; entries: DaclEntry[] }
+
+function runPowerShell(script: string, env: Record<string, string> = {}): string {
+  // Windows PowerShell 5.1 cannot load its own modules from a PowerShell 7
+  // module path inherited from the shell that started Jest.
+  const childEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
+  for (const key of Object.keys(childEnv)) {
+    if (key.toLowerCase() === "psmodulepath") delete childEnv[key];
+  }
+  return execFileSync(
+    path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    { encoding: "utf8", env: childEnv, windowsHide: true }
+  ).trim();
+}
+
+function readDacl(target: string): Dacl {
+  const sddl = runPowerShell("(Get-Acl -LiteralPath $env:ACL_TARGET).Sddl", { ACL_TARGET: target });
+  const match = /D:([A-Z]*)((?:\([^)]*\))*)/.exec(sddl);
+  if (!match) throw new Error(`No DACL in SDDL ${sddl}`);
+  const entries = [...match[2].matchAll(/\(([^)]*)\)/g)].map((m) => {
+    const [type, flags, rights, , , sid] = m[1].split(";");
+    return { type, flags, rights, sid: SDDL_ALIASES[sid] ?? sid };
+  });
+  return { flags: match[1], entries };
+}
+
+function readSddl(target: string): string {
+  return runPowerShell("(Get-Acl -LiteralPath $env:ACL_TARGET).Sddl", { ACL_TARGET: target });
+}
+
+function currentWindowsUserSid(): string {
+  return runPowerShell("[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value");
+}
+
+/**
+ * The installer's layout on Windows: a `config\` directory under a parent
+ * (`C:\Program Files`) whose inheritable ACE lets every local user read.
+ * Seeded with icacls itself, not with the code under test.
+ */
+async function makeUsersReadableTokenPath(): Promise<string> {
+  return path.join(await makeUsersReadableDir("config"), "roon-token.json");
+}
+
+interface ProtectObservation {
+  target: string;
+  sizeWhenProtected: number;
+  otherProcessOpen: string;
+}
+
+const OPEN_FOR_READ_PROBE =
+  "try{const fs=require('fs');fs.closeSync(fs.openSync(process.argv[1],'r'));console.log('opened')}" +
+  "catch(e){console.log(e.code)}";
+
+/**
+ * Watch the real icacls calls: for each, how many bytes the target held and
+ * whether another process could open it for reading at that moment.
+ */
+function observeProtectCalls(): { calls: ProtectObservation[]; restore: () => void } {
+  const calls: ProtectObservation[] = [];
+  const real = childProcess.execFileSync as (...args: unknown[]) => unknown;
+  const spy = jest.spyOn(childProcess, "execFileSync").mockImplementation(((
+    file: string,
+    args: readonly string[],
+    options: unknown
+  ) => {
+    if (/icacls\.exe$/i.test(file)) {
+      const target = args[0];
+      const probe = spawnSync(process.execPath, ["-e", OPEN_FOR_READ_PROBE, target], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      calls.push({
+        target,
+        sizeWhenProtected: fs.statSync(target).size,
+        otherProcessOpen: probe.stdout.trim(),
+      });
+    }
+    return real(file, args, options);
+  }) as unknown as typeof childProcess.execFileSync);
+  return { calls, restore: () => spy.mockRestore() };
+}
+
+async function makeUsersReadableDir(name: string): Promise<string> {
+  const parent = await fsp.mkdtemp(path.join(os.tmpdir(), "roon-token-acl-"));
+  execFileSync(
+    path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "icacls.exe"),
+    [parent, "/grant", "*S-1-5-32-545:(OI)(CI)(RX)", "/q"],
+    { encoding: "utf8", windowsHide: true }
+  );
+  const dir = path.join(parent, name);
+  await fsp.mkdir(dir);
+  // Precondition: without Songr's ACL a token here would be readable by Users.
+  expect(readDacl(dir).entries).toContainEqual(
+    expect.objectContaining({ sid: "S-1-5-32-545", flags: expect.stringContaining("ID") })
+  );
+  return dir;
+}
+
+/** Exactly user, SYSTEM and Administrators, full control, nothing inherited. */
+function expectOwnerOnlyAcl(target: string, userSid: string): void {
+  const dacl = readDacl(target);
+  expect(dacl.flags).toContain("P");
+  expect(dacl.entries.filter((e) => e.flags.includes("ID"))).toEqual([]);
+  for (const broad of ["S-1-5-32-545", "S-1-1-0", "S-1-5-11"]) {
+    expect(dacl.entries.map((e) => e.sid)).not.toContain(broad);
+  }
+  expect([...new Set(dacl.entries.map((e) => e.sid))].sort()).toEqual(
+    [...new Set([userSid, "S-1-5-18", "S-1-5-32-544"])].sort()
+  );
+  for (const entry of dacl.entries) {
+    expect(entry).toMatchObject({ type: "A", rights: "FA" });
+  }
 }
 
 beforeEach(() => {
@@ -115,8 +244,10 @@ describe("RoonClient — persisted-state callbacks", () => {
   });
 
   it("set_persisted_state writes JSON atomically (tmp + rename, no leftover .tmp)", async () => {
-    const tokenPath = await makeTokenPath();
-    new RoonClient({ tokenPath, logger: stubLogger }).start();
+    const isWindows = process.platform === "win32";
+    const tokenPath = isWindows ? await makeUsersReadableTokenPath() : await makeTokenPath();
+    // The token's directory is Songr's own CONFIG_DIR, as in every default layout.
+    new RoonClient({ tokenPath, configDir: path.dirname(tokenPath), logger: stubLogger }).start();
 
     const state = {
       paired_core_id: "core-1",
@@ -127,9 +258,17 @@ describe("RoonClient — persisted-state callbacks", () => {
     const onDisk = JSON.parse(fs.readFileSync(tokenPath, "utf-8"));
     expect(onDisk).toEqual({ ...state, songr_ever_paired: true });
     expect(fs.existsSync(`${tokenPath}.tmp`)).toBe(false);
-    // 0o600 — the token grants Roon control identity.
-    const mode = fs.statSync(tokenPath).mode & 0o777;
-    expect(mode).toBe(0o600);
+    // Owner-only — the token grants Roon control identity. POSIX: mode
+    // 0o600. Windows ignores modes; the file and its directory carry an ACL
+    // granting only this user, SYSTEM and Administrators.
+    if (isWindows) {
+      const userSid = currentWindowsUserSid();
+      expectOwnerOnlyAcl(tokenPath, userSid);
+      expectOwnerOnlyAcl(path.dirname(tokenPath), userSid);
+    } else {
+      const mode = fs.statSync(tokenPath).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
   });
 
   it("set_persisted_state creates the parent directory if missing", async () => {
@@ -141,7 +280,68 @@ describe("RoonClient — persisted-state callbacks", () => {
     capturedOptions.set_persisted_state({ tokens: { "c": "x" } });
 
     expect(fs.existsSync(tokenPath)).toBe(true);
+    // A directory Songr created is Songr's own, so it is owner-only too.
+    if (process.platform === "win32") {
+      const userSid = currentWindowsUserSid();
+      expectOwnerOnlyAcl(path.dirname(tokenPath), userSid);
+      expectOwnerOnlyAcl(tokenPath, userSid);
+    } else {
+      expect(fs.statSync(path.dirname(tokenPath)).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
+    }
   });
+
+  it("leaves an existing directory that is not CONFIG_DIR exactly as it was, and keeps the token owner-only", async () => {
+    // A custom ROON_TOKEN_PATH into a shared folder, e.g. C:\data\songr-token.json.
+    const isWindows = process.platform === "win32";
+    const shared = isWindows
+      ? await makeUsersReadableDir("shared")
+      : await fsp.mkdtemp(path.join(os.tmpdir(), "roon-shared-"));
+    if (!isWindows) await fsp.chmod(shared, 0o755);
+    const sibling = path.join(shared, "someone-elses-notes.txt");
+    await fsp.writeFile(sibling, "not Songr's", "utf-8");
+    const tokenPath = path.join(shared, "songr-token.json");
+    const configDir = await fsp.mkdtemp(path.join(os.tmpdir(), "roon-config-"));
+    const readPermissions = (target: string): string =>
+      isWindows ? readSddl(target) : (fs.statSync(target).mode & 0o777).toString(8);
+    const dirBefore = readPermissions(shared);
+    const siblingBefore = readPermissions(sibling);
+
+    new RoonClient({ tokenPath, configDir, logger: stubLogger }).start();
+    capturedOptions.set_persisted_state({ paired_core_id: "core-1", tokens: { "core-1": "t" } });
+
+    expect(fs.existsSync(tokenPath)).toBe(true);
+    expect(readPermissions(shared)).toBe(dirBefore);
+    expect(readPermissions(sibling)).toBe(siblingBefore);
+    if (isWindows) {
+      // The renamed token keeps the explicit, protected ACL its tmp file got.
+      expectOwnerOnlyAcl(tokenPath, currentWindowsUserSid());
+    } else {
+      expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  (process.platform === "win32" ? it : it.skip)(
+    "secures the tmp file while it is empty and no other process can open it, whatever the directory allows",
+    async () => {
+      const shared = await makeUsersReadableDir("shared");
+      const tokenPath = path.join(shared, "songr-token.json");
+      new RoonClient({ tokenPath, logger: stubLogger }).start();
+
+      const observed = observeProtectCalls();
+      try {
+        capturedOptions.set_persisted_state({ paired_core_id: "core-1", tokens: { "core-1": "t" } });
+      } finally {
+        observed.restore();
+      }
+
+      // The shared directory is not Songr's: only the tmp file is secured.
+      expect(observed.calls).toEqual([
+        { target: `${tokenPath}.tmp`, sizeWhenProtected: 0, otherProcessOpen: "EBUSY" },
+      ]);
+      expect(JSON.parse(fs.readFileSync(tokenPath, "utf-8")).tokens).toEqual({ "core-1": "t" });
+    }
+  );
 });
 
 describe("RoonClient — discovery observations", () => {
@@ -432,13 +632,32 @@ describe("RoonClient — legacy config.json migration", () => {
     await fsp.writeFile(legacyPath, JSON.stringify(persisted), "utf-8");
 
     const tokenPath = path.join(cwdDir, "data", "roon-token.json");
-    new RoonClient({ tokenPath, logger: stubLogger }).start();
+    const observed = process.platform === "win32" ? observeProtectCalls() : null;
+    try {
+      new RoonClient({ tokenPath, logger: stubLogger }).start();
+    } finally {
+      observed?.restore();
+    }
+    // Windows: the migrated file was secured while empty and unopenable.
+    if (observed) {
+      expect(observed.calls.filter((c) => c.target === tokenPath)).toEqual([
+        { target: tokenPath, sizeWhenProtected: 0, otherProcessOpen: "EBUSY" },
+      ]);
+    }
 
     // Migrated to the configured path…
     expect(fs.existsSync(tokenPath)).toBe(true);
     expect(JSON.parse(fs.readFileSync(tokenPath, "utf-8"))).toEqual(persisted);
     // …and removed from cwd so it can't drift back into use.
     expect(fs.existsSync(legacyPath)).toBe(false);
+    // …owner-only, like every token write.
+    if (process.platform === "win32") {
+      const userSid = currentWindowsUserSid();
+      expectOwnerOnlyAcl(tokenPath, userSid);
+      expectOwnerOnlyAcl(path.dirname(tokenPath), userSid);
+    } else {
+      expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("does NOT migrate when the configured tokenPath already exists (no clobber)", async () => {

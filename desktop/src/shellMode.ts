@@ -18,7 +18,8 @@
  * retry means "try that server again".
  */
 
-import { pathToFileURL } from 'url';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 import { engineUrl } from './engineConfig';
 import type { ShellSettings } from './shellSettings';
@@ -28,6 +29,13 @@ import type { ShellSettings } from './shellSettings';
  * act only for the one local file the settings window shows — a second wall
  * behind the per-window preload split, so remote content can never reach the
  * settings channels even through a future preload mistake (dt6-1).
+ *
+ * Compares paths, not URL spellings, as `decideNavigation` does: Chromium
+ * leaves `~`, `[` and `]` literal in a file URL where Node's
+ * `pathToFileURL` percent-encodes them, so a string comparison refused the
+ * settings page itself whenever the app's path contained one of them. The
+ * query and hash are dropped by `fileURLToPath`; Windows paths compare
+ * case-insensitively, as its filesystem does.
  */
 export function isSettingsSender(
   frameUrl: string | null | undefined,
@@ -36,10 +44,21 @@ export function isSettingsSender(
   if (!frameUrl) {
     return false;
   }
-  const pageUrl = pathToFileURL(settingsPagePath).href;
-  // The page may carry a query/hash; the file part must match exactly.
-  const bare = frameUrl.split(/[?#]/, 1)[0];
-  return bare === pageUrl;
+  let framePath: string;
+  try {
+    const parsed = new URL(frameUrl);
+    if (parsed.protocol !== 'file:') {
+      return false;
+    }
+    framePath = fileURLToPath(parsed);
+  } catch {
+    return false;
+  }
+  const sender = path.resolve(framePath);
+  const page = path.resolve(settingsPagePath);
+  return process.platform === 'win32'
+    ? sender.toLowerCase() === page.toLowerCase()
+    : sender === page;
 }
 
 export type ShellMode =

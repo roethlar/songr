@@ -13,8 +13,9 @@ import {
   shellSettingsFromForm,
 } from '../shellSettings';
 import type { SettingsFileIo } from '../shellSettings';
+import { abs } from './support/platformPaths';
 
-const FILE = `/userdata/${SHELL_SETTINGS_FILE}`;
+const FILE = abs(`/userdata/${SHELL_SETTINGS_FILE}`);
 
 function warnCollector(): { warn: (message: string) => void; lines: string[] } {
   const lines: string[] = [];
@@ -51,7 +52,7 @@ describe('defaults', () => {
   });
 
   it('puts the file in the per-user data directory', () => {
-    expect(settingsFilePath('/userdata')).toBe(FILE);
+    expect(settingsFilePath(abs('/userdata'))).toBe(FILE);
   });
 });
 

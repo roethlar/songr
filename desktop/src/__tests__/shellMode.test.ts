@@ -8,6 +8,7 @@ import {
   windowUrl,
 } from '../shellMode';
 import { DEFAULT_SHELL_SETTINGS } from '../shellSettings';
+import { abs, fileUrl } from './support/platformPaths';
 
 const REMOTE = resolveShellMode({
   ...DEFAULT_SHELL_SETTINGS,
@@ -62,7 +63,7 @@ describe('windowUrl / windowOrigin', () => {
 });
 
 describe('the navigation policy in remote mode', () => {
-  const RESOURCES = '/app/resources';
+  const RESOURCES = abs('/app/resources');
 
   it('lets the configured server load in the app frame', () => {
     expect(
@@ -77,7 +78,7 @@ describe('the navigation policy in remote mode', () => {
   it('still keeps the local shell pages loadable', () => {
     expect(
       decideNavigation(
-        'file:///app/resources/settings.html',
+        fileUrl('/app/resources/settings.html'),
         windowOrigin(REMOTE, null),
         RESOURCES,
       ),
@@ -139,7 +140,7 @@ describe('shouldReportLoadFailure', () => {
   });
 
   it('ignores a failure of the error page itself, which would loop forever', () => {
-    expect(failure({ failedUrl: 'file:///app/resources/error.html' })).toBe(false);
+    expect(failure({ failedUrl: fileUrl('/app/resources/error.html') })).toBe(false);
   });
 
   it('ignores a failure on some other origin', () => {
@@ -152,20 +153,62 @@ describe('shouldReportLoadFailure', () => {
 });
 
 describe('isSettingsSender (dt6-1)', () => {
-  const page = '/app/resources/settings.html';
-  const pageUrl = 'file:///app/resources/settings.html';
+  const page = abs('/app/resources/settings.html');
+  const pageUrl = fileUrl('/app/resources/settings.html');
 
   it('accepts the settings page itself, with or without query and hash', () => {
     expect(isSettingsSender(pageUrl, page)).toBe(true);
     expect(isSettingsSender(`${pageUrl}?tab=network#top`, page)).toBe(true);
   });
 
+  // Chromium keeps `~`, `[` and `]` literal in the frame URL; Node's
+  // pathToFileURL encodes them as %7E, %5B, %5D. Electron 43.8.3 on Windows
+  // refused the settings page from such directories while the string
+  // comparison stood (.agents/plans/desktop-settings-sender-url.md).
+  it.each([
+    ['a tilde (8.3 short name)', '/Users/SONGRU~1/Programs/Songr/resources/settings.html'],
+    ['a tilde and other punctuation', '/opt/tilde~&bang!/resources/settings.html'],
+    ['square brackets', '/Applications/sq[x]/Songr.app/Contents/Resources/settings.html'],
+    ['all three', '/home/u/[builds]~old/resources/settings.html'],
+  ])('accepts the settings page from a directory with %s, spelled as Chromium spells it', (_label, posixPath) => {
+    const chromiumUrl = fileUrl(posixPath);
+    expect(chromiumUrl).toMatch(/[~[\]]/);
+    expect(isSettingsSender(chromiumUrl, abs(posixPath))).toBe(true);
+    expect(isSettingsSender(`${chromiumUrl}?tab=network#top`, abs(posixPath))).toBe(true);
+  });
+
+  it('accepts a percent-encoded space, which both spellings share', () => {
+    expect(
+      isSettingsSender(
+        fileUrl('/Program%20Files/Songr/resources/settings.html'),
+        abs('/Program Files/Songr/resources/settings.html'),
+      ),
+    ).toBe(true);
+  });
+
   it('refuses every other sender, which is what keeps remote content out', () => {
-    expect(isSettingsSender('file:///app/resources/error.html', page)).toBe(false);
+    expect(isSettingsSender(fileUrl('/app/resources/error.html'), page)).toBe(false);
+    expect(isSettingsSender(fileUrl('/other/resources/settings.html'), page)).toBe(false);
+    expect(isSettingsSender(fileUrl('/app/resources/settings.html.bak'), page)).toBe(false);
+    expect(isSettingsSender(fileUrl('/app/resources'), page)).toBe(false);
+    expect(isSettingsSender('file://evil.example/app/resources/settings.html', page)).toBe(false);
     expect(isSettingsSender('http://127.0.0.1:53533/library', page)).toBe(false);
     expect(isSettingsSender('http://evil.example/settings.html', page)).toBe(false);
+    expect(isSettingsSender('http://evil.example/app/resources/settings.html', page)).toBe(false);
+    expect(isSettingsSender('not a url', page)).toBe(false);
     expect(isSettingsSender(undefined, page)).toBe(false);
     expect(isSettingsSender(null, page)).toBe(false);
     expect(isSettingsSender('', page)).toBe(false);
+  });
+
+  it('compares case-insensitively on Windows only, as the filesystems do', () => {
+    const upper = fileUrl('/APP/Resources/Settings.html');
+    expect(isSettingsSender(upper, page)).toBe(process.platform === 'win32');
+  });
+
+  it('refuses a tilde directory that only differs from the page directory', () => {
+    const tildePage = abs('/opt/t~1/resources/settings.html');
+    expect(isSettingsSender(fileUrl('/opt/t~2/resources/settings.html'), tildePage)).toBe(false);
+    expect(isSettingsSender(fileUrl('/opt/t/resources/settings.html'), tildePage)).toBe(false);
   });
 });

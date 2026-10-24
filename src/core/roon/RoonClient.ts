@@ -11,6 +11,7 @@ import {
   type CoreDiscoveryStatus,
   type DiscoveredCore,
 } from "../../shared/coreDiscovery";
+import { exclusiveOpenFlag, protectSecretPath } from "./windowsPrivateAcl";
 
 const RoonApi = require("node-roon-api");
 const RoonApiTransport = require("node-roon-api-transport");
@@ -22,7 +23,50 @@ const SONGR_EVER_PAIRED_KEY = "songr_ever_paired";
 
 export interface RoonClientOptions {
   tokenPath: string;
+  /**
+   * Songr's own configuration directory (`CONFIG_DIR`). On Windows the token
+   * writer tightens the ACL of the token's directory only when it is this
+   * directory or one the writer has just created; any other existing
+   * directory (a custom `ROON_TOKEN_PATH` in a shared folder) is left as is.
+   */
+  configDir?: string;
   logger: Logger;
+}
+
+function samePath(a: string, b: string): boolean {
+  const left = path.resolve(a);
+  const right = path.resolve(b);
+  return process.platform === "win32"
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
+/**
+ * Create `filePath`, which must not exist, holding `contents`, owner-only
+ * before its first content byte whatever its directory's ACL. Created empty
+ * and exclusively (O_EXCL; 0o600 on POSIX; on Windows share mode 0, so no
+ * other process can open it while it is being secured and filled), its ACL is
+ * set while it is still empty, and only then is it written. On failure the
+ * file is removed.
+ */
+function writeNewSecretFile(filePath: string, contents: string): void {
+  const { O_CREAT, O_EXCL, O_WRONLY } = fs.constants;
+  const fd = fs.openSync(filePath, O_CREAT | O_EXCL | O_WRONLY | exclusiveOpenFlag(), 0o600);
+  try {
+    try {
+      protectSecretPath(filePath, "file");
+      fs.writeFileSync(fd, contents, "utf-8");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (error) {
+    try {
+      fs.rmSync(filePath, { force: true });
+    } catch {
+      // Preserve the original failure; cleanup is best effort.
+    }
+    throw error;
+  }
 }
 
 export interface RoonCoreInfo {
@@ -342,8 +386,8 @@ export class RoonClient extends EventEmitter {
   /**
    * Write the pairing state to `tokenPath`. The file holds Roon's
    * pairing identity (paired_core_id + per-core tokens) — treat as
-   * a secret (mode 0o600). Atomic via tmp + rename so a crash
-   * mid-write can't leave a torn file.
+   * a secret (mode 0o600 on POSIX, an owner-only ACL on Windows). Atomic
+   * via tmp + rename so a crash mid-write can't leave a torn file.
    */
   private savePersistedState(state: unknown): void {
     try {
@@ -375,19 +419,33 @@ export class RoonClient extends EventEmitter {
     return paired || hasToken ? { ...record, [SONGR_EVER_PAIRED_KEY]: true } : record;
   }
 
+  /**
+   * Create the token's directory if it is missing (0o700). On Windows, where
+   * modes do nothing, give it the owner-only ACL only if it is Songr's own:
+   * created by this call, or `CONFIG_DIR`. An existing directory the user
+   * pointed `ROON_TOKEN_PATH` into is never re-permissioned — that would
+   * strip every other principal's access to everything in it. The token file
+   * carries its own ACL either way (`writeNewSecretFile`).
+   */
+  private prepareTokenDirectory(dir: string): void {
+    const created = fs.mkdirSync(dir, { recursive: true, mode: 0o700 }) !== undefined;
+    const ownConfigDir =
+      this.options.configDir !== undefined && samePath(dir, this.options.configDir);
+    if (created || ownConfigDir) {
+      protectSecretPath(dir, "directory");
+    }
+  }
+
   /** Strict atomic writer used by both the library callback and Core switch. */
   private writePersistedState(state: unknown): void {
     const filePath = path.resolve(this.options.tokenPath);
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    }
+    this.prepareTokenDirectory(path.dirname(filePath));
     const tmp = `${filePath}.tmp`;
     try {
-      fs.writeFileSync(tmp, JSON.stringify(state, null, 2), {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
+      // A leftover from a crash would make the exclusive create fail.
+      fs.rmSync(tmp, { force: true });
+      writeNewSecretFile(tmp, JSON.stringify(state, null, 2));
+      // A same-volume rename keeps the tmp file's own protected ACL.
       fs.renameSync(tmp, filePath);
     } catch (error) {
       try {
@@ -445,14 +503,8 @@ export class RoonClient extends EventEmitter {
         );
         return;
       }
-      const dir = path.dirname(targetPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      }
-      fs.writeFileSync(targetPath, JSON.stringify(parsed, null, 2), {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
+      this.prepareTokenDirectory(path.dirname(targetPath));
+      writeNewSecretFile(targetPath, JSON.stringify(parsed, null, 2));
       fs.unlinkSync(legacyPath);
       this.options.logger.info(
         { from: legacyPath, to: targetPath },

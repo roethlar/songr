@@ -5,9 +5,11 @@
 # packaging script (desktop/scripts/package-app.mjs), which builds the server,
 # the web UI, and the shell, stages the engine payload, and invokes
 # electron-builder. Everything after `--` is handed to electron-builder, which
-# is how one runner produces both architectures. Canonical release signing is
-# required: macOS uses Developer ID and notarization; Windows uses Azure Trusted Signing. Missing credentials or
-# failed verification stop artifact publication.
+# is how one runner produces both architectures. macOS release signing is
+# required: Developer ID and notarization; missing credentials or failed
+# verification stop artifact publication. The Windows installer ships
+# unsigned (owner decision, 2026-10-23) and must pass the unsigned-installer
+# verification before upload.
 name: release-assets
 
 on:
@@ -110,24 +112,14 @@ jobs:
           rm -f "$certificate"
 
       - name: Build and package
-        # macOS signs and notarizes during packaging. Windows is signed below
-        # with TrustedSigning, then verified before any installer is uploaded.
+        # macOS signs and notarizes during packaging. Windows builds unsigned
+        # and is verified unsigned before any installer is uploaded.
         env:
           CSC_LINK: ${{ secrets.MAC_CERT_P12 }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Azure Trusted Signing for the windows exe. The three AZURE_*
-          # credentials are read by the TrustedSigning module's
-          # EnvironmentCredential; endpoint/account/profile ride secrets too
-          # so the public tree names no Azure resources.
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
         run: |
           set -euo pipefail
           case "${{ runner.os }}" in
@@ -135,7 +127,13 @@ jobs:
               required="CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID"
               ;;
             Windows)
-              required="AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERT_PROFILE"
+              # The Windows installer ships unsigned. The macOS Developer ID
+              # certificate must not reach electron-builder here: given
+              # CSC_LINK it signs the Windows binaries with that certificate
+              # through signtool, which the v1.4.6 run did, and Windows does
+              # not trust it.
+              unset CSC_LINK CSC_KEY_PASSWORD
+              required=""
               ;;
             *) required="" ;;
           esac
@@ -147,52 +145,23 @@ jobs:
           done
           # Drop unrelated empty credentials so Linux packaging does not treat
           # an empty CSC_LINK as a request to import a signing identity.
-          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID \
-                   AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET \
-                   AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERT_PROFILE; do
+          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
             if [ -z "$(printenv "$v")" ]; then unset "$v"; fi
           done
           EXTRA=""
           if [ "${{ runner.os }}" = "macOS" ]; then
             EXTRA="--config.mac.notarize=true --config.forceCodeSigning=true"
           fi
-          # Windows signing does NOT go through electron-builder's own
-          # win.azureSignOptions: that path calls into Azure's dlib/signtool
-          # integration internally and failed with a generic SignerSign()
-          # E_FAIL (-2147467259) on the first signed run, past config
-          # validation. The manual Invoke-TrustedSigning module — the same
-          # call this owner's other four apps all sign with successfully
-          # today — is used instead, as a step after packaging. The Windows
-          # build itself always runs unsigned here.
           npm --prefix desktop run package -- ${{ matrix.target }} -- ${{ matrix.arches }} $EXTRA
 
-      - name: Sign Windows executable
+      - name: Verify unsigned Windows installer
+        # The Windows installer ships unsigned, so the gate is that no
+        # signature is present, and that the installer carries this build:
+        # version resources, shell and engine versions, the engine's
+        # engines.node, the UI revision, and an engine identical to the
+        # payload package-app.mjs staged above. Nothing runs the installer.
         if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
-        run: |
-          try {
-            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
-          } catch {
-            Write-Host "NuGet provider not installed here: $($_.Exception.Message)"
-          }
-          Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -Repository PSGallery -Scope CurrentUser
-          $exe = Get-ChildItem -Path desktop/release/artifacts -Filter '*.exe' -File | Select-Object -First 1
-          if (-not $exe) { throw "no .exe artifact found to sign" }
-          Invoke-TrustedSigning `
-            -Endpoint $env:AZURE_SIGNING_ENDPOINT `
-            -CodeSigningAccountName $env:AZURE_SIGNING_ACCOUNT `
-            -CertificateProfileName $env:AZURE_CERT_PROFILE `
-            -TimestampRfc3161 'http://timestamp.acs.microsoft.com' `
-            -TimestampDigest SHA256 `
-            -FileDigest SHA256 `
-            -Files $exe.FullName
+        run: node desktop/scripts/verify-windows-installer.mjs
 
       - name: Notarize and staple macOS DMG
         # electron-builder's mac.notarize:true notarizes and staples the
@@ -238,25 +207,6 @@ jobs:
             grep -qE '^[[:space:]]*status: Accepted$' "$notary_log"
             xcrun stapler staple "$dmg"
           done
-
-      - name: Verify Windows signature
-        # A signing step can silently no-op and still exit 0 — electron-builder's
-        # CSC_IDENTITY_AUTO_DISCOVERY can grab an incidental identity and log
-        # "signing with signtool.exe" even when no azureSignOptions flags were
-        # ever passed (this happened for real: the v1.1.2 release shipped an
-        # exe electron-builder logged as signed, with no verification to catch
-        # that it was never actually Azure Trusted Signing). Every Windows
-        # release must pass this check before upload.
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $exe = Get-ChildItem -Path desktop/release/artifacts -Filter '*.exe' -File | Select-Object -First 1
-          if (-not $exe) { throw "no .exe artifact found to verify" }
-          $signature = Get-AuthenticodeSignature -LiteralPath $exe.FullName
-          $signature | Format-List * | Out-String | Write-Output
-          if ($signature.Status -ne 'Valid') {
-            throw "$($exe.Name) signature status is $($signature.Status), expected Valid"
-          }
 
       - name: Verify macOS signature and notarization
         # Assert both architectures, not the first file returned by find.

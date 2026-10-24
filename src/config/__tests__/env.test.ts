@@ -11,6 +11,16 @@ import {
 } from "../env";
 
 /**
+ * A POSIX-style absolute fixture path made absolute on the host platform. On
+ * POSIX it is the literal unchanged; on Windows it gains the current drive
+ * (`/tmp/x` -> `C:\tmp\x`), which is what an absolute configured directory
+ * looks like there. A bare `/tmp/x` is drive-relative on Windows, so the
+ * loader correctly resolves it and a literal expectation could never match.
+ */
+const abs = (posixPath: string): string =>
+  path.join(path.parse(process.cwd()).root, ...posixPath.split("/"));
+
+/**
  * Snapshot/restore for the variables a test mutates. Jest runs the backend
  * suite in-band, so leaking an env var would contaminate later files.
  */
@@ -128,6 +138,7 @@ describe("Config and data base directories", () => {
   it("keeps the historical appliance layout when both base dirs are unset", () => {
     const config = loadConfig();
 
+    expect(config.configDir).toBe(path.resolve("./config"));
     expect(config.roonTokenPath).toBe(path.resolve("./config/roon-token.json"));
     expect(config.imageCachePath).toBe(path.resolve("./data/image-cache"));
     expect(config.recentlyPlayedPath).toBe(
@@ -138,35 +149,38 @@ describe("Config and data base directories", () => {
   });
 
   it("relocates the pairing token with CONFIG_DIR", () => {
-    process.env.CONFIG_DIR = "/tmp/songr-test/config";
+    process.env.CONFIG_DIR = abs("/tmp/songr-test/config");
+    const config = loadConfig();
 
-    expect(loadConfig().roonTokenPath).toBe(
-      path.join("/tmp/songr-test/config", "roon-token.json")
+    // configDir is what the token writer treats as Songr's own directory.
+    expect(config.configDir).toBe(abs("/tmp/songr-test/config"));
+    expect(config.roonTokenPath).toBe(
+      path.join(abs("/tmp/songr-test/config"), "roon-token.json")
     );
   });
 
   it("relocates every data file with DATA_DIR", () => {
-    process.env.DATA_DIR = "/tmp/songr-test/data";
+    process.env.DATA_DIR = abs("/tmp/songr-test/data");
     const config = loadConfig();
 
     expect(config.imageCachePath).toBe(
-      path.join("/tmp/songr-test/data", "image-cache")
+      path.join(abs("/tmp/songr-test/data"), "image-cache")
     );
     expect(config.recentlyPlayedPath).toBe(
-      path.join("/tmp/songr-test/data", "recently-played.json")
+      path.join(abs("/tmp/songr-test/data"), "recently-played.json")
     );
     expect(config.favoritesPath).toBe(
-      path.join("/tmp/songr-test/data", "favorites.json")
+      path.join(abs("/tmp/songr-test/data"), "favorites.json")
     );
-    expect(config.navigationSettingsPath).toBe(path.join("/tmp/songr-test/data", "navigation-preferences.json"));
+    expect(config.navigationSettingsPath).toBe(path.join(abs("/tmp/songr-test/data"), "navigation-preferences.json"));
   });
 
   it("leaves CONFIG_DIR and DATA_DIR independent of each other", () => {
-    process.env.CONFIG_DIR = "/tmp/songr-test/config";
+    process.env.CONFIG_DIR = abs("/tmp/songr-test/config");
     const config = loadConfig();
 
     expect(config.roonTokenPath).toBe(
-      path.join("/tmp/songr-test/config", "roon-token.json")
+      path.join(abs("/tmp/songr-test/config"), "roon-token.json")
     );
     expect(config.favoritesPath).toBe(path.resolve("./data/favorites.json"));
   });
@@ -180,19 +194,19 @@ describe("Config and data base directories", () => {
   });
 
   it("lets a per-file variable override its base dir", () => {
-    process.env.CONFIG_DIR = "/tmp/songr-test/config";
-    process.env.DATA_DIR = "/tmp/songr-test/data";
-    process.env.ROON_TOKEN_PATH = "/tmp/songr-test/elsewhere/token.json";
-    process.env.FAVORITES_PATH = "/tmp/songr-test/elsewhere/favorites.json";
+    process.env.CONFIG_DIR = abs("/tmp/songr-test/config");
+    process.env.DATA_DIR = abs("/tmp/songr-test/data");
+    process.env.ROON_TOKEN_PATH = abs("/tmp/songr-test/elsewhere/token.json");
+    process.env.FAVORITES_PATH = abs("/tmp/songr-test/elsewhere/favorites.json");
 
     const config = loadConfig();
 
-    expect(config.roonTokenPath).toBe("/tmp/songr-test/elsewhere/token.json");
+    expect(config.roonTokenPath).toBe(abs("/tmp/songr-test/elsewhere/token.json"));
     expect(config.favoritesPath).toBe(
-      "/tmp/songr-test/elsewhere/favorites.json"
+      abs("/tmp/songr-test/elsewhere/favorites.json")
     );
     // Unoverridden entries still follow the base dir.
-    expect(config.navigationSettingsPath).toBe(path.join("/tmp/songr-test/data", "navigation-preferences.json"));
+    expect(config.navigationSettingsPath).toBe(path.join(abs("/tmp/songr-test/data"), "navigation-preferences.json"));
   });
 
   it("rejects a blank-but-present base dir the same way as other paths", () => {

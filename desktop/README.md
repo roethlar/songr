@@ -173,16 +173,20 @@ npm --prefix desktop run package -- --mac -- --arm64 --config.forceCodeSigning=t
 The second `--` sends architecture and electron-builder options through the
 wrapper. This command creates a signed local candidate without notarization;
 public Mac releases require signing, notarization and verification of both the
-application and DMG. The canonical release workflow fails when signing inputs
-are missing. Windows releases use Azure Trusted Signing and must pass
-Authenticode verification before upload.
+application and DMG. The canonical release workflow fails when macOS signing inputs
+are missing. The Windows installer is not code-signed: before upload the
+workflow runs `scripts/verify-windows-installer.mjs`, which confirms that the
+installer and `Songr.exe` carry no signature and that the installer holds this
+build (version resources, shell and engine versions, the engine's
+`engines.node`, the UI revision, and an engine identical to the staged
+payload).
 
 | Target | Build host |
 |---|---|
 | macOS DMG, arm64 and x64 | macOS with Developer ID credentials |
 | Linux AppImage/deb, arm64 and x64 | Linux, or supported cross-build tooling on macOS |
 | Linux RPM, arm64 and x64 | Linux with `rpmbuild`; installing macOS `rpm` does not provide a Linux RPM build host |
-| Windows NSIS, x64 | Windows in release CI, with signing credentials |
+| Windows NSIS, x64 | Windows (release CI builds it unsigned) |
 | Server tarball | `npm --prefix desktop run package -- --stage-only --server-tar` |
 
 The release matrix is defined in `../.github/workflows/release.yml`. Packaging

@@ -23,6 +23,23 @@ async function openAlbums(page: Page, sort: 'az' | 'shuffle') {
 	)).toBeGreaterThan(2);
 }
 
+/**
+ * The key that moves keyboard focus from one link to the next in this browser
+ * build, or null when no key does. Safari (WebKit on macOS) reaches links with
+ * Option-Tab; plain Tab skips them unless the user enables "Press Tab to
+ * highlight each item". Playwright's WebKit on Windows skips links on both
+ * Tab and Alt+Tab, so native link traversal cannot be exercised there.
+ */
+async function linkTabKey(page: Page): Promise<string | null> {
+	await page.setContent('<a href="#a" id="a">A</a> <a href="#b" id="b">B</a>');
+	for (const key of ['Tab', 'Alt+Tab']) {
+		await page.focus('#a');
+		await page.keyboard.press(key);
+		if (await page.evaluate(() => document.activeElement?.id) === 'b') return key;
+	}
+	return null;
+}
+
 async function expectStableDistantScroll(page: Page) {
 	const result = await page.locator(GRID).evaluate(async grid => {
 		const pane = document.querySelector<HTMLElement>('[data-testid="unified-pane"]')!;
@@ -154,9 +171,12 @@ test('hidden album grids prepare their new width and density before returning', 
 
 test('native Tab crosses prepared chunks and distant album titles remain browser-searchable', async ({ page, browserName }) => {
 	test.setTimeout(90_000);
-	// Safari (WebKit on macOS) moves focus to links with Option-Tab; plain Tab
-	// skips them unless the user enables "Press Tab to highlight each item".
-	const tab = browserName === 'webkit' ? 'Alt+Tab' : 'Tab';
+	const key = await linkTabKey(page);
+	// Only a WebKit build may lack keyboard link focus; Chromium, which covers
+	// this test on every platform, must always have it.
+	test.skip(key === null && browserName === 'webkit', 'this WebKit build moves keyboard focus to no link (Windows)');
+	expect(key, 'a key that moves focus between links').not.toBeNull();
+	const tab = key!;
 	await openAlbums(page, 'az');
 	const boundary = await page.locator(GRID).evaluate(grid => {
 		const first = grid.shadowRoot!.querySelector('[data-prepared-library-chunk]')!;

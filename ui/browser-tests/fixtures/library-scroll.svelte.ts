@@ -110,7 +110,10 @@ const albums: LibraryAlbumEntry[] = Array.from({ length: ALBUM_COUNT }, (_, inde
 
 const creditVariant = window.libraryScrollFixtureVariant === 'album-credits';
 const coldStart = window.libraryScrollFixtureColdStart === true;
-const longCredit = 'The International Ensemble for Contemporary Music / North and South / Live Recordings and Collaborations';
+// Long enough to overflow an 820px-wide heading in every platform's UI font:
+// at the original length it fit in Segoe UI on Windows (690px of 706px), so
+// nothing overflowed and the reading tests had nothing to read.
+const longCredit = 'The International Ensemble for Contemporary Music / North and South / Live Recordings and Collaborations, Complete Sessions';
 if (creditVariant) {
 	const special = [
 		['Solo Record', 'Single Release'], ['Collaboration; One', 'AC/DC / Björk; 100%'],

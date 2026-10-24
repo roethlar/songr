@@ -44,8 +44,10 @@ file, checksum or substitution fails the operation. `--check` writes nothing.
 The supported set is six manifests: Homebrew, Scoop, AUR and three WinGet files.
 Flathub is not a supported publication target.
 
-Both release workflows run the check before rendering. Canonical release
-artifacts require signing verification; package credentials are reported
+Both release workflows run the check before rendering. Canonical macOS
+artifacts require signing and notarization verification, and the unsigned
+Windows installer requires its unsigned-installer verification
+(`desktop/scripts/verify-windows-installer.mjs`); package credentials are reported
 separately, and unavailable credentials do not turn invalid templates into
 successful partial output. Publication remains disabled during withdrawal.
 

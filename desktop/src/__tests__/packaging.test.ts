@@ -10,20 +10,23 @@ import {
   PRODUCT_NAME,
   PUBLIC_APP_ID,
 } from '../packaging';
+import { abs } from './support/platformPaths';
 
-const MAC_RESOURCES = '/Applications/Songr.app/Contents/Resources';
-const LINUX_RESOURCES = '/opt/Songr/resources';
+const MAC_RESOURCES_POSIX = '/Applications/Songr.app/Contents/Resources';
+const LINUX_RESOURCES_POSIX = '/opt/Songr/resources';
+const MAC_RESOURCES = abs(MAC_RESOURCES_POSIX);
+const LINUX_RESOURCES = abs(LINUX_RESOURCES_POSIX);
 
 describe('the packaged engine payload', () => {
   it('sits beside app.asar, not inside it', () => {
     // extraResources, never `files`: the engine is forked as a plain Node
     // program and Node cannot require its way into an asar archive.
-    expect(packagedEngineRoot(MAC_RESOURCES)).toBe(`${MAC_RESOURCES}/${ENGINE_RESOURCE_DIR}`);
-    expect(packagedEngineEntry(MAC_RESOURCES)).toBe(`${MAC_RESOURCES}/engine/dist/index.js`);
+    expect(packagedEngineRoot(MAC_RESOURCES)).toBe(abs(`${MAC_RESOURCES_POSIX}/${ENGINE_RESOURCE_DIR}`));
+    expect(packagedEngineEntry(MAC_RESOURCES)).toBe(abs(`${MAC_RESOURCES_POSIX}/engine/dist/index.js`));
   });
 
   it('has the same shape on every platform', () => {
-    expect(packagedEngineEntry(LINUX_RESOURCES)).toBe(`${LINUX_RESOURCES}/engine/dist/index.js`);
+    expect(packagedEngineEntry(LINUX_RESOURCES)).toBe(abs(`${LINUX_RESOURCES_POSIX}/engine/dist/index.js`));
   });
 
   it('names its entry file relative to the payload root', () => {
@@ -40,7 +43,7 @@ describe('the engine finding its UI', () => {
    * app launches, the API answers, and the window is blank.
    */
   it('resolves ui/build as a sibling of dist, the way a checkout is laid out', () => {
-    expect(engineUiBuildPath('/checkout/dist/index.js')).toBe('/checkout/ui/build');
+    expect(engineUiBuildPath(abs('/checkout/dist/index.js'))).toBe(abs('/checkout/ui/build'));
   });
 
   it('lands exactly where the staged layout puts the UI', () => {

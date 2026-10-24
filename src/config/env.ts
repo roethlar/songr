@@ -7,6 +7,12 @@ export interface AppConfig {
   readonly host: string;
   readonly port: number;
   readonly logLevel: LogLevel;
+  /**
+   * The resolved `CONFIG_DIR`: Songr's own configuration directory, and the
+   * only pre-existing directory whose ACL the token writer may tighten on
+   * Windows (`.agents/plans/windows-token-file-acl.md`).
+   */
+  readonly configDir: string;
   readonly roonTokenPath: string;
   readonly imageCachePath: string;
   readonly imageCacheMaxBytes: number;
@@ -318,6 +324,7 @@ export const loadConfig = (): AppConfig => {
     host,
     port,
     logLevel,
+    configDir,
     roonTokenPath,
     imageCachePath,
     imageCacheMaxBytes,

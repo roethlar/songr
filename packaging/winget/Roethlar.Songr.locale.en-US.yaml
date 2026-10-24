@@ -1,9 +1,9 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
 #
-# Publisher deliberately does NOT match the Authenticode subject
-# ("CN=Michael Coelho"). It matches the ARP Publisher value Windows displays
-# and the publisher segment of PackageIdentifier, which is the pair winget's
-# own consistency checks compare.
+# Publisher matches the ARP Publisher value Windows displays and the
+# publisher segment of PackageIdentifier, which is the pair winget's own
+# consistency checks compare. The installer is not code-signed, so there is no
+# Authenticode subject to match.
 
 PackageIdentifier: Roethlar.Songr
 PackageVersion: "@VERSION@"

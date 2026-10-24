@@ -4,7 +4,7 @@ Web-based controller for a local Roon Core, built with Node.js + SvelteKit.
 
 Published desktop and headless server downloads are on
 [GitHub Releases](https://github.com/roethlar/songr/releases).
-Current release: **1.4.6**. See the [release notes](docs/releases/1.4.6.md).
+Current release: **1.4.7**. See the [release notes](docs/releases/1.4.7.md).
 
 ## Screenshots
 

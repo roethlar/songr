@@ -1,5 +1,12 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
+// The reading behaviour applies only to a name wider than its heading. Assert the
+// fixture really overflows in this browser's fonts, so a font difference shows
+// up as a fixture failure instead of a missing animation.
+async function expectOverflowing(name: Locator) {
+	expect(await name.evaluate(button => button.querySelector('[data-artist-name-text]')!.scrollWidth - button.clientWidth),
+		'the long credit must overflow its heading').toBeGreaterThan(24);
+}
 const sections = (page: Page) => page.getByTestId('album-artist-section').filter({ visible: true });
 const tiles = (page: Page) => page.locator('[data-scope-panel="albums"] .tile');
 async function chooseGrouping(page: Page, name: string) {
@@ -100,6 +107,7 @@ test.describe('touch headings', () => {
 		expect(bounds.height).toBeLessThanOrEqual(bounds.line + 23);
 		expect(bounds.albumTop).toBeGreaterThanOrEqual(bounds.bottom);
 		const button = longSection.getByRole('button', { name: longCredit, exact: true });
+		await expectOverflowing(button);
 		await page.waitForTimeout(200); // A tap which stops recent scroll momentum must not activate.
 		await button.tap();
 		await expect(button).toHaveAttribute('data-reading', '');
@@ -123,6 +131,7 @@ test('hover and keyboard read overflowing headings; motion preferences use a sta
 	await chooseGrouping(page, 'Group by Artist');
 	const longCredit = await page.evaluate(() => window.libraryScrollFixture.longCredit);
 	const name = page.getByRole('button', { name: longCredit, exact: true });
+	await expectOverflowing(name);
 	await name.hover();
 	await expect(name).toHaveAttribute('data-reading', '');
 	await page.waitForTimeout(1100);
