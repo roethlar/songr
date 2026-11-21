@@ -193,6 +193,8 @@ Copy `.env.example` to `.env` and adjust as needed.
 | `PORT` | HTTP port (serves API + UI) | `3333` |
 | `LOG_LEVEL` | Pino log level. `trace` enables raw Roon payload dumps for debugging | `info` |
 | `ROON_TOKEN_PATH` | Roon pairing-state file (paired_core_id + per-core tokens) | `./config/roon-token.json` |
+| `ROON_CORE_HOST` | Hostname or IP address of the Core for a direct connection | unset (local discovery) |
+| `ROON_CORE_PORT` | TCP port of the Core's extension API for a direct connection | `9330` |
 | `IMAGE_CACHE_PATH` | Artwork disk cache | `./data/image-cache` |
 | `IMAGE_CACHE_MAX_BYTES` | Disk cache cap (bytes); LRU eviction when exceeded | `10737418240` (10 GB) |
 | `RECENTLY_PLAYED_PATH` | JSON file for "Recently played on this controller" persistence | `./data/recently-played.json` |
@@ -209,7 +211,7 @@ Copy `.env.example` to `.env` and adjust as needed.
 
 ## Requirements
 
-- **Roon Core** on the local network.
+- **Roon Core** on the local network or reachable by a [direct connection](#connect-to-a-core-on-another-subnet).
 - **Node.js 22.23.4 or newer** for the headless server (on Node 24, use 24.22.1 or newer; on Node 26, 26.12.1 or newer). The Docker image bundles Node 22.
 - **Browser**: Safari 16 (iOS/iPadOS 16), Chrome 107, Edge 107 or Firefox 104, or newer. The desktop app has no browser requirement.
 
@@ -285,8 +287,10 @@ npm --prefix ui run build
 
 ## Pairing
 
-On first run, Songr searches for your Core and shows its name and connection
-progress. Once it requests approval: Roon → Settings → Extensions → enable **Songr (your machine's name)**
+On first run, Songr searches the local network for your Core unless you configure
+a [direct connection](#connect-to-a-core-on-another-subnet). Songr shows the Core's
+name and connection progress. When Songr requests approval, go to
+**Settings → Extensions** in Roon and enable **Songr (your machine's name)**
 (installs paired before mid-2026 may still show the older name "Custom Roon
 Controller").
 
@@ -299,3 +303,25 @@ Roon → Settings → Audio. The final Bridge note does not block the library.
 Roon's pairing state — `paired_core_id` plus a per-core token map — is persisted to `ROON_TOKEN_PATH` (mode `0o600`, atomic write). Reconnect is automatic on subsequent starts.
 
 Older builds accidentally let `node-roon-api` write `config.json` in the working directory. On first run, an existing `config.json` in the cwd is migrated to `ROON_TOKEN_PATH` and the cwd copy removed. No action required from you.
+
+### Connect to a Core on another subnet
+
+If you run Songr on a different subnet from the Core, set `ROON_CORE_HOST` in
+Songr's environment or `.env` file so it can connect without local UDP discovery.
+Use a hostname or IP address and allow Songr to reach the Core's extension API
+over TCP. The default API port is `9330`. Set `ROON_CORE_PORT` if your Core uses
+a different extension API port.
+
+```dotenv
+ROON_CORE_HOST=192.168.40.10
+# ROON_CORE_PORT=9330
+```
+
+Restart Songr after changing these settings. The first connection uses the same
+extension approval as local discovery. Songr reconnects to the configured host
+after a disconnect and reuses the saved token for that Core.
+
+For a container on a bridge or Kubernetes network, set the same variables on
+the Songr container and ensure it has a route to the Core. To select another
+Core, update the configured address and restart Songr. Remove both variables to
+resume local discovery.

@@ -3,14 +3,17 @@
 // force polyfill websockets in Node to support Node 22+
 if (typeof(window) == "undefined" || typeof(WebSocket) == "undefined") global.WebSocket = require('ws');
 
-function Transport(ip, port, logger) {
+function Transport(ip, port, logger, handshakeTimeout) {
     this.host = ip;
     this.port = port;
 
     this.interval = null;
     this.is_alive = null;
 
-    this.ws = new WebSocket("ws://" + ip + ":" + port + "/api");
+    const url = "ws://" + ip + ":" + port + "/api";
+    this.ws = handshakeTimeout === undefined
+        ? new WebSocket(url)
+        : new WebSocket(url, { handshakeTimeout });
     if (typeof(window) != "undefined") this.ws.binaryType = 'arraybuffer';
     this.logger = logger;
 

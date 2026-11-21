@@ -17,11 +17,9 @@ services:
       # (Needs Compose v2.24+; on older versions create .env first.)
       - path: .env
         required: false
-    # Roon Core discovery uses mDNS/multicast, which does not cross
-    # Docker's default bridge network on Linux — the container starts
-    # fine but never finds/pairs with the Core (see
-    # docs/TROUBLESHOOTING.md). Host networking is required there; the
-    # app listens on PORT (default 3333) directly on the host.
+    # Host networking lets the container discover a Roon Core on the local
+    # network. With ROON_CORE_HOST set, you can also use a bridge network
+    # with a route to the Core and publish the app's HTTP port (default 3333).
     # NOTE: network_mode: host is a no-op on Docker Desktop for
     # macOS/Windows without its "host networking" feature enabled —
     # run natively there, or enable that feature.

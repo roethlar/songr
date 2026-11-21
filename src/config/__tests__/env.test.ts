@@ -118,6 +118,50 @@ describe("Host resolution", () => {
   });
 });
 
+describe("Roon Core address", () => {
+  const env = withEnv(["ROON_CORE_HOST", "ROON_CORE_PORT"]);
+
+  beforeEach(() => {
+    env.save();
+    env.clear();
+  });
+
+  afterEach(env.restore);
+
+  it("leaves local discovery active when no host is configured", () => {
+    expect(loadConfig().roonCoreAddress).toBeUndefined();
+  });
+
+  it.each([
+    ["192.168.40.10", undefined, "192.168.40.10", 9330],
+    [" core.example.net ", "9444", "core.example.net", 9444],
+    ["2001:db8::10", undefined, "[2001:db8::10]", 9330],
+    ["[2001:db8::10]", undefined, "[2001:db8::10]", 9330],
+  ])("resolves %s and port %s for the WebSocket", (host, port, expectedHost, expectedPort) => {
+    process.env.ROON_CORE_HOST = host;
+    if (port !== undefined) process.env.ROON_CORE_PORT = port;
+    expect(loadConfig().roonCoreAddress).toEqual({ host: expectedHost, port: expectedPort });
+  });
+
+  it.each(["http://core.example.net", "core.example.net:9330", "core.example.net/api", "bad host"])(
+    "rejects an invalid host %s", (host) => {
+      process.env.ROON_CORE_HOST = host;
+      expect(() => loadConfig()).toThrow("ROON_CORE_HOST must be a hostname or IP address");
+    }
+  );
+
+  it.each(["0", "65536", "1.5", "abc"])("rejects an invalid port %s", (port) => {
+    process.env.ROON_CORE_HOST = "core.example.net";
+    process.env.ROON_CORE_PORT = port;
+    expect(() => loadConfig()).toThrow("ROON_CORE_PORT must be an integer between 1 and 65535");
+  });
+
+  it("rejects a port without a host", () => {
+    process.env.ROON_CORE_PORT = "9444";
+    expect(() => loadConfig()).toThrow("ROON_CORE_PORT requires ROON_CORE_HOST");
+  });
+});
+
 describe("Config and data base directories", () => {
   const env = withEnv([
     "CONFIG_DIR",

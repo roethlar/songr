@@ -43,6 +43,7 @@ function buildContext(options: {
       : {}),
     coreLifecycle: { shutdown: () => order.push("core-lifecycle") },
     transportService: { shutdown: () => order.push("transport") },
+    roonClient: { stop: () => order.push("roon.stop") },
     socketContext: {
       io: {
         close: (done?: () => void) => {
@@ -73,6 +74,19 @@ describe("the shutdown sequence", () => {
     shutdown("SIGTERM");
     expect(order.indexOf("io.close")).toBeLessThan(order.indexOf("http.close"));
     expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it("closes the Roon connection after shutting down its subscriptions", () => {
+    const order: string[] = [];
+    const shutdown = createShutdownHandler({
+      context: buildContext({ order }),
+      logger: testLogger(),
+      exit: jest.fn(),
+    });
+    shutdown("SIGTERM");
+    expect(order).toEqual([
+      "requestShutdown", "core-lifecycle", "transport", "roon.stop", "io.close", "http.close",
+    ]);
   });
 
   it("stops the post-connect load trial's canary before anything else", async () => {

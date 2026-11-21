@@ -66,6 +66,7 @@ export const startServer = (
   const roonClient = new RoonClient({
     tokenPath: config.roonTokenPath,
     configDir: config.configDir,
+    coreAddress: config.roonCoreAddress,
     logger,
   });
 

@@ -449,8 +449,8 @@ function networkErrorCode(error) {
     return typeof code == 'string' && /^[A-Z][A-Z0-9_]{1,49}$/.test(code) ? code : 'NETWORK_ERROR';
 }
 
-RoonApi.prototype.ws_connect = function({ host, port, onclose, onerror, discovery }) {
-    let moo = new Moo(new WSTransport(host, port, this.logger));
+RoonApi.prototype.ws_connect = function({ host, port, onclose, onerror, discovery, handshakeTimeout }) {
+    let moo = new Moo(new WSTransport(host, port, this.logger, handshakeTimeout));
     let closed = false;
     let phase;
     let progressTimer;

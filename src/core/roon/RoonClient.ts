@@ -4,6 +4,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { Logger } from "pino";
+import type { RoonCoreAddress } from "../../config/env";
 import { ROON_EXTENSION_DISPLAY_NAME } from "../../shared/types";
 import {
   MAX_DISCOVERED_CORES,
@@ -11,6 +12,7 @@ import {
   type CoreDiscoveryStatus,
   type DiscoveredCore,
 } from "../../shared/coreDiscovery";
+import { RoonError } from "./errors";
 import { exclusiveOpenFlag, protectSecretPath } from "./windowsPrivateAcl";
 
 const RoonApi = require("node-roon-api");
@@ -20,6 +22,8 @@ const RoonApiImage = require("node-roon-api-image");
 // The engine manifest is staged with both server and desktop builds.
 const { version: SONGR_VERSION } = require("../../../package.json") as { version: string };
 const SONGR_EVER_PAIRED_KEY = "songr_ever_paired";
+const DIRECT_RECONNECT_DELAY_MS = 5_000;
+const DIRECT_HANDSHAKE_TIMEOUT_MS = 15_000;
 
 export interface RoonClientOptions {
   tokenPath: string;
@@ -30,6 +34,7 @@ export interface RoonClientOptions {
    * directory (a custom `ROON_TOKEN_PATH` in a shared folder) is left as is.
    */
   configDir?: string;
+  coreAddress?: RoonCoreAddress;
   logger: Logger;
 }
 
@@ -91,6 +96,8 @@ export class RoonClient extends EventEmitter {
   private readonly options: RoonClientOptions;
   private roon: any | null = null;
   private apiGeneration = 0;
+  private directConnection?: { transport: { close(): void } };
+  private directRetry?: NodeJS.Timeout;
   private switchPending = false;
   private transport: any | null = null;
   private browse: any | null = null;
@@ -122,7 +129,47 @@ export class RoonClient extends EventEmitter {
     this.resetDiscovery();
     this.coreStatus = "discovering";
     this.emit("core-status", { coreStatus: "discovering" });
-    roon.start_discovery();
+    this.connect(roon, generation);
+  }
+
+  private connect(roon: any, generation: number): void {
+    const address = this.options.coreAddress;
+    if (!address) {
+      roon.start_discovery();
+      return;
+    }
+
+    this.directConnection = roon.ws_connect({
+      ...address,
+      handshakeTimeout: DIRECT_HANDSHAKE_TIMEOUT_MS,
+      onclose: () => {
+        if (generation !== this.apiGeneration) return;
+        this.directConnection = undefined;
+        this.directRetry = setTimeout(() => {
+          this.directRetry = undefined;
+          // Scope the vendor's pairing selection and registration token to
+          // this socket. The configured hostname may resolve to a new Core.
+          const nextGeneration = generation + 1;
+          const nextRoon = this.createApi(nextGeneration);
+          this.apiGeneration = nextGeneration;
+          this.roon = nextRoon;
+          this.connect(nextRoon, nextGeneration);
+        }, DIRECT_RECONNECT_DELAY_MS);
+        this.directRetry.unref();
+      },
+    });
+  }
+
+  public stop(): void {
+    const roon = this.roon;
+    this.roon = null;
+    this.apiGeneration += 1;
+    clearTimeout(this.directRetry);
+    this.directRetry = undefined;
+    const connection = this.directConnection;
+    this.directConnection = undefined;
+    if (connection) connection.transport.close();
+    if (roon) this.disconnectDiscovery(roon);
   }
 
   private createApi(generation: number): any {
@@ -257,6 +304,13 @@ export class RoonClient extends EventEmitter {
    * for authorization; repeated confirmation is deliberately idempotent.
    */
   public switchCore(): boolean {
+    if (this.options.coreAddress) {
+      throw new RoonError(
+        "Change ROON_CORE_HOST and restart Songr to switch the configured Core.",
+        "CORE_ADDRESS_CONFIGURED",
+        409
+      );
+    }
     if (this.switchPending) return false;
     if (!this.roon) throw new Error("Roon client has not started");
 
@@ -296,23 +350,26 @@ export class RoonClient extends EventEmitter {
     this.apiGeneration = nextGeneration;
     this.resetDiscovery();
     this.clearCoreState("Switching to a different Roon core");
-
-    try {
-      previousRoon.stop_discovery?.();
-    } catch (error) {
-      this.options.logger.warn({ err: error }, "Failed to stop retired Roon discovery");
-    }
-    try {
-      previousRoon.disconnect_all?.();
-    } catch (error) {
-      this.options.logger.warn({ err: error }, "Failed to disconnect retired Roon sockets");
-    }
+    this.disconnectDiscovery(previousRoon);
 
     this.roon = nextRoon;
     this.coreStatus = "discovering";
     this.emit("core-status", { coreStatus: "discovering" });
     nextRoon.start_discovery();
     return true;
+  }
+
+  private disconnectDiscovery(roon: any): void {
+    try {
+      roon.stop_discovery?.();
+    } catch (error) {
+      this.options.logger.warn({ err: error }, "Failed to stop retired Roon discovery");
+    }
+    try {
+      roon.disconnect_all?.();
+    } catch (error) {
+      this.options.logger.warn({ err: error }, "Failed to disconnect retired Roon sockets");
+    }
   }
 
   private onCorePaired(core: any): void {
