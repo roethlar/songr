@@ -25,6 +25,7 @@ export interface ShutdownContext {
   liveLibrary?: { close(): void } | null;
   coreLifecycle: { shutdown(): void };
   transportService: { shutdown(): void };
+  roonClient: { stop(): void };
   socketContext: { io: { close(done?: () => void): unknown } };
   isListening(): boolean;
   httpServer: { close(done: (error?: Error) => void): unknown };
@@ -80,6 +81,12 @@ export function createShutdownHandler(options: {
       context.transportService.shutdown();
     } catch (error) {
       logger.warn({ err: error }, "Error while stopping transport service");
+    }
+
+    try {
+      context.roonClient.stop();
+    } catch (error) {
+      logger.warn({ err: error }, "Error while stopping the Roon connection");
     }
 
     void context.socketContext.io.close(() => {

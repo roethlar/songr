@@ -1,7 +1,13 @@
 import path from "path";
+import { isIP } from "node:net";
 import dotenv from "dotenv";
 
 dotenv.config();
+
+export interface RoonCoreAddress {
+  readonly host: string;
+  readonly port: number;
+}
 
 export interface AppConfig {
   readonly host: string;
@@ -14,6 +20,7 @@ export interface AppConfig {
    */
   readonly configDir: string;
   readonly roonTokenPath: string;
+  readonly roonCoreAddress?: RoonCoreAddress;
   readonly imageCachePath: string;
   readonly imageCacheMaxBytes: number;
   readonly recentlyPlayedPath: string;
@@ -69,6 +76,29 @@ const VALID_LOG_LEVELS: LogLevel[] = [
 
 const coerceString = (value: string | undefined): string | undefined =>
   value?.trim() ? value.trim() : undefined;
+
+function parseRoonCoreAddress(): RoonCoreAddress | undefined {
+  const host = coerceString(process.env.ROON_CORE_HOST);
+  const rawPort = coerceString(process.env.ROON_CORE_PORT);
+  if (!host) {
+    if (rawPort) throw new ConfigError("ROON_CORE_PORT requires ROON_CORE_HOST");
+    return undefined;
+  }
+
+  const literal = host.replace(/^\[(.*)\]$/, "$1");
+  const ipv6 = isIP(literal) === 6;
+  const hostname = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.?$/i;
+  const address = ipv6 ? `[${literal}]` : host;
+  if ((!ipv6 && (host.length > 253 || !hostname.test(host))) || !URL.canParse(`ws://${address}`)) {
+    throw new ConfigError("ROON_CORE_HOST must be a hostname or IP address without a scheme, port, or path");
+  }
+
+  const port = rawPort ? Number(rawPort) : 9330;
+  if ((rawPort && !/^\d+$/.test(rawPort)) || !Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new ConfigError("ROON_CORE_PORT must be an integer between 1 and 65535");
+  }
+  return { host: address, port };
+}
 
 const FLAG_ON = new Set(["1", "true", "yes", "on"]);
 const FLAG_OFF = new Set(["", "0", "false", "no", "off"]);
@@ -293,6 +323,7 @@ export const loadConfig = (): AppConfig => {
   );
   const dataDir = resolveDataDir();
   const roonTokenPath = parseTokenPath(process.env.ROON_TOKEN_PATH, configDir);
+  const roonCoreAddress = parseRoonCoreAddress();
   const imageCachePath = parseImageCachePath(
     process.env.IMAGE_CACHE_PATH,
     dataDir
@@ -326,6 +357,7 @@ export const loadConfig = (): AppConfig => {
     logLevel,
     configDir,
     roonTokenPath,
+    roonCoreAddress,
     imageCachePath,
     imageCacheMaxBytes,
     recentlyPlayedPath,
